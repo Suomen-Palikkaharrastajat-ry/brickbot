@@ -1,0 +1,52 @@
+[package]
+name = "brickbot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serenity = { version = "0.12.0", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "standard_framework", "cache", "collector"] }
+
+tokio = { version = "1", features = ["full"] }
+
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "json",
+  "multipart"
+] }
+
+serde_yaml = "0.9"
+similar = "2.6"
+serde_json = "1.0"
+
+rss = "2"
+atom_syndication = "0.12"
+opml = "1"
+
+sqlx = { version = "0.8", features = [
+  "sqlite",
+  "runtime-tokio-rustls",
+  "chrono"
+] }
+
+dotenvy = "0.15"
+anyhow = "1"
+chrono = "0.4"
+
+clap = { version = "4.6.1", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+bytes = "1"
+moka = { version = "0.12.15", features = ["future"] }
+regex = "1"
+rust-i18n = "3"
+aho-corasick = "1.1"
+uuid = { version = "1", features = ["v4"] }
+reqwest-eventsource = "0.6.0"
+futures-util = "0.3.30"
+async-trait = "0.1.77"
+chrono-tz = "0.10.4"
+
+[dev-dependencies]
+mockall = "0.15.0"

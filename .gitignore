@@ -1,0 +1,26 @@
+/target/
+/data/bot.db
+/data/bot.db-journal
+/data/bot.db-shm
+/data/bot.db-wal
+/.env
+/config.toml
+/result
+/result-*
+**/*.rs.bk
+*.swp
+.DS_Store
+.pre-commit-config.yaml
+.devcontainer/
+.devenv/
+devenv.local.nix
+devenv.local.yaml
+
+# Test and temp files
+check.json
+lcov.info
+scratch.rs
+test_moka.rs
+target_tmp/
+*.log
+TODO*.md

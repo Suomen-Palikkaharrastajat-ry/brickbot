@@ -1,0 +1,20 @@
+inputs:
+  devenv-module-devcontainer:
+    url: github:datakurre/devenv-module-devcontainer
+    flake: false
+  devenv-module-devcontainer-nixpkgs:
+    url: github:nixos/nixpkgs/nixos-unstable
+  git-hooks:
+    url: github:cachix/git-hooks.nix
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  rust-overlay:
+    url: github:oxalica/rust-overlay
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  treefmt-nix:
+    url: github:numtide/treefmt-nix
+imports:
+- devenv-module-devcontainer

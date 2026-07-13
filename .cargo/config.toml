@@ -1,0 +1,8 @@
+[build]
+rustflags = [
+    "-Wclippy::pedantic",
+    "-Wclippy::nursery",
+    "-Aclippy::missing_errors_doc",
+    "-Aclippy::missing_panics_doc",
+    "-Aclippy::future_not_send"
+]

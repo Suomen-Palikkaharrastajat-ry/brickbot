@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v25
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+
+    - name: Install devenv
+      uses: cachix/cachix-action@v14
+      with:
+        name: devenv
+
+    - name: Run pre-commit checks
+      run: devenv shell -- make check
+
+    - name: Validate example config
+      run: devenv shell -- cargo run --bin brickbot -- --check-config --config config.toml.example
+
+    - name: Build Nix package
+      run: nix build
+
+    - name: Check Markdown Links
+      uses: gaurav-nelson/github-action-markdown-link-check@v1
+      with:
+        use-quiet-mode: 'yes'

@@ -1,0 +1,48 @@
+# Global bot name (optional)
+# bot_name = "Palikkaharrastaja"
+# Global default locale (optional, fallback when guild config is not set)
+# default_locale = "fi-FI"
+
+# ambient_debug_logging = true
+#
+# [ambient_training_data]
+# enabled = false
+# retention_days = 30
+# allowed_guild_ids = [123456789]
+
+# poll_interval = 3600
+# cache_ttl_secs = 600
+
+# Zulip Integration (optional)
+# [zulip]
+# url = "https://forum.palikkaharrastajat.fi"
+# bot_email = "palikkaharrastajat-bot@forum.palikkaharrastajat.fi"
+# moderation_stream = "Bottilaatikko"
+# moderators = ["moderator@example.com"]
+
+# PocketBase Integration (optional)
+# [pocketbase]
+# url = "https://data.palikkaharrastajat.fi"
+# collection = "events"
+
+# [interactions]
+# set = true
+# part = true
+
+# [commands.events]
+# enabled = true
+# enable_edit = true
+# enable_propose = true
+# enable_fallback_mention = false
+
+# [[guilds]]
+# guild_id = 1424873309325234220
+# locale = "fi-FI"
+
+# [[feeds]]
+# # List of Feed URLs
+# # feed_urls = [
+# #     "https://example.com/feed2.rss"
+# # ]
+# # List of OPML URLs
+# # opml_urls = ["https://example.com/feeds.opml"]

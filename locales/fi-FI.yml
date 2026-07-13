@@ -1,0 +1,118 @@
+common:
+  none: "Ei mitään"
+  yes: "Kyllä"
+  no: "Ei"
+  na: "N/A"
+  default_bot_name: "Palikkaharrastaja"
+
+workflow:
+  set_search:
+    label: "Näytä setti"
+    error: "Settiä ei löytynyt. Varmista, että setin numero on oikea."
+  part_search:
+    label: "Näytä osa"
+    error: "Osaa ei löytynyt. Varmista, että osan numero on oikea."
+
+  ignore:
+    label: "Ohita nyt"
+    response: "Selvä, pysyn poissa tieltäsi!"
+  ignore_always:
+    label: "Ohita aina"
+    response: "Selvä, mykistin taustaehdotukset osaltasi."
+
+  suggestion:
+    set: "Huomasin sinun puhuvan LEGO-seteistä. Haluatko apua sellaisen etsimisessä?"
+    set_with_id: "Huomasin sinun puhuvan LEGO-setistä (%{id}). Haluatko apua sen etsimisessä?"
+    set_with_id_name: "Löysin setin '%{name}' (%{id}). Haluatko minun näyttävän sen tiedot?"
+    set_with_id_name_articles: "Löysin setin '%{name}' (%{id}). Haluatko minun näyttävän sen tiedot? Meillä on myös %{count} aiheeseen liittyvää artikkelia."
+    part: "Huomaan sinun keskustelevan LEGO-osista. Tarvitsetko apua osan etsimisessä?"
+    part_with_id: "Huomaan sinun keskustelevan LEGO-osasta (%{id}). Tarvitsetko apua sen etsimisessä?"
+    part_with_id_name: "Löysin osan '%{name}' (%{id}). Haluatko minun näyttävän sen tiedot?"
+
+modal:
+  set_search:
+    title: "Etsi LEGO-setti"
+    input_label: "Setin numero"
+    input_placeholder: "esim. 42083"
+  part_search:
+    title: "Etsi LEGO-osa"
+    input_label: "Osan numero"
+    input_placeholder: "esim. 3001"
+  services:
+    placeholder: "Valitse linkitettävät palvelut"
+
+command:
+  set:
+    year: "Vuosi"
+    theme: "Teema"
+    pieces: "Osia"
+    subtheme: "Alateema"
+    rating: "Arvio"
+    bricklink: "BrickLink"
+    legocom: "LEGO.com"
+    related_articles: "Aiheeseen liittyvät artikkelit"
+    articles: "Artikkelit"
+    title: "Setti: %{name} (%{id})"
+  part:
+    years: "Vuodet"
+    in_production: "Tuotannossa"
+    print_of: "Painatus"
+    molds: "Muotit"
+    alternates: "Vaihtoehdot"
+    title: "Osa: %{name} (%{id})"
+    content: "Tässä ovat tiedot osalle `%{num}`! \n**BrickLink**: %{url}"
+  events:
+    name: "tapahtumat"
+    desc: "Hallitse ja synkronoi tapahtumia"
+    image_desc: "Valinnainen kansikuva tapahtumalle"
+    choice_visibility: "❌ Piilota / ✅ Näytä"
+    visibility_hidden: "Tapahtuma '%{name}' on nyt piilotettu."
+    visibility_restored: "Tapahtuma '%{name}' on nyt palautettu näkyviin."
+    updating_visibility: "Päivitetään näkyvyyttä..."
+    btn_submit: "Ehdota kokonaan uutta"
+    btn_edit: "Ehdota muutoksia"
+    wizard_prompt: "Mitä haluaisit tehdä tapahtumille?"
+    submission_received: "Tapahtumaehdotuksesi on vastaanotettu ja odottaa moderaattorin hyväksyntää."
+    submission_rejected: "Ehdotuksesi on valitettavasti hylätty moderoinnissa."
+    edit_received: "Muutosehdotuksesi on vastaanotettu ja odottaa moderaattorin hyväksyntää."
+    edit_failed: "Tapahtuman muokkaaminen epäonnistui."
+    edit_prompt: "Valitse muokattava tapahtuma:"
+    opening_submit_form: "Avataan tapahtuman lähetyslomaketta..."
+    opening_edit_form: "Avataan muokkauslomaketta..."
+    tag_prompt: "Valitse tapahtuman tyyppi:"
+    tags:
+      exhibition: "Näyttely"
+      event: "Tapahtuma"
+      competition: "Kilpailu"
+    edit_and_retry: "Muokkaa ja yritä uudelleen"
+    dm_reply_sent: "Vastauksesi on välitetty moderaattoreille koskien tapahtumaehdotustasi '%{title}'."
+    dm_reply_no_topic: "En valitettavasti osannut yhdistää viestiäsi mihinkään aktiiviseen tapahtumaehdotukseen. Vastaa suoraan lähettämääni viestiin käyttämällä Discordin 'Vastaa' (Reply) -toimintoa."
+  zulip:
+    topic_new_event: "🆕"
+    topic_edit_event: "📝"
+    cmd_approve: "hyväksy"
+    cmd_approve_published: "hyväksy julkaistuna"
+    cmd_reject: "hylkää"
+    new_event: "**Uusi tapahtumaehdotus**\nOtsikko: %{title}\nAlkaa: %{start_date}\nPäättyy: %{end_date}\nSijainti: %{location}\nKuvaus: %{description}\nKuva-URL: %{url}\n\n~~~\n```yaml\n%{payload_str}\n```\n~~~\n\n**Moderointikomennot:**\n- Vastaa `%{cmd_approve}` julkaistaksesi luonnoksena Palikkakalenteriin.\n- Vastaa `%{cmd_approve_published}` julkaistaksesi välittömästi.\n- Vastaa `%{cmd_reject}` hylätäksesi.\n- Vastaa ```yaml```-lohkolla, joka sisältää vain muutettavat kentät, päivittääksesi tiedot.\n- Muut vastaukset lähetetään viestinä käyttäjälle."
+    new_event_no_image: "**Uusi tapahtumaehdotus**\nOtsikko: %{title}\nAlkaa: %{start_date}\nPäättyy: %{end_date}\nSijainti: %{location}\nKuvaus: %{description}\n\n~~~\n```yaml\n%{payload_str}\n```\n~~~\n\n**Moderointikomennot:**\n- Vastaa `%{cmd_approve}` julkaistaksesi luonnoksena Palikkakalenteriin.\n- Vastaa `%{cmd_approve_published}` julkaistaksesi välittömästi.\n- Vastaa `%{cmd_reject}` hylätäksesi.\n- Vastaa ```yaml```-lohkolla, joka sisältää vain muutettavat kentät, päivittääksesi tiedot.\n- Muut vastaukset lähetetään viestinä käyttäjälle."
+    edit_event: "**Tapahtuman muokkausehdotus**\nUID: %{uid}\nOtsikko: %{title}\nAlkaa: %{start_date}\nPäättyy: %{end_date}\nSijainti: %{location}\nKuvaus: %{description}\n\n~~~\n```diff\n%{payload_str}\n```\n~~~\n\n~~~\n```yaml\n%{yaml_str}\n```\n~~~\n\n**Moderointikomennot:**\n- Vastaa `%{cmd_approve}` tallentaaksesi muutokset Palikkakalenteriin.\n- Vastaa `%{cmd_reject}` hylätäksesi.\n- Vastaa ```yaml```-lohkolla, joka sisältää vain muutettavat kentät, päivittääksesi tiedot.\n- Muut vastaukset lähetetään viestinä käyttäjälle."
+    publish_success_with_url: "Julkaisu Palikkakalenteriin onnistui!\nTapahtuman URL: %{url}"
+    push_failed: "Palikkakalenteriin vienti epäonnistui: %{error}"
+    payload_updated: "Tiedot päivitetty onnistuneesti. Voit nyt hyväksyä ne."
+    payload_parse_failed: "YAML-tietojen jäsentäminen epäonnistui."
+    moderator_asked: "Moderaattori kysyi tapahtumaehdotuksestasi '%{title}' *(vastaa Discordin 'Vastaa' / 'Reply' -toiminnolla)*:\n\n%{msg}"
+    support_replied: "Tuki vastasi:\n\n%{msg}"
+    user_replied: "Käyttäjän vastaus:\n\n> %{msg}"
+    publish_success: "Julkaisu Palikkakalenteriin onnistui!"
+    topic_resolved: "Merkitään aihe ratkaistuksi..."
+errors:
+  unauthorized: "Sinulla ei ole oikeutta suorittaa tätä toimintoa."
+  expired: "Istunto on vanhentunut. Yritä uudelleen."
+  validation: "Syötetty arvo on virheellinen."
+  external_unavailable: "Ulkoinen palvelu ei ole juuri nyt saatavilla. Yritä myöhemmin uudelleen."
+  pocketbase_disabled: "PocketBase ei ole käytössä tällä palvelimella."
+  internal: "Tapahtui sisäinen virhe."
+  failed_to_fetch_events: "Tapahtumien hakeminen epäonnistui."
+  session_consumed: "Istunto on vanhentunut, luvaton tai se on jo käytetty."
+  no_events_to_edit: "Ei muokattavia tapahtumia."
+  validation_failed: "Validointi epäonnistui: %{e}\nKorjaa virheet ja yritä uudelleen."

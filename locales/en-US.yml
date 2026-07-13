@@ -1,0 +1,118 @@
+common:
+  none: "None"
+  yes: "Yes"
+  no: "No"
+  na: "N/A"
+  default_bot_name: "AFOL"
+
+workflow:
+  set_search:
+    label: "Show Set"
+    error: "Failed to find the set. Make sure it's a valid set number."
+  part_search:
+    label: "Show Part"
+    error: "Failed to find the part. Make sure it's a valid part number."
+
+  ignore:
+    label: "Ignore Now"
+    response: "Okay, I'll stay out of your way!"
+  ignore_always:
+    label: "Ignore Always"
+    response: "Okay, I've muted ambient suggestions for you."
+
+  suggestion:
+    set: "I noticed you're talking about LEGO sets. Want some help finding one?"
+    set_with_id: "I noticed you're talking about a LEGO set (%{id}). Want some help finding it?"
+    set_with_id_name: "I found the set '%{name}' (%{id}). Want me to show info on it?"
+    set_with_id_name_articles: "I found the set '%{name}' (%{id}). Want me to show info on it? We also have %{count} related articles."
+    part: "I see you're discussing LEGO parts. Need to look up a piece?"
+    part_with_id: "I see you're discussing a LEGO part (%{id}). Need to look up a piece?"
+    part_with_id_name: "I found the part '%{name}' (%{id}). Want me to show info on it?"
+
+modal:
+  set_search:
+    title: "Search for a LEGO Set"
+    input_label: "Set Number"
+    input_placeholder: "e.g. 42083"
+  part_search:
+    title: "Search for a LEGO Part"
+    input_label: "Part Number"
+    input_placeholder: "e.g. 3001"
+  services:
+    placeholder: "Select services to link"
+
+command:
+  set:
+    year: "Year"
+    theme: "Theme"
+    pieces: "Pieces"
+    subtheme: "Subtheme"
+    rating: "Rating"
+    bricklink: "BrickLink"
+    legocom: "LEGO.com"
+    related_articles: "Related Articles"
+    articles: "Articles"
+    title: "Set: %{name} (%{id})"
+  part:
+    years: "Years"
+    in_production: "In Production"
+    print_of: "Print Of"
+    molds: "Molds"
+    alternates: "Alternates"
+    title: "Part: %{name} (%{id})"
+    content: "Here is the information for part `%{num}`! \n**BrickLink**: %{url}"
+  events:
+    name: "events"
+    desc: "Manage and synchronize events"
+    image_desc: "Optional cover image for the event"
+    choice_visibility: "❌ Hide / ✅ Show"
+    visibility_hidden: "Event '%{name}' is now hidden."
+    visibility_restored: "Event '%{name}' is now visible again."
+    updating_visibility: "Updating visibility..."
+    btn_submit: "Propose New"
+    btn_edit: "Propose Changes"
+    wizard_prompt: "What would you like to do with events?"
+    submission_received: "Your event has been submitted for moderation review."
+    submission_rejected: "Your event submission was rejected by the moderators."
+    edit_received: "Your event edit has been submitted for moderation review."
+    edit_failed: "Failed to submit event edit."
+    edit_prompt: "Select an event to edit:"
+    opening_submit_form: "Opening submit form..."
+    opening_edit_form: "Opening edit form..."
+    tag_prompt: "Select an event type:"
+    tags:
+      exhibition: "Exhibition"
+      event: "Event"
+      competition: "Competition"
+    edit_and_retry: "Edit & Retry"
+    dm_reply_sent: "Your reply has been forwarded to the moderators regarding your event proposal '%{title}'."
+    dm_reply_no_topic: "I couldn't figure out which event you're replying to. Please use the Discord 'Reply' feature on the specific message you want to respond to."
+  zulip:
+    topic_new_event: "🆕"
+    topic_edit_event: "📝"
+    cmd_approve: "approve"
+    cmd_approve_published: "approve published"
+    cmd_reject: "reject"
+    new_event: "**New Event Proposed**\nTitle: %{title}\nStart Date: %{start_date}\nEnd Date: %{end_date}\nLocation: %{location}\nDescription: %{description}\nImage URL: %{url}\n\n~~~\n```yaml\n%{payload_str}\n```\n~~~\n\n**Moderation Commands:**\n- Reply `%{cmd_approve}` to publish as draft to Palikkakalenteri.\n- Reply `%{cmd_approve_published}` to publish immediately.\n- Reply `%{cmd_reject}` to discard.\n- Reply with a ```yaml``` block containing only the fields you want to change to update the payload.\n- Any other reply will be sent as a message to the user."
+    new_event_no_image: "**New Event Proposed**\nTitle: %{title}\nStart Date: %{start_date}\nEnd Date: %{end_date}\nLocation: %{location}\nDescription: %{description}\n\n~~~\n```yaml\n%{payload_str}\n```\n~~~\n\n**Moderation Commands:**\n- Reply `%{cmd_approve}` to publish as draft to Palikkakalenteri.\n- Reply `%{cmd_approve_published}` to publish immediately.\n- Reply `%{cmd_reject}` to discard.\n- Reply with a ```yaml``` block containing only the fields you want to change to update the payload.\n- Any other reply will be sent as a message to the user."
+    edit_event: "**Event Edit Proposed**\nUID: %{uid}\nTitle: %{title}\nStart Date: %{start_date}\nEnd Date: %{end_date}\nLocation: %{location}\nDescription: %{description}\n\n~~~\n```diff\n%{payload_str}\n```\n~~~\n\n~~~\n```yaml\n%{yaml_str}\n```\n~~~\n\n**Moderation Commands:**\n- Reply `%{cmd_approve}` to apply these changes to Palikkakalenteri.\n- Reply `%{cmd_reject}` to discard.\n- Reply with a ```yaml``` block containing only the fields you want to change to update the payload.\n- Any other reply will be sent as a message to the user."
+    publish_success_with_url: "Successfully published to Palikkakalenteri!\nEvent URL: %{url}"
+    push_failed: "Failed to push to Palikkakalenteri: %{error}"
+    payload_updated: "Payload updated successfully. You can now approve it."
+    payload_parse_failed: "Failed to parse YAML payload."
+    moderator_asked: "A moderator asked about your event proposal '%{title}' *(please respond using the 'Reply' feature)*:\n\n%{msg}"
+    support_replied: "Support replied:\n\n%{msg}"
+    user_replied: "Reply from user:\n\n> %{msg}"
+    publish_success: "Successfully published to Palikkakalenteri!"
+    topic_resolved: "Marking topic as resolved..."
+errors:
+  unauthorized: "You are not authorized to perform this action."
+  expired: "The session has expired. Please try again."
+  validation: "The provided input is invalid."
+  external_unavailable: "An external service is currently unavailable. Please try again later."
+  pocketbase_disabled: "PocketBase is not enabled on this server."
+  internal: "An internal error occurred."
+  failed_to_fetch_events: "Failed to fetch events."
+  session_consumed: "Session expired, unauthorized, or already consumed."
+  no_events_to_edit: "No events to edit."
+  validation_failed: "Validation failed: %{e}\nPlease fix the errors and try again."
