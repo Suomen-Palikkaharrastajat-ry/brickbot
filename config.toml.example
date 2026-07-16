@@ -38,6 +38,15 @@
 # [[guilds]]
 # guild_id = 1424873309325234220
 # locale = "fi-FI"
+# 
+# # Override interactions specifically for this guild (optional)
+# [guilds.interactions]
+# set = false
+# part = true
+# 
+# # Override commands specifically for this guild (optional)
+# [guilds.commands.events]
+# enabled = false
 
 # [[feeds]]
 # # List of Feed URLs

@@ -1088,6 +1088,14 @@ pub async fn handle_modal_edit_event(
                 )
                 .to_string();
 
+                let _ = crate::zulip::unresolve_zulip_topic(
+                    app_ctx.http.as_ref(),
+                    zulip_cfg,
+                    &zulip_topic,
+                    app_ctx.config.resource_limits.max_http_body_bytes,
+                )
+                .await;
+
                 let _ = crate::zulip::post_topic_to_stream(
                     app_ctx.http.as_ref(),
                     zulip_cfg,

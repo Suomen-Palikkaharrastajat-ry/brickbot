@@ -80,6 +80,66 @@ pub async fn resolve_zulip_topic(
     Ok(())
 }
 
+pub async fn unresolve_zulip_topic(
+    http: &dyn crate::http::HttpProvider,
+    zulip_cfg: &ZulipConfig,
+    base_topic: &str,
+    limit: u64,
+) -> anyhow::Result<()> {
+    let resolved_topic = format!("✔ {base_topic}");
+    let narrow = serde_json::json!([
+        {"operator": "topic", "operand": resolved_topic}
+    ])
+    .to_string();
+
+    let api_key = std::env::var("ZULIP_API_KEY").unwrap_or_default();
+    if let Ok(url) = reqwest::Url::parse_with_params(
+        &format!("{}/api/v1/messages", zulip_cfg.url.trim_end_matches('/')),
+        &[
+            ("narrow", &narrow),
+            ("anchor", &"oldest".to_string()),
+            ("num_before", &"0".to_string()),
+            ("num_after", &"1".to_string()),
+        ],
+    ) {
+        let messages_url = url.to_string();
+        if let Ok(messages_resp) = http
+            .get_text_basic_auth(&messages_url, &zulip_cfg.bot_email, Some(&api_key), limit)
+            .await
+        {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&messages_resp) {
+                if let Some(messages) = json.get("messages").and_then(|m| m.as_array()) {
+                    if let Some(first_msg) = messages.first() {
+                        if let Some(first_msg_id) =
+                            first_msg.get("id").and_then(serde_json::Value::as_u64)
+                        {
+                            let patch_url = format!(
+                                "{}/api/v1/messages/{}",
+                                zulip_cfg.url.trim_end_matches('/'),
+                                first_msg_id
+                            );
+                            let patch_form = vec![
+                                ("topic".to_string(), base_topic.to_string()),
+                                ("propagate_mode".to_string(), "change_all".to_string()),
+                            ];
+                            let _ = http
+                                .patch_form_basic_auth(
+                                    &patch_url,
+                                    &zulip_cfg.bot_email,
+                                    Some(&api_key),
+                                    patch_form,
+                                    limit,
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
