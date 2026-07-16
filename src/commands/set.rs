@@ -16,7 +16,7 @@ pub async fn set_interaction(
 ) -> anyhow::Result<(String, Option<CreateEmbed>)> {
     match fetch_set(http, set_num, limit).await {
         Ok(set) => {
-            let articles = crate::db::search_feed_items(db, &set.name)
+            let articles = crate::db::search_feed_items(db, &set.number, &set.name, &set.theme)
                 .await
                 .unwrap_or_default();
             let (content, embed) = build_set_message(&set, locale, services, &articles);

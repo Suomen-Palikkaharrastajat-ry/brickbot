@@ -1,7 +1,7 @@
 # Global bot name (optional)
 # bot_name = "Palikkaharrastaja"
 # Global default locale (optional, fallback when guild config is not set)
-# default_locale = "fi-FI"
+# locale = "fi-FI"
 
 # ambient_debug_logging = true
 #

@@ -36,6 +36,21 @@ pub fn start_event_listener(state: AppState) {
             match register_res {
                 Ok(resp) => {
                     let status = resp.status();
+                    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        let retry_after = resp
+                            .headers()
+                            .get(reqwest::header::RETRY_AFTER)
+                            .and_then(|h| h.to_str().ok())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(15);
+
+                        error!(
+                            "Zulip register API returned status 429 Too Many Requests. Sleeping for {}s.",
+                            retry_after
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(retry_after)).await;
+                        continue;
+                    }
                     let text = resp.text().await.unwrap_or_default();
                     match serde_json::from_str::<ZulipRegisterResponse>(&text) {
                         Ok(reg) => {
@@ -84,8 +99,22 @@ pub fn start_event_listener(state: AppState) {
 
             let events_url = format!("{}/api/v1/events", zulip_cfg.url.trim_end_matches('/'));
 
+            let mut last_poll_time = tokio::time::Instant::now();
+
             // 2. Poll events loop
             loop {
+                // Ensure we don't exceed 1 request per second to avoid 429s (Zulip's limit)
+                let elapsed = last_poll_time.elapsed();
+                if elapsed < std::time::Duration::from_secs(1) {
+                    tokio::time::sleep(
+                        std::time::Duration::from_secs(1)
+                            .checked_sub(elapsed)
+                            .unwrap(),
+                    )
+                    .await;
+                }
+                last_poll_time = tokio::time::Instant::now();
+
                 let poll_res = client
                     .get(&events_url)
                     .basic_auth(&zulip_cfg.bot_email, Some(&api_key))
@@ -99,6 +128,22 @@ pub fn start_event_listener(state: AppState) {
                 match poll_res {
                     Ok(resp) => {
                         let status = resp.status();
+                        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                            let retry_after = resp
+                                .headers()
+                                .get(reqwest::header::RETRY_AFTER)
+                                .and_then(|h| h.to_str().ok())
+                                .and_then(|s| s.parse::<u64>().ok())
+                                .unwrap_or(15);
+
+                            error!(
+                                "Zulip events API returned status 429 Too Many Requests. Sleeping for {}s.",
+                                retry_after
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(retry_after)).await;
+                            continue;
+                        }
+
                         if !status.is_success() {
                             error!(
                                 "Zulip events API returned status {}. Re-registering queue.",
@@ -110,6 +155,7 @@ pub fn start_event_listener(state: AppState) {
                         if let Ok(events_resp) = resp.json::<ZulipEventsResponse>().await {
                             if let Some(events) = events_resp.events {
                                 for event in events {
+                                    last_event_id = last_event_id.max(event.id);
                                     if event.event_type == "message" {
                                         if let Some(msg) = event.message {
                                             // Ensure we don't process our own messages to avoid loops
@@ -121,11 +167,15 @@ pub fn start_event_listener(state: AppState) {
                                             crate::zulip::process_zulip_message(&state, &msg).await;
                                         }
                                     }
-                                    last_event_id = last_event_id.max(event.id);
                                 }
+                            } else {
+                                error!(
+                                    "Zulip events response indicated an error or missing events. Re-registering queue."
+                                );
+                                break;
                             }
                         } else {
-                            error!("Failed to parse Zulip events response. Re-registering.");
+                            error!("Failed to deserialize Zulip events response. Re-registering.");
                             break;
                         }
                     }

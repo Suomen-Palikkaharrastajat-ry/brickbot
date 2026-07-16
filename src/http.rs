@@ -98,6 +98,22 @@ pub trait HttpProvider: Send + Sync {
         file_bytes: Vec<u8>,
         limit: u64,
     ) -> anyhow::Result<String>;
+    async fn patch_json_with_auth<'a, 'b>(
+        &self,
+        url: &'a str,
+        auth_header: Option<&'b str>,
+        payload: &'a Value,
+        limit: u64,
+    ) -> anyhow::Result<String>;
+    async fn patch_multipart_with_auth<'a, 'b>(
+        &self,
+        url: &'a str,
+        auth_header: Option<&'b str>,
+        payload: &'a Value,
+        file_name: &'a str,
+        file_bytes: Vec<u8>,
+        limit: u64,
+    ) -> anyhow::Result<String>;
     async fn post_form<'a>(
         &self,
         url: &'a str,
@@ -366,6 +382,64 @@ impl HttpProvider for HttpClient {
         let safe_url = redact_url(url);
         let resp = self
             .execute_request(req, &format!("POST MULTIPART {safe_url}"))
+            .await?;
+        let bytes = read_bounded_body(resp, limit).await?;
+        Ok(std::str::from_utf8(&bytes)?.to_string())
+    }
+
+    async fn patch_json_with_auth<'a, 'b>(
+        &self,
+        url: &'a str,
+        auth_header: Option<&'b str>,
+        payload: &'a Value,
+        limit: u64,
+    ) -> anyhow::Result<String> {
+        let mut req = self.client.patch(url).json(payload);
+        if let Some(auth) = auth_header {
+            req = req.header("Authorization", auth);
+        }
+        let safe_url = redact_url(url);
+        let resp = self
+            .execute_request(req, &format!("PATCH {safe_url}"))
+            .await?;
+        let bytes = read_bounded_body(resp, limit).await?;
+        Ok(std::str::from_utf8(&bytes)?.to_string())
+    }
+
+    async fn patch_multipart_with_auth<'a, 'b>(
+        &self,
+        url: &'a str,
+        auth_header: Option<&'b str>,
+        payload: &'a Value,
+        file_name: &'a str,
+        file_bytes: Vec<u8>,
+        limit: u64,
+    ) -> anyhow::Result<String> {
+        let mut form = reqwest::multipart::Form::new();
+
+        if let Some(obj) = payload.as_object() {
+            for (k, v) in obj {
+                if let Some(s) = v.as_str() {
+                    form = form.text(k.clone(), s.to_string());
+                } else {
+                    form = form.text(k.clone(), v.to_string());
+                }
+            }
+        }
+
+        let part = reqwest::multipart::Part::bytes(file_bytes)
+            .file_name(file_name.to_string())
+            .mime_str("application/octet-stream")?;
+
+        form = form.part("image", part);
+
+        let mut req = self.client.patch(url).multipart(form);
+        if let Some(auth) = auth_header {
+            req = req.header("Authorization", auth);
+        }
+        let safe_url = redact_url(url);
+        let resp = self
+            .execute_request(req, &format!("PATCH MULTIPART {safe_url}"))
             .await?;
         let bytes = read_bounded_body(resp, limit).await?;
         Ok(std::str::from_utf8(&bytes)?.to_string())

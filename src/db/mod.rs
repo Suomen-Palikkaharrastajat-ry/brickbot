@@ -95,7 +95,9 @@ mod tests {
         .await
         .unwrap();
 
-        let results = search_feed_items(&pool, "42083").await.unwrap();
+        let results = search_feed_items(&pool, "42083", "Bugatti Chiron", "Technic")
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "id1");
         assert_eq!(results[0].source_title, "Source 1");

@@ -3,7 +3,7 @@ use std::fs;
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct Config {
-    pub default_locale: Option<String>,
+    pub locale: Option<String>,
     pub bot_name: Option<String>,
     #[serde(default)]
     pub ambient_debug_logging: bool,
@@ -76,6 +76,8 @@ pub struct GuildConfig {
     pub help_forum_channel_ids: Vec<u64>,
     #[serde(default)]
     pub ambient_channel_ids: Option<Vec<u64>>,
+    pub interactions: Option<InteractionsConfig>,
+    pub commands: Option<CommandsConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -240,6 +242,32 @@ impl Config {
     pub const fn is_sync_events_enabled(&self) -> bool {
         self.pocketbase.is_some()
     }
+
+    #[must_use]
+    pub fn get_guild_config(&self, guild_id: u64) -> Option<&GuildConfig> {
+        self.guilds.iter().find(|g| g.guild_id == guild_id)
+    }
+
+    #[must_use]
+    pub fn interactions_for(&self, guild_id: u64) -> &InteractionsConfig {
+        self.get_guild_config(guild_id)
+            .and_then(|g| g.interactions.as_ref())
+            .unwrap_or(&self.interactions)
+    }
+
+    #[must_use]
+    pub fn commands_for(&self, guild_id: u64) -> &CommandsConfig {
+        self.get_guild_config(guild_id)
+            .and_then(|g| g.commands.as_ref())
+            .unwrap_or(&self.commands)
+    }
+
+    #[must_use]
+    pub fn locale_for(&self, guild_id: u64) -> Option<&str> {
+        self.get_guild_config(guild_id)
+            .and_then(|g| g.locale.as_deref())
+            .or(self.locale.as_deref())
+    }
 }
 
 #[cfg(test)]
@@ -249,7 +277,7 @@ mod tests {
     #[test]
     fn test_config_parsing() {
         let toml_str = r#"
-        default_locale = "fi-FI"
+        locale = "fi-FI"
         bot_name = "Global Bot"
         poll_interval = 300
 
@@ -259,6 +287,12 @@ mod tests {
         locale = "fi-FI"
         help_channel_ids = [100, 200]
         ambient_channel_ids = [300]
+
+        [guilds.interactions]
+        set = false
+
+        [guilds.commands.events]
+        enabled = false
 
         [[feeds]]
         feed_urls = ["http://example.com/rss"]
@@ -274,7 +308,7 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.default_locale.as_deref(), Some("fi-FI"));
+        assert_eq!(config.locale.as_deref(), Some("fi-FI"));
         assert_eq!(config.bot_name.as_deref(), Some("Global Bot"));
         assert_eq!(config.guilds.len(), 1);
 
@@ -294,6 +328,11 @@ mod tests {
         assert!(config.commands.events.enable_edit);
         assert!(!config.commands.events.enable_propose);
         assert!(config.commands.events.enable_fallback_mention);
+
+        assert!(!config.interactions_for(123).set);
+        assert!(!config.commands_for(123).events.enabled);
+        assert!(config.interactions_for(999).set);
+        assert!(config.commands_for(999).events.enabled);
 
         assert_eq!(config.resource_limits.max_http_body_bytes, 10 * 1024 * 1024);
         assert_eq!(

@@ -22,7 +22,7 @@ struct EventDisplayPayload<'a> {
     url: &'a str,
 }
 
-fn generate_display_yaml(payload: &serde_json::Value) -> String {
+pub fn generate_display_yaml(payload: &serde_json::Value) -> String {
     let title = payload.get("title").and_then(|v| v.as_str()).unwrap_or("");
     let start_date = payload
         .get("start_date")
@@ -36,7 +36,7 @@ fn generate_display_yaml(payload: &serde_json::Value) -> String {
         .get("description")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .to_string();
+        .replace('\r', "");
     if !description.ends_with('\n') {
         description.push('\n');
     }
@@ -61,7 +61,10 @@ fn generate_display_yaml(payload: &serde_json::Value) -> String {
         event_type,
         url,
     };
-    serde_yaml::to_string(&display_obj).unwrap_or_default()
+    serde_yaml::to_string(&display_obj)
+        .unwrap_or_default()
+        .trim_end()
+        .to_string()
 }
 
 pub async fn handle_wizard_retry_submit(
@@ -1033,47 +1036,17 @@ pub async fn handle_modal_edit_event(
         "description": description,
     });
     let payload_str = payload_json.to_string();
+    tracing::warn!("DEBUG modal submission: session uid is: {}", uid);
 
-    let mut diff_str = String::new();
-    if let Some(pb_cfg) = &app_ctx.config.pocketbase {
-        if let Ok(events) = crate::events_sync::fetch_pocketbase_events(
-            app_ctx.http.as_ref(),
-            pb_cfg,
-            app_ctx.config.resource_limits.max_http_body_bytes,
-        )
-        .await
-        {
-            if let Some(ev) = events.into_iter().find(|e| e.uid == uid) {
-                let old_payload = serde_json::json!({
-                    "uid": ev.uid,
-                    "title": ev.summary,
-                    "start_date": ev.start_time.with_timezone(&Helsinki).format("%Y-%m-%d %H:%M:00").to_string(),
-                    "end_date": ev.end_time.map_or_else(String::new, |d| d.with_timezone(&Helsinki).format("%Y-%m-%d %H:%M:00").to_string()),
-                    "location": ev.location.unwrap_or_default(),
-                    "url": ev.url.unwrap_or_default(),
-                    "tags": ev.tags.unwrap_or_default(),
-                    "description": ev.description.unwrap_or_default(),
-                });
-                let old_yaml = generate_display_yaml(&old_payload);
-                let new_yaml = generate_display_yaml(&payload_json);
-
-                let diff = similar::TextDiff::from_lines(&old_yaml, &new_yaml);
-                for change in diff.iter_all_changes() {
-                    let sign = match change.tag() {
-                        similar::ChangeTag::Delete => "-",
-                        similar::ChangeTag::Insert => "+",
-                        similar::ChangeTag::Equal => " ",
-                    };
-                    diff_str.push_str(&format!("{sign}{change}"));
-                }
-            }
-        }
-    }
     let yaml_str = generate_display_yaml(&payload_json);
-
-    if diff_str.is_empty() {
-        diff_str = yaml_str.clone();
-    }
+    let diff_str = generate_diff_str(
+        app_ctx.config.pocketbase.as_ref(),
+        app_ctx.http.as_ref(),
+        app_ctx.config.resource_limits.max_http_body_bytes,
+        &uid,
+        &yaml_str,
+    )
+    .await;
 
     let user_id = interaction.user.id.get().to_string();
     let channel_id = interaction.channel_id.get().to_string();
@@ -1103,7 +1076,6 @@ pub async fn handle_modal_edit_event(
                 let content = rust_i18n::t!(
                     "command.zulip.edit_event",
                     locale = locale.as_str(),
-                    uid = uid,
                     title = title,
                     start_date = pb_start,
                     end_date = pb_end,
@@ -1160,9 +1132,106 @@ pub async fn handle_modal_edit_event(
     Ok(())
 }
 
+pub async fn generate_diff_str(
+    pb_cfg: Option<&crate::config::PocketBaseConfig>,
+    http: &dyn crate::http::HttpProvider,
+    limit: u64,
+    uid: &str,
+    new_yaml: &str,
+) -> String {
+    use chrono_tz::Europe::Helsinki;
+
+    let mut diff_str = String::new();
+    if let Some(pb_cfg) = pb_cfg {
+        if let Ok(events) = crate::events_sync::fetch_pocketbase_events(http, pb_cfg, limit).await {
+            if let Some(ev) = events.into_iter().find(|e| e.uid == uid) {
+                let old_payload = serde_json::json!({
+                    "uid": ev.uid,
+                    "title": ev.summary,
+                    "start_date": ev.start_time.with_timezone(&Helsinki).format("%Y-%m-%d %H:%M:00").to_string(),
+                    "end_date": ev.end_time.map_or_else(String::new, |d| d.with_timezone(&Helsinki).format("%Y-%m-%d %H:%M:00").to_string()),
+                    "location": ev.location.unwrap_or_default(),
+                    "url": ev.url.unwrap_or_default(),
+                    "tags": ev.tags.unwrap_or_default(),
+                    "description": ev.description.unwrap_or_default(),
+                });
+                let old_yaml = generate_display_yaml(&old_payload);
+
+                let diff = similar::TextDiff::from_lines(old_yaml.as_str(), new_yaml);
+                diff_str.push_str("--- original\n+++ edited\n");
+                for change in diff.iter_all_changes() {
+                    let sign = match change.tag() {
+                        similar::ChangeTag::Delete => "-",
+                        similar::ChangeTag::Insert => "+",
+                        similar::ChangeTag::Equal => " ",
+                    };
+                    diff_str.push_str(&format!("{sign}{change}"));
+                }
+                diff_str = diff_str.trim_end().to_string();
+            }
+        }
+    }
+
+    if diff_str.is_empty() {
+        diff_str = format!("--- original (not found)\n+++ edited\n{new_yaml}");
+    }
+
+    diff_str
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_generate_display_yaml_format() {
+        let payload = serde_json::json!({
+            "id": "12345",
+            "state": "draft",
+            "title": "Test Event",
+            "start_date": "2026-07-15 20:00:00",
+            "end_date": "2026-07-15 21:00:00",
+            "location": "Test Location",
+            "url": "https://example.com",
+            "tags": ["exhibition"],
+            "description": "Test description\r\nwith multiple lines"
+        });
+
+        let yaml = generate_display_yaml(&payload);
+
+        // Should not contain id or state
+        assert!(!yaml.contains("id:"));
+        assert!(!yaml.contains("state:"));
+        assert!(!yaml.contains("12345"));
+        assert!(!yaml.contains("draft"));
+
+        // Should map tags to type
+        assert!(yaml.contains("type: exhibition"));
+        assert!(!yaml.contains("tags:"));
+
+        // Order check (title -> start_date -> end_date -> description -> location -> type -> url)
+        let title_idx = yaml.find("title:").unwrap();
+        let start_idx = yaml.find("start_date:").unwrap();
+        let end_idx = yaml.find("end_date:").unwrap();
+        let desc_idx = yaml.find("description:").unwrap();
+        let loc_idx = yaml.find("location:").unwrap();
+        let type_idx = yaml.find("type:").unwrap();
+        let url_idx = yaml.find("url:").unwrap();
+
+        assert!(title_idx < start_idx);
+        assert!(start_idx < end_idx);
+        assert!(end_idx < desc_idx);
+        assert!(desc_idx < loc_idx);
+        assert!(loc_idx < type_idx);
+        assert!(type_idx < url_idx);
+
+        // Check description multiline and \r stripped
+        assert!(yaml.contains("description: |"));
+        assert!(yaml.contains("  Test description\n  with multiple lines\n"));
+
+        // Ensure no extra trailing newline
+        assert!(!yaml.ends_with("\n\n"));
+    }
 
     #[test]
     fn test_create_submit_modal_structure() {

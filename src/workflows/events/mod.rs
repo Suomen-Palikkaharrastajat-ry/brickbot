@@ -78,13 +78,19 @@ pub async fn handle_events_wizard_command(
     status_msg: Option<String>,
     is_deferred: bool,
 ) -> anyhow::Result<()> {
+    let guild_id_u64 = interaction
+        .guild_id()
+        .map(serenity::all::GuildId::get)
+        .unwrap_or_default();
     let (locale, _) = extract_locale_and_bot_name(app_ctx, interaction.guild_id()).await;
 
     let mut image_url = None;
     if let WizardInteraction::Command(cmd) = &interaction {
         let mut image_attachment_id = None;
+        let image_arg_name =
+            rust_i18n::t!("command.events.image_arg_name", locale = locale.as_str()).to_string();
         for opt in &cmd.data.options {
-            if opt.name == "image" {
+            if opt.name == image_arg_name {
                 if let serenity::all::CommandDataOptionValue::Attachment(att) = &opt.value {
                     image_attachment_id = Some(*att);
                 }
@@ -197,7 +203,7 @@ pub async fn handle_events_wizard_command(
     }
 
     let mut action_buttons_top = vec![];
-    if app_ctx.config.commands.events.enable_edit && !edit_options.is_empty() {
+    if app_ctx.config.commands_for(guild_id_u64).events.enable_edit && !edit_options.is_empty() {
         let edit_select = serenity::builder::CreateSelectMenu::new(
             format!("wizard_edit_event_select_change:{session_id}"),
             serenity::builder::CreateSelectMenuKind::String {
@@ -235,7 +241,12 @@ pub async fn handle_events_wizard_command(
 
     let mut action_buttons_bottom = vec![];
 
-    if app_ctx.config.commands.events.enable_propose {
+    if app_ctx
+        .config
+        .commands_for(guild_id_u64)
+        .events
+        .enable_propose
+    {
         let ex_lbl = rust_i18n::t!("command.events.tags.exhibition", locale = locale.as_str());
         let ev_lbl = rust_i18n::t!("command.events.tags.event", locale = locale.as_str());
         let co_lbl = rust_i18n::t!("command.events.tags.competition", locale = locale.as_str());
@@ -257,7 +268,12 @@ pub async fn handle_events_wizard_command(
         components.push(CreateActionRow::SelectMenu(type_select));
     }
 
-    if app_ctx.config.commands.events.enable_propose {
+    if app_ctx
+        .config
+        .commands_for(guild_id_u64)
+        .events
+        .enable_propose
+    {
         action_buttons_bottom.push(
             CreateButton::new(format!("wizard_submit_tag_continue:{session_id}"))
                 .label(rust_i18n::t!(

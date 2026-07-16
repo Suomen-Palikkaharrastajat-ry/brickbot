@@ -7,12 +7,6 @@ pub async fn push_event_data(
     payload: &Value,
     limit: u64,
 ) -> anyhow::Result<String> {
-    let url = format!(
-        "{}/api/collections/{}/records",
-        pb_cfg.url.trim_end_matches('/'),
-        pb_cfg.collection
-    );
-
     let token = std::env::var("POCKETBASE_IMPERSONATE_AUTH_TOKEN").ok();
     let auth = token.as_ref().map(|t| format!("Bearer {t}"));
 
@@ -21,19 +15,54 @@ pub async fn push_event_data(
         .as_object_mut()
         .and_then(|obj| obj.remove("image_url"));
 
+    let record_id = clean_payload
+        .as_object_mut()
+        .and_then(|obj| obj.remove("id"))
+        .and_then(|v| v.as_str().map(std::string::ToString::to_string));
+
+    let url = record_id.as_ref().map_or_else(
+        || {
+            format!(
+                "{}/api/collections/{}/records",
+                pb_cfg.url.trim_end_matches('/'),
+                pb_cfg.collection
+            )
+        },
+        |id| {
+            format!(
+                "{}/api/collections/{}/records/{}",
+                pb_cfg.url.trim_end_matches('/'),
+                pb_cfg.collection,
+                id
+            )
+        },
+    );
+
     let resp = if let Some(url_val) = image_url {
         if let Some(url_str) = url_val.as_str() {
             match http.get_bounded_bytes(url_str, limit, false).await {
                 Ok(bytes) => {
-                    http.post_multipart_with_auth(
-                        &url,
-                        auth.as_deref(),
-                        &clean_payload,
-                        "cover.png",
-                        bytes.to_vec(),
-                        limit,
-                    )
-                    .await?
+                    if record_id.is_some() {
+                        http.patch_multipart_with_auth(
+                            &url,
+                            auth.as_deref(),
+                            &clean_payload,
+                            "cover.png",
+                            bytes.to_vec(),
+                            limit,
+                        )
+                        .await?
+                    } else {
+                        http.post_multipart_with_auth(
+                            &url,
+                            auth.as_deref(),
+                            &clean_payload,
+                            "cover.png",
+                            bytes.to_vec(),
+                            limit,
+                        )
+                        .await?
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -41,17 +70,30 @@ pub async fn push_event_data(
                         url_str,
                         e
                     );
-                    http.post_json_with_auth(&url, auth.as_deref(), &clean_payload, limit)
-                        .await?
+                    if record_id.is_some() {
+                        http.patch_json_with_auth(&url, auth.as_deref(), &clean_payload, limit)
+                            .await?
+                    } else {
+                        http.post_json_with_auth(&url, auth.as_deref(), &clean_payload, limit)
+                            .await?
+                    }
                 }
             }
+        } else if record_id.is_some() {
+            http.patch_json_with_auth(&url, auth.as_deref(), &clean_payload, limit)
+                .await?
         } else {
             http.post_json_with_auth(&url, auth.as_deref(), &clean_payload, limit)
                 .await?
         }
     } else {
-        http.post_json_with_auth(&url, auth.as_deref(), &clean_payload, limit)
-            .await?
+        if record_id.is_some() {
+            http.patch_json_with_auth(&url, auth.as_deref(), &clean_payload, limit)
+                .await?
+        } else {
+            http.post_json_with_auth(&url, auth.as_deref(), &clean_payload, limit)
+                .await?
+        }
     };
 
     let json: Value = serde_json::from_str(&resp)?;

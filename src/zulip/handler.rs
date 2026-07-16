@@ -54,11 +54,13 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
             let mut reply_msg_raw = None;
 
             let mut locale = "en-US".to_string();
+            let mut resolved_guild_id = None;
             if let Ok(cid) = channel_id.parse::<u64>() {
                 let c = serenity::model::id::ChannelId::new(cid);
                 if let Ok(channel) = c.to_channel(&state.discord).await {
                     if let Some(guild_channel) = channel.guild() {
                         let g_id = guild_channel.guild_id.get();
+                        resolved_guild_id = Some(g_id);
                         if let Some(guild_conf) =
                             state.config.guilds.iter().find(|g| g.guild_id == g_id)
                         {
@@ -81,14 +83,22 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
             let cmd_reject =
                 rust_i18n::t!("command.zulip.cmd_reject", locale = locale.as_str()).to_lowercase();
 
+            let trim_chars: &[char] = &[
+                ' ', '\t', '\n', '\r', '.', ',', '!', '?', '"', '\'', ':', ';',
+            ];
+            let clean_rest = rest_lower.trim_matches(trim_chars);
+            let clean_cmd_approve = cmd_approve.trim_matches(trim_chars);
+            let clean_cmd_approve_published = cmd_approve_published.trim_matches(trim_chars);
+            let clean_cmd_reject = cmd_reject.trim_matches(trim_chars);
+
             info!(
-                "Determined locale: '{}', cmd_approve: '{}', rest_lower: '{}'",
-                locale, cmd_approve, rest_lower
+                "Determined locale: '{}', clean_cmd_approve: '{}', clean_rest: '{}'",
+                locale, clean_cmd_approve, clean_rest
             );
 
-            let is_approve_published = rest_lower == cmd_approve_published;
-            let is_approve = is_approve_published || rest_lower == cmd_approve;
-            let is_reject = rest_lower == cmd_reject;
+            let is_approve_published = clean_rest == clean_cmd_approve_published;
+            let is_approve = is_approve_published || clean_rest == clean_cmd_approve;
+            let is_reject = clean_rest == clean_cmd_reject;
             let is_yaml_update = content.contains("```yaml") || content.contains("```json");
 
             if (is_approve || is_reject || is_yaml_update) && !is_moderator {
@@ -110,12 +120,27 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                 let mut pb_payload: Value =
                     serde_json::from_str(&payload_str).unwrap_or_else(|_| serde_json::json!({}));
 
-                if is_approve_published {
-                    if let Some(obj) = pb_payload.as_object_mut() {
-                        obj.insert("state".to_string(), serde_json::json!("published"));
+                let is_edit = msg.subject.starts_with("📝");
+
+                if let Some(obj) = pb_payload.as_object_mut() {
+                    if is_edit {
+                        if let Some(uid_val) = obj.remove("uid") {
+                            obj.insert("id".to_string(), uid_val);
+                        }
+                    } else {
+                        obj.remove("uid");
+                        obj.remove("id");
                     }
-                } else if let Some(obj) = pb_payload.as_object_mut() {
-                    obj.insert("state".to_string(), serde_json::json!("draft"));
+                }
+
+                if !is_edit {
+                    if is_approve_published {
+                        if let Some(obj) = pb_payload.as_object_mut() {
+                            obj.insert("state".to_string(), serde_json::json!("published"));
+                        }
+                    } else if let Some(obj) = pb_payload.as_object_mut() {
+                        obj.insert("state".to_string(), serde_json::json!("draft"));
+                    }
                 }
 
                 if let Some(pb_cfg) = &state.config.pocketbase {
@@ -164,7 +189,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                     )
                     .await
                     {
-                        Ok(_) => {
+                        Ok(new_pb_id) => {
                             let rows_affected = crate::db::approve_input_submission(
                                 &state.db,
                                 &id,
@@ -180,24 +205,31 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                             }
 
                             notify_discord = true;
-                            reply_msg_key = Some("command.events.submission_approved");
+                            if is_edit {
+                                reply_msg_key = Some("command.events.edit_approved");
+                            } else {
+                                reply_msg_key = Some("command.events.submission_approved");
+                            }
 
                             if let Some(zulip_cfg) = &state.config.zulip {
                                 if let Some(stream) = msg.display_recipient.as_str() {
-                                    let success_msg = pb_payload.get("uid").or_else(|| pb_payload.get("id")).and_then(|v| v.as_str()).map_or_else(
-                                        || rust_i18n::t!("command.zulip.publish_success", locale = locale.as_str()).to_string(),
-                                        |uid| {
-                                            let url = format!(
-                                                "https://kalenteri.palikkaharrastajat.fi/#/events/{uid}"
-                                            );
-                                            rust_i18n::t!(
-                                                "command.zulip.publish_success_with_url",
-                                                locale = locale.as_str(),
-                                                url = url
-                                            )
-                                            .to_string()
-                                        },
-                                    );
+                                    let success_msg = if new_pb_id.is_empty() {
+                                        rust_i18n::t!(
+                                            "command.zulip.publish_success",
+                                            locale = locale.as_str()
+                                        )
+                                        .to_string()
+                                    } else {
+                                        let url = format!(
+                                            "https://kalenteri.palikkaharrastajat.fi/#/events/{new_pb_id}"
+                                        );
+                                        rust_i18n::t!(
+                                            "command.zulip.publish_success_with_url",
+                                            locale = locale.as_str(),
+                                            url = url
+                                        )
+                                        .to_string()
+                                    };
 
                                     let _ = resolve_zulip_topic(
                                         state.http.as_ref(),
@@ -457,8 +489,15 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                         .and_then(|v| v.as_str());
 
                                                     let display_payload =
-                                                        serde_yaml::to_string(&existing_payload)
-                                                            .unwrap_or_default();
+                                                        crate::workflows::events::modals::generate_display_yaml(&existing_payload);
+
+                                                    let diff_payload = crate::workflows::events::modals::generate_diff_str(
+                                                        state.config.pocketbase.as_ref(),
+                                                        state.http.as_ref(),
+                                                        state.config.resource_limits.max_http_body_bytes,
+                                                        p_uid,
+                                                        &display_payload
+                                                    ).await;
 
                                                     let cmd_approve = rust_i18n::t!(
                                                         "command.zulip.cmd_approve",
@@ -486,7 +525,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                                     end_date = p_end_date,
                                                                     location = p_location,
                                                                     description = p_description,
-                                                                    payload_str = display_payload,
+                                                                    payload_str = diff_payload,
                                                                     cmd_approve = cmd_approve,
                                                                     cmd_approve_published = cmd_approve_published,
                                                                     cmd_reject = cmd_reject
@@ -502,7 +541,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                                     location = p_location,
                                                                     description = p_description,
                                                                     url = url,
-                                                                    payload_str = display_payload,
+                                                                    payload_str = diff_payload,
                                                                     cmd_approve = cmd_approve,
                                                                     cmd_approve_published = cmd_approve_published,
                                                                     cmd_reject = cmd_reject
@@ -519,7 +558,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                             end_date = p_end_date,
                                                             location = p_location,
                                                             description = p_description,
-                                                            payload_str = display_payload,
+                                                            payload_str = diff_payload,
                                                             yaml_str = display_payload,
                                                             cmd_approve = cmd_approve,
                                                             cmd_reject = cmd_reject
@@ -596,6 +635,13 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                 if actual_msg.to_lowercase().starts_with("reply") {
                     actual_msg = actual_msg[5..].trim();
                 }
+
+                // Ignore Zulip system messages about topic moves
+                if actual_msg.contains("Tämä aihe on siirretty paikasta")
+                    || actual_msg.contains("This topic was moved from")
+                {
+                    actual_msg = "";
+                }
                 if !actual_msg.is_empty() {
                     notify_discord = true;
 
@@ -618,10 +664,22 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                 }
             }
 
+            let mut event_title = String::new();
+            if let Ok(payload_json) = serde_json::from_str::<serde_json::Value>(&payload_str) {
+                if let Some(t) = payload_json.get("title").and_then(|v| v.as_str()) {
+                    event_title = t.to_string();
+                } else if let Some(t) = payload_json.get("summary").and_then(|v| v.as_str()) {
+                    event_title = t.to_string();
+                }
+            }
+
             if notify_discord {
                 let reply_msg = reply_msg_key.map_or_else(
                     || reply_msg_raw.unwrap_or_default(),
-                    |key| rust_i18n::t!(key, locale = locale.as_str()).to_string(),
+                    |key| {
+                        rust_i18n::t!(key, locale = locale.as_str(), title = event_title.clone())
+                            .to_string()
+                    },
                 );
 
                 if !reply_msg.is_empty() {
@@ -641,7 +699,16 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                         &reply_msg,
                         &user_id,
                         &channel_id,
-                        state.config.commands.events.enable_fallback_mention,
+                        resolved_guild_id.map_or(
+                            state.config.commands.events.enable_fallback_mention,
+                            |g_id| {
+                                state
+                                    .config
+                                    .commands_for(g_id)
+                                    .events
+                                    .enable_fallback_mention
+                            },
+                        ),
                     )
                     .await;
                 }
@@ -651,7 +718,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
         // Treat as a reply back to Discord for non-event topics
         let locale = state
             .config
-            .default_locale
+            .locale
             .clone()
             .unwrap_or_else(|| "fi-FI".to_string());
         let mut rest = content;
@@ -698,11 +765,13 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
 
                 if let Some((id, user_id, channel_id, _payload_str)) = pending_input {
                     let mut locale = "en-US".to_string();
+                    let mut resolved_guild_id = None;
                     if let Ok(cid) = channel_id.parse::<u64>() {
                         let c = serenity::model::id::ChannelId::new(cid);
                         if let Ok(channel) = c.to_channel(&state.discord).await {
                             if let Some(guild_channel) = channel.guild() {
                                 let g_id = guild_channel.guild_id.get();
+                                resolved_guild_id = Some(g_id);
                                 if let Some(guild_conf) =
                                     state.config.guilds.iter().find(|g| g.guild_id == g_id)
                                 {
@@ -729,7 +798,16 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                         &translated_reply,
                         &user_id,
                         &channel_id,
-                        state.config.commands.events.enable_fallback_mention,
+                        resolved_guild_id.map_or(
+                            state.config.commands.events.enable_fallback_mention,
+                            |g_id| {
+                                state
+                                    .config
+                                    .commands_for(g_id)
+                                    .events
+                                    .enable_fallback_mention
+                            },
+                        ),
                     )
                     .await;
 

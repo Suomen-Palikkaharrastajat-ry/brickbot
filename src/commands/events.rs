@@ -6,10 +6,12 @@ pub fn build_events_command(locale: &str) -> serenity::all::CreateCommand {
 
     let cmd_name = rust_i18n::t!("command.events.name", locale = locale).to_string();
     let cmd_desc = rust_i18n::t!("command.events.desc", locale = locale).to_string();
+    let image_arg_name =
+        rust_i18n::t!("command.events.image_arg_name", locale = locale).to_string();
     let image_desc = rust_i18n::t!("command.events.image_desc", locale = locale).to_string();
 
     let image_option =
-        CreateCommandOption::new(CommandOptionType::Attachment, "image", &image_desc)
+        CreateCommandOption::new(CommandOptionType::Attachment, &image_arg_name, &image_desc)
             .required(false);
 
     CreateCommand::new(&cmd_name)

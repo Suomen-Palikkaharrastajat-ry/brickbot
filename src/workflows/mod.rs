@@ -51,7 +51,7 @@ pub async fn extract_locale_and_bot_name(
 
     let locale = guild_conf
         .and_then(|g| g.locale.clone())
-        .or_else(|| app_ctx.config.default_locale.clone())
+        .or_else(|| app_ctx.config.locale.clone())
         .unwrap_or_else(|| "en-US".to_string());
 
     let name = guild_conf

@@ -99,8 +99,8 @@ impl EventHandler for Handler {
                 let locale = guild
                     .locale
                     .as_deref()
-                    .or(self.config.default_locale.as_deref())
-                    .unwrap_or("en-US");
+                    .or(self.config.locale.as_deref())
+                    .unwrap_or("fi-FI");
                 commands.push(crate::commands::events::build_events_command(locale));
             }
 
@@ -190,7 +190,7 @@ impl EventHandler for Handler {
 
             let locale = self
                 .config
-                .default_locale
+                .locale
                 .clone()
                 .unwrap_or_else(|| "en-US".to_string());
 
@@ -388,8 +388,12 @@ impl EventHandler for Handler {
 
                 if !on_cooldown {
                     let is_enabled = match detection.topic {
-                        crate::ambient::Topic::LegoSet => self.config.interactions.set,
-                        crate::ambient::Topic::LegoPart => self.config.interactions.part,
+                        crate::ambient::Topic::LegoSet => {
+                            self.config.interactions_for(guild_id_u64).set
+                        }
+                        crate::ambient::Topic::LegoPart => {
+                            self.config.interactions_for(guild_id_u64).part
+                        }
                     };
 
                     if !is_enabled {
@@ -413,10 +417,9 @@ impl EventHandler for Handler {
                                 )
                                 .await
                                 {
-                                    item_name = Some(set.name);
+                                    item_name = Some(set.name.clone());
                                     if let Ok(articles) = crate::db::search_feed_items(
-                                        &self.pool,
-                                        item_name.as_deref().unwrap(),
+                                        &self.pool, id, &set.name, &set.theme,
                                     )
                                     .await
                                     {
@@ -527,7 +530,11 @@ impl EventHandler for Handler {
             Interaction::Command(command)
                 if (command.data.name.as_str() == "events"
                     || command.data.name.as_str() == "tapahtumat")
-                    && self.config.commands.events.enabled =>
+                    && self
+                        .config
+                        .commands_for(command.guild_id.unwrap_or_default().get())
+                        .events
+                        .enabled =>
             {
                 if let Err(e) = crate::workflows::handle_events_wizard_command(&ctx, &command).await
                 {
