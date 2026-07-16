@@ -61,14 +61,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                     if let Some(guild_channel) = channel.guild() {
                         let g_id = guild_channel.guild_id.get();
                         resolved_guild_id = Some(g_id);
-                        if let Some(guild_conf) =
-                            state.config.guilds.iter().find(|g| g.guild_id == g_id)
-                        {
-                            locale = guild_conf
-                                .locale
-                                .clone()
-                                .unwrap_or_else(|| "en-US".to_string());
-                        }
+                        locale = state.config.locale_for(g_id).unwrap_or("en-US").to_string();
                     }
                 }
             }
@@ -772,14 +765,8 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                             if let Some(guild_channel) = channel.guild() {
                                 let g_id = guild_channel.guild_id.get();
                                 resolved_guild_id = Some(g_id);
-                                if let Some(guild_conf) =
-                                    state.config.guilds.iter().find(|g| g.guild_id == g_id)
-                                {
-                                    locale = guild_conf
-                                        .locale
-                                        .clone()
-                                        .unwrap_or_else(|| "en-US".to_string());
-                                }
+                                locale =
+                                    state.config.locale_for(g_id).unwrap_or("en-US").to_string();
                             }
                         }
                     }

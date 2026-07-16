@@ -49,10 +49,11 @@ pub async fn extract_locale_and_bot_name(
     let gid = guild_id.unwrap_or_default().get();
     let guild_conf = app_ctx.config.guilds.iter().find(|g| g.guild_id == gid);
 
-    let locale = guild_conf
-        .and_then(|g| g.locale.clone())
-        .or_else(|| app_ctx.config.locale.clone())
-        .unwrap_or_else(|| "en-US".to_string());
+    let locale = app_ctx
+        .config
+        .locale_for(gid)
+        .unwrap_or("en-US")
+        .to_string();
 
     let name = guild_conf
         .and_then(|g| g.bot_name.clone())

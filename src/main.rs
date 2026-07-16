@@ -101,20 +101,12 @@ impl EventHandler for Handler {
             let mut commands = Vec::new();
 
             if self.config.commands.events.enabled {
-                let locale = guild
-                    .locale
-                    .as_deref()
-                    .or(self.config.locale.as_deref())
-                    .unwrap_or("fi-FI");
+                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
                 commands.push(crate::commands::events::build_events_command(locale));
             }
 
             if self.config.commands_for(guild.guild_id).set.enabled {
-                let locale = guild
-                    .locale
-                    .as_deref()
-                    .or(self.config.locale.as_deref())
-                    .unwrap_or("fi-FI");
+                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
                 commands.push(crate::commands::set::build_set_command(locale));
             }
 
@@ -504,11 +496,9 @@ impl EventHandler for Handler {
 
                     let locale = self
                         .config
-                        .guilds
-                        .iter()
-                        .find(|g| g.guild_id == msg.guild_id.unwrap_or_default().get())
-                        .and_then(|g| g.locale.clone())
-                        .unwrap_or_else(|| "en-US".to_string());
+                        .locale_for(msg.guild_id.unwrap_or_default().get())
+                        .unwrap_or("en-US")
+                        .to_string();
 
                     let text = crate::workflows::generate_suggestion_text(
                         detection.topic,
