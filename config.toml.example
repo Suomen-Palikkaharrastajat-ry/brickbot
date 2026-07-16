@@ -47,6 +47,14 @@
 # # Override commands specifically for this guild (optional)
 # [guilds.commands.events]
 # enabled = false
+#
+# [[guilds]]
+# guild_id = 987654321098765432
+# locale = "en-US"
+#
+# # You can omit interactions or commands to use global defaults
+# [guilds.commands.events]
+# enabled = true
 
 # [[feeds]]
 # # List of Feed URLs

@@ -66,6 +66,11 @@ impl TypeMapKey for SyncMutexData {
 }
 
 #[must_use]
+pub fn is_guild_allowed(config: &crate::config::Config, guild_id: u64) -> bool {
+    config.guilds.iter().any(|g| g.guild_id == guild_id)
+}
+
+#[must_use]
 pub fn should_forward_help_message(
     guild_config: &crate::config::GuildConfig,
     channel_id: u64,
@@ -109,6 +114,20 @@ impl EventHandler for Handler {
                 .await
             {
                 tracing::error!("Failed to set guild commands for {}: {}", guild.guild_id, e);
+            }
+        }
+    }
+
+    async fn guild_create(&self, ctx: Context, guild: serenity::all::Guild, _is_new: Option<bool>) {
+        let guild_id = guild.id.get();
+
+        if !is_guild_allowed(&self.config, guild_id) {
+            tracing::warn!(
+                "Joined unauthorized guild {}, leaving immediately.",
+                guild_id
+            );
+            if let Err(e) = ctx.http.leave_guild(guild.id).await {
+                tracing::error!("Failed to leave unauthorized guild {}: {}", guild_id, e);
             }
         }
     }
@@ -733,4 +752,63 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, GuildConfig};
+
+    #[test]
+    fn test_is_guild_allowed() {
+        let config = Config {
+            guilds: vec![
+                GuildConfig {
+                    guild_id: 12345,
+                    locale: None,
+                    bot_name: None,
+                    help_channel_ids: vec![],
+                    help_forum_channel_ids: vec![],
+                    ambient_channel_ids: None,
+                    interactions: None,
+                    commands: None,
+                },
+                GuildConfig {
+                    guild_id: 67890,
+                    locale: None,
+                    bot_name: None,
+                    help_channel_ids: vec![],
+                    help_forum_channel_ids: vec![],
+                    ambient_channel_ids: None,
+                    interactions: None,
+                    commands: None,
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert!(is_guild_allowed(&config, 12345));
+        assert!(is_guild_allowed(&config, 67890));
+        assert!(!is_guild_allowed(&config, 11111));
+    }
+
+    #[test]
+    fn test_should_forward_help_message() {
+        let guild_config = GuildConfig {
+            guild_id: 123,
+            locale: None,
+            bot_name: None,
+            help_channel_ids: vec![100],
+            help_forum_channel_ids: vec![200],
+            ambient_channel_ids: None,
+            interactions: None,
+            commands: None,
+        };
+
+        assert!(should_forward_help_message(&guild_config, 100, None));
+        assert!(!should_forward_help_message(&guild_config, 101, None));
+
+        assert!(should_forward_help_message(&guild_config, 300, Some(200)));
+        assert!(!should_forward_help_message(&guild_config, 300, Some(201)));
+    }
 }
