@@ -50,8 +50,10 @@ Create and configure your `config.toml` (or edit the existing one):
 ```toml
 # Global bot name (optional)
 bot_name = "Palikkaharrastaja"
+# Global default locale (optional, fallback when guild config is not set)
+locale = "fi-FI"
 
-ambient_logging = true
+ambient_debug_logging = true
 
 poll_interval = 3600
 cache_ttl_secs = 600
@@ -61,7 +63,7 @@ cache_ttl_secs = 600
 url = "https://forum.palikkaharrastajat.fi"
 bot_email = "palikkaharrastajat-bot@forum.palikkaharrastajat.fi"
 moderation_stream = "Bottilaatikko"
-support_stream = "Bottilaatikko"
+moderators = ["moderator@example.com"]
 
 # PocketBase Integration (optional)
 [pocketbase]
@@ -78,6 +80,7 @@ part = true
 enabled = true
 enable_edit = true
 enable_propose = true
+enable_fallback_mention = false
 
 [[guilds]]
 guild_id = 123456789012345678 # Your Guild ID here
@@ -154,10 +157,10 @@ The bot continuously syncs events from PocketBase into Discord's native Schedule
 - **`/events` Command:** A multi-step wizard to list upcoming events, submit new ones (sent to Zulip for moderation), or trigger a manual sync.
 
 
-### Ambient Assistant (LEGO & Support)
+### Ambient Assistant
 The bot monitors chat passively using an Ambient Assistant:
 - **LEGO Sets & Parts:** If the bot detects discussion about LEGO sets or parts, it offers a button to fetch details and images from Rebrickable/Brickset.
-- **Support Proxy:** Messages sent in channels with "help" in their name are automatically mirrored to the Zulip support stream, enabling the team to assist Discord users without leaving Zulip.
+- **Support Proxy (Deprecated):** Messages sent in channels with "help" in their name are automatically mirrored to the Zulip support stream, enabling the team to assist Discord users without leaving Zulip.
 
 ### Interaction Privacy Policy
 - **Ephemeral Interaction Responses:** All user-initiated command flows (like `/events` or interacting with ambient components) begin with an ephemeral response visible only to the invoking user.
@@ -184,7 +187,7 @@ Add the `[zulip]` section to your `config.toml` using the credentials from the p
 url = "https://your-zulip-instance.example.com"
 bot_email = "brickbot-bot@your-zulip-instance.example.com"
 moderation_stream = "moderation"
-support_stream = "support"
+moderators = ["moderator@example.com"]
 ```
 
 ### 3. Automatic Event Polling
