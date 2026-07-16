@@ -303,4 +303,63 @@ mod tests {
             .unwrap();
         assert!(item_cd.is_some());
     }
+
+    #[tokio::test]
+    async fn test_notifications() {
+        let pool = setup_db().await;
+
+        insert_input_submission(
+            &pool,
+            "input_notif_1",
+            "user_notif",
+            "chan_notif",
+            "stream_notif",
+            "topic_notif",
+            "{}",
+        )
+        .await
+        .unwrap();
+
+        insert_notification(&pool, "notif1", "input_notif_1", "zulip_post", "body1")
+            .await
+            .unwrap();
+
+        let queued = get_queued_notifications(&pool, 10).await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].0, "notif1");
+
+        let unread = get_unread_notifications_for_user(&pool, "user_notif")
+            .await
+            .unwrap();
+        assert_eq!(unread.len(), 1);
+
+        mark_notification_sent(&pool, "notif1", "msg123")
+            .await
+            .unwrap();
+
+        update_notification_status(&pool, "notif1", "failed", true, Some(500))
+            .await
+            .unwrap();
+        mark_notification_failed(&pool, "notif1").await.unwrap();
+        mark_notification_dm_failed(&pool, "notif1").await.unwrap();
+
+        let unread_again = get_unread_notifications_for_user(&pool, "user_notif")
+            .await
+            .unwrap();
+        assert_eq!(unread_again.len(), 1);
+
+        mark_notification_read(&pool, "notif1").await.unwrap();
+
+        let unread_empty = get_unread_notifications_for_user(&pool, "user_notif")
+            .await
+            .unwrap();
+        assert!(unread_empty.is_empty());
+
+        insert_notification(&pool, "notif2", "input_notif_1", "zulip_post", "body2")
+            .await
+            .unwrap();
+        update_notification_status(&pool, "notif2", "sent", false, None)
+            .await
+            .unwrap();
+    }
 }

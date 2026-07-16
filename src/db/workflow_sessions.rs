@@ -169,4 +169,41 @@ mod tests {
                 .unwrap();
         assert_eq!(consumed, None);
     }
+
+    #[tokio::test]
+    async fn test_update_and_get_session_payload() {
+        let db = setup_db().await;
+        let payload = serde_json::json!({"test": "data"});
+        let session_id = create_workflow_session(
+            &db,
+            "test_kind",
+            "user1",
+            "guild1",
+            "chan1",
+            payload.clone(),
+            15,
+        )
+        .await
+        .unwrap();
+
+        let fetched = get_workflow_session_payload(&db, &session_id, "user1")
+            .await
+            .unwrap();
+        assert_eq!(fetched, Some(payload));
+
+        let updated_payload = serde_json::json!({"test": "updated"});
+        update_workflow_session_payload(&db, &session_id, "user1", updated_payload.clone())
+            .await
+            .unwrap();
+
+        let fetched_updated = get_workflow_session_payload(&db, &session_id, "user1")
+            .await
+            .unwrap();
+        assert_eq!(fetched_updated, Some(updated_payload));
+
+        let fetched_wrong_user = get_workflow_session_payload(&db, &session_id, "user2")
+            .await
+            .unwrap();
+        assert_eq!(fetched_wrong_user, None);
+    }
 }
