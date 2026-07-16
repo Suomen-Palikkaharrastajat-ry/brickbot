@@ -109,6 +109,15 @@ impl EventHandler for Handler {
                 commands.push(crate::commands::events::build_events_command(locale));
             }
 
+            if self.config.commands_for(guild.guild_id).set.enabled {
+                let locale = guild
+                    .locale
+                    .as_deref()
+                    .or(self.config.locale.as_deref())
+                    .unwrap_or("fi-FI");
+                commands.push(crate::commands::set::build_set_command(locale));
+            }
+
             if let Err(e) = GuildId::new(guild.guild_id)
                 .set_commands(&ctx.http, commands)
                 .await
@@ -558,6 +567,22 @@ impl EventHandler for Handler {
                 if let Err(e) = crate::workflows::handle_events_wizard_command(&ctx, &command).await
                 {
                     tracing::error!("Error handling events wizard command: {}", e);
+                }
+            }
+            Interaction::Command(command)
+                if (command.data.name.as_str() == "set"
+                    || command.data.name.as_str() == "setti")
+                    && self
+                        .config
+                        .commands_for(command.guild_id.unwrap_or_default().get())
+                        .set
+                        .enabled =>
+            {
+                let app_ctx = crate::workflows::AppContext::from_serenity_ctx(&ctx).await;
+                if let Err(e) =
+                    crate::workflows::search::handle_set_command(&ctx, &app_ctx, &command).await
+                {
+                    tracing::error!("Error handling set command: {}", e);
                 }
             }
             _ => {}

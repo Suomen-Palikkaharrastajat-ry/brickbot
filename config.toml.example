@@ -35,6 +35,9 @@
 # enable_propose = true
 # enable_fallback_mention = false
 
+# [commands.set]
+# enabled = true
+
 # [[guilds]]
 # guild_id = 1424873309325234220
 # locale = "fi-FI"
@@ -46,6 +49,8 @@
 # 
 # # Override commands specifically for this guild (optional)
 # [guilds.commands.events]
+# enabled = false
+# [guilds.commands.set]
 # enabled = false
 #
 # [[guilds]]

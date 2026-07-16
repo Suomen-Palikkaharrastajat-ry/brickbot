@@ -139,6 +139,22 @@ fn build_set_message(
     (content, final_embed)
 }
 
+pub fn build_set_command(locale: &str) -> serenity::all::CreateCommand {
+    use serenity::all::{CommandOptionType, CreateCommand, CreateCommandOption};
+
+    let cmd_name = rust_i18n::t!("command.set.name", locale = locale).to_string();
+    let cmd_desc = rust_i18n::t!("command.set.desc", locale = locale).to_string();
+    let set_arg_name = rust_i18n::t!("command.set.set_arg_name", locale = locale).to_string();
+    let set_desc = rust_i18n::t!("command.set.set_desc", locale = locale).to_string();
+
+    let set_option = CreateCommandOption::new(CommandOptionType::String, &set_arg_name, &set_desc)
+        .required(true);
+
+    CreateCommand::new(&cmd_name)
+        .description(&cmd_desc)
+        .add_option(set_option)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

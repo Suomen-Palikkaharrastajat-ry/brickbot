@@ -43,6 +43,10 @@ modal:
 
 command:
   set:
+    name: "setti"
+    desc: "Etsi LEGO-settiä"
+    set_arg_name: "setin_numero"
+    set_desc: "Setin numero (esim. 42083)"
     year: "Vuosi"
     theme: "Teema"
     pieces: "Osia"

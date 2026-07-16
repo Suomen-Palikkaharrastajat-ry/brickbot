@@ -50,6 +50,8 @@ const fn default_true() -> bool {
 pub struct CommandsConfig {
     #[serde(default)]
     pub events: EventsCommandConfig,
+    #[serde(default)]
+    pub set: SetCommandConfig,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -63,6 +65,18 @@ pub struct EventsCommandConfig {
     pub enable_propose: bool,
     #[serde(default = "default_true")]
     pub enable_fallback_mention: bool,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct SetCommandConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for SetCommandConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -305,6 +319,9 @@ mod tests {
         enabled = true
         enable_edit = true
         enable_propose = false
+
+        [commands.set]
+        enabled = false
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -328,6 +345,7 @@ mod tests {
         assert!(config.commands.events.enable_edit);
         assert!(!config.commands.events.enable_propose);
         assert!(config.commands.events.enable_fallback_mention);
+        assert!(!config.commands.set.enabled);
 
         assert!(!config.interactions_for(123).set);
         assert!(!config.commands_for(123).events.enabled);

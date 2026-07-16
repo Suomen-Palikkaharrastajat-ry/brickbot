@@ -43,6 +43,10 @@ modal:
 
 command:
   set:
+    name: "set"
+    desc: "Search for a LEGO set"
+    set_arg_name: "set_number"
+    set_desc: "The set number to search for (e.g. 42083)"
     year: "Year"
     theme: "Theme"
     pieces: "Pieces"

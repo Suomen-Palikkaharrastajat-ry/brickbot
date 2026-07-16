@@ -118,7 +118,8 @@ pub fn detect_topic(content: &str, log_ambient: bool) -> Option<DetectionResult>
             .unwrap()
     });
 
-    let set_re = SET_NUM_REGEX.get_or_init(|| Regex::new(r"\b\d{5,7}\b").unwrap());
+    let set_re = SET_NUM_REGEX
+        .get_or_init(|| Regex::new(r"\b(?:2[1-9]\d{2}|[3-9]\d{3}|\d{5,7})\b").unwrap());
 
     let mut set_score = 0;
     let mut part_score = 0;
@@ -154,7 +155,7 @@ pub fn detect_topic(content: &str, log_ambient: bool) -> Option<DetectionResult>
         }
     }
 
-    let scores = [(Topic::LegoSet, set_score), (Topic::LegoPart, part_score)];
+    let scores = [(Topic::LegoPart, part_score), (Topic::LegoSet, set_score)];
 
     let mut best_topic = None;
     let mut highest_score = 0;
@@ -240,5 +241,14 @@ mod tests {
         let res = res.unwrap();
         assert_eq!(res.topic, Topic::LegoSet);
         assert_eq!(res.confidence, Confidence::Medium); // 2 score = Medium
+
+        // Should not detect years <= 2099
+        let res2 = detect_topic("The year is 2099.", false);
+        assert!(res2.is_none());
+
+        // Should detect 2100 and above
+        let res3 = detect_topic("I found set 2100 yesterday.", false);
+        assert!(res3.is_some());
+        assert_eq!(res3.unwrap().topic, Topic::LegoSet);
     }
 }

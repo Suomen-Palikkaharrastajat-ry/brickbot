@@ -1,11 +1,80 @@
 use crate::workflows::AppContext;
 use rust_i18n::t;
 use serenity::all::{
-    ActionRowComponent, ComponentInteraction, ComponentInteractionDataKind, Context,
-    CreateActionRow, CreateInputText, CreateInteractionResponse, CreateInteractionResponseMessage,
-    CreateModal, CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption, InputTextStyle,
-    ModalInteraction,
+    ActionRowComponent, CommandInteraction, ComponentInteraction, ComponentInteractionDataKind,
+    Context, CreateActionRow, CreateInputText, CreateInteractionResponse,
+    CreateInteractionResponseMessage, CreateModal, CreateSelectMenu, CreateSelectMenuKind,
+    CreateSelectMenuOption, InputTextStyle, ModalInteraction,
 };
+
+pub async fn build_set_response_data(
+    ctx: &Context,
+    app_ctx: &AppContext,
+    set_num: &str,
+    user_id: &str,
+    locale: &str,
+) -> Option<CreateInteractionResponseMessage> {
+    let default_services = if let Ok(Some(services_str)) =
+        crate::db::get_user_preferred_services(&app_ctx.db, user_id).await
+    {
+        if services_str.is_empty() {
+            vec![]
+        } else {
+            services_str.split(',').map(ToString::to_string).collect()
+        }
+    } else {
+        vec![
+            "bricklink".to_string(),
+            "lego".to_string(),
+            "articles".to_string(),
+        ]
+    };
+
+    if let Ok((content, embed)) = crate::commands::set::set_interaction(
+        ctx,
+        app_ctx.http.as_ref(),
+        &app_ctx.db,
+        set_num,
+        locale,
+        &default_services,
+        app_ctx.config.resource_limits.max_http_body_bytes,
+    )
+    .await
+    {
+        let mut data = CreateInteractionResponseMessage::new()
+            .content(content)
+            .ephemeral(false);
+
+        if let Some(e) = embed {
+            data = data.add_embed(e);
+        }
+
+        let options = vec![
+            CreateSelectMenuOption::new("BrickLink", "bricklink")
+                .default_selection(default_services.contains(&"bricklink".to_string())),
+            CreateSelectMenuOption::new("Brickset", "brickset")
+                .default_selection(default_services.contains(&"brickset".to_string())),
+            CreateSelectMenuOption::new("LEGO.com", "lego")
+                .default_selection(default_services.contains(&"lego".to_string())),
+            CreateSelectMenuOption::new("Rebrickable", "rebrickable")
+                .default_selection(default_services.contains(&"rebrickable".to_string())),
+            CreateSelectMenuOption::new(t!("command.set.articles", locale = locale), "articles")
+                .default_selection(default_services.contains(&"articles".to_string())),
+        ];
+        let select = CreateSelectMenu::new(
+            format!("update_services_set:{set_num}"),
+            CreateSelectMenuKind::String { options },
+        )
+        .min_values(0)
+        .max_values(5)
+        .placeholder(t!("modal.services.placeholder", locale = locale));
+
+        data = data.components(vec![CreateActionRow::SelectMenu(select)]);
+        Some(data)
+    } else {
+        None
+    }
+}
 
 pub async fn handle_update_services_set(
     ctx: &Context,
@@ -89,66 +158,9 @@ pub async fn handle_workflow_set_search(
             let _ = crate::db::clear_ambient_cooldown(&app_ctx.db, channel_id, "LegoSet").await;
 
             let user_id = interaction.user.id.get().to_string();
-            let default_services = if let Ok(Some(services_str)) =
-                crate::db::get_user_preferred_services(&app_ctx.db, &user_id).await
+            if let Some(data) =
+                build_set_response_data(ctx, app_ctx, set_num, &user_id, locale).await
             {
-                if services_str.is_empty() {
-                    vec![]
-                } else {
-                    services_str.split(',').map(ToString::to_string).collect()
-                }
-            } else {
-                vec![
-                    "bricklink".to_string(),
-                    "lego".to_string(),
-                    "articles".to_string(),
-                ]
-            };
-
-            if let Ok((content, embed)) = crate::commands::set::set_interaction(
-                ctx,
-                app_ctx.http.as_ref(),
-                &app_ctx.db,
-                set_num,
-                locale,
-                &default_services,
-                app_ctx.config.resource_limits.max_http_body_bytes,
-            )
-            .await
-            {
-                let mut data = CreateInteractionResponseMessage::new()
-                    .content(content)
-                    .ephemeral(false);
-
-                if let Some(e) = embed {
-                    data = data.add_embed(e);
-                }
-
-                let options = vec![
-                    CreateSelectMenuOption::new("BrickLink", "bricklink")
-                        .default_selection(default_services.contains(&"bricklink".to_string())),
-                    CreateSelectMenuOption::new("Brickset", "brickset")
-                        .default_selection(default_services.contains(&"brickset".to_string())),
-                    CreateSelectMenuOption::new("LEGO.com", "lego")
-                        .default_selection(default_services.contains(&"lego".to_string())),
-                    CreateSelectMenuOption::new("Rebrickable", "rebrickable")
-                        .default_selection(default_services.contains(&"rebrickable".to_string())),
-                    CreateSelectMenuOption::new(
-                        t!("command.set.articles", locale = locale),
-                        "articles",
-                    )
-                    .default_selection(default_services.contains(&"articles".to_string())),
-                ];
-                let select = CreateSelectMenu::new(
-                    format!("update_services_set:{set_num}"),
-                    CreateSelectMenuKind::String { options },
-                )
-                .min_values(0)
-                .max_values(5)
-                .placeholder(t!("modal.services.placeholder", locale = locale));
-
-                data = data.components(vec![CreateActionRow::SelectMenu(select)]);
-
                 interaction
                     .create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(data))
                     .await?;
@@ -264,66 +276,8 @@ pub async fn handle_modal_set_search(
     {
         let set_num = input.value.as_deref().unwrap_or_default();
         let user_id = interaction.user.id.get().to_string();
-        let default_services = if let Ok(Some(services_str)) =
-            crate::db::get_user_preferred_services(&app_ctx.db, &user_id).await
-        {
-            if services_str.is_empty() {
-                vec![]
-            } else {
-                services_str.split(',').map(ToString::to_string).collect()
-            }
-        } else {
-            vec![
-                "bricklink".to_string(),
-                "lego".to_string(),
-                "articles".to_string(),
-            ]
-        };
 
-        if let Ok((content, embed)) = crate::commands::set::set_interaction(
-            ctx,
-            app_ctx.http.as_ref(),
-            &app_ctx.db,
-            set_num,
-            locale,
-            &default_services,
-            app_ctx.config.resource_limits.max_http_body_bytes,
-        )
-        .await
-        {
-            let mut data = CreateInteractionResponseMessage::new()
-                .content(content.clone())
-                .ephemeral(false);
-
-            if let Some(ref e) = embed {
-                data = data.add_embed(e.clone());
-            }
-
-            let options = vec![
-                CreateSelectMenuOption::new("BrickLink", "bricklink")
-                    .default_selection(default_services.contains(&"bricklink".to_string())),
-                CreateSelectMenuOption::new("Brickset", "brickset")
-                    .default_selection(default_services.contains(&"brickset".to_string())),
-                CreateSelectMenuOption::new("LEGO.com", "lego")
-                    .default_selection(default_services.contains(&"lego".to_string())),
-                CreateSelectMenuOption::new("Rebrickable", "rebrickable")
-                    .default_selection(default_services.contains(&"rebrickable".to_string())),
-                CreateSelectMenuOption::new(
-                    t!("command.set.articles", locale = locale),
-                    "articles",
-                )
-                .default_selection(default_services.contains(&"articles".to_string())),
-            ];
-            let select = CreateSelectMenu::new(
-                format!("update_services_set:{set_num}"),
-                CreateSelectMenuKind::String { options },
-            )
-            .min_values(0)
-            .max_values(5)
-            .placeholder(t!("modal.services.placeholder", locale = locale));
-
-            data = data.components(vec![CreateActionRow::SelectMenu(select)]);
-
+        if let Some(data) = build_set_response_data(ctx, app_ctx, set_num, &user_id, locale).await {
             interaction
                 .create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(data))
                 .await?;
@@ -384,5 +338,38 @@ pub async fn handle_modal_part_search(
                 .await;
         }
     }
+    Ok(())
+}
+
+pub async fn handle_set_command(
+    ctx: &Context,
+    app_ctx: &AppContext,
+    interaction: &CommandInteraction,
+) -> anyhow::Result<()> {
+    let (locale, _) = super::extract_locale_and_bot_name(app_ctx, interaction.guild_id).await;
+
+    let set_num = interaction
+        .data
+        .options
+        .iter()
+        .find(|opt| opt.name == "set_number" || opt.name == "setin_numero")
+        .and_then(|opt| opt.value.as_str())
+        .unwrap_or_default();
+
+    let user_id = interaction.user.id.get().to_string();
+
+    if let Some(data) = build_set_response_data(ctx, app_ctx, set_num, &user_id, &locale).await {
+        interaction
+            .create_response(&ctx.http, CreateInteractionResponse::Message(data))
+            .await?;
+    } else {
+        let data = CreateInteractionResponseMessage::new()
+            .content(t!("workflow.set_search.error", locale = locale))
+            .ephemeral(true);
+        let _ = interaction
+            .create_response(&ctx.http, CreateInteractionResponse::Message(data))
+            .await;
+    }
+
     Ok(())
 }
