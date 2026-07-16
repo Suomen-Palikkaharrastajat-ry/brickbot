@@ -46,7 +46,7 @@ The project has been structured to handle multiple asynchronous background tasks
 Agents and developers should consult the following living documents when modifying core systems:
 - **Database**: [`docs/architecture/database.md`](docs/architecture/database.md)
 - **Network & Caching**: [`docs/architecture/network_and_caching.md`](docs/architecture/network_and_caching.md)
-- **Events Sync & Workflow**: [`docs/events_sync.md`](docs/events_sync.md)
+- **Events Sync & Workflow**: [`docs/events.md`](docs/events.md)
 - **Ambient Assistant**: [`docs/interactions/README.md`](docs/interactions/README.md)
 
 

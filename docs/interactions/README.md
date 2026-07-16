@@ -1,6 +1,6 @@
 # Ambient Conversational Assistant
 
-This document outlines the current implementation of the Ambient Conversational Assistant in Brickbot, based on the architectural decisions defined in [ADR-001](./ADR-001-Ambient-Conversational-Discord-Assistant.md).
+This document outlines the current implementation of the Ambient Conversational Assistant in Brickbot, based on the architectural decisions defined in [ADR-001](../ADR-001-Ambient-Conversational-Discord-Assistant.md).
 
 ## Overview
 
