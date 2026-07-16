@@ -175,4 +175,132 @@ mod tests {
         assert_eq!(hidden.len(), 1);
         assert_eq!(hidden[0], "brick2");
     }
+
+    #[tokio::test]
+    async fn test_inputs_extended() {
+        let pool = setup_db().await;
+
+        insert_drafting_input(&pool, "drafting1", "{}")
+            .await
+            .unwrap();
+        let payload = get_drafting_payload(&pool, "drafting1").await.unwrap();
+        assert_eq!(payload.unwrap(), "{}");
+
+        insert_input_submission(
+            &pool, "pending1", "user1", "chan1", "stream1", "topic1", "{}",
+        )
+        .await
+        .unwrap();
+
+        let pending = get_pending_input_by_zulip_topic(&pool, "topic1", Some("stream1"))
+            .await
+            .unwrap();
+        assert!(pending.is_some());
+        assert_eq!(pending.as_ref().unwrap().0, "pending1");
+
+        let pending_no_stream = get_pending_input_by_zulip_topic(&pool, "topic1", None)
+            .await
+            .unwrap();
+        assert!(pending_no_stream.is_some());
+
+        update_input_zulip_topic(&pool, "pending1", "topic2")
+            .await
+            .unwrap();
+        update_input_payload(&pool, "pending1", "{\"updated\":true}")
+            .await
+            .unwrap();
+
+        approve_input_submission(
+            &pool,
+            "pending1",
+            "{\"approved\":true}",
+            "mod@example.com",
+            "msg1",
+        )
+        .await
+        .unwrap();
+        let action = get_input_moderation_action(&pool, "pending1")
+            .await
+            .unwrap();
+        assert_eq!(action.unwrap(), "approve");
+
+        insert_input_submission(
+            &pool, "pending2", "user2", "chan2", "stream2", "topic2", "{}",
+        )
+        .await
+        .unwrap();
+        reject_input_submission(&pool, "pending2", "mod@example.com", "msg2")
+            .await
+            .unwrap();
+        let action2 = get_input_moderation_action(&pool, "pending2")
+            .await
+            .unwrap();
+        assert_eq!(action2.unwrap(), "reject");
+
+        insert_input_submission(
+            &pool, "pending3", "user3", "chan3", "stream3", "topic3", "{}",
+        )
+        .await
+        .unwrap();
+        mark_input_answered_by_zulip_topic(&pool, "topic3")
+            .await
+            .unwrap();
+
+        update_input_status(&pool, "pending1", "custom_status")
+            .await
+            .unwrap();
+        delete_input(&pool, "pending1").await.unwrap();
+
+        insert_event_submission_transaction(
+            &pool, "tx1", "user4", "chan4", "stream4", "topic4", "{}", "outbox1", "body1",
+        )
+        .await
+        .unwrap();
+        let latest = get_latest_active_input_topic_for_user(&pool, "user4")
+            .await
+            .unwrap();
+        assert!(latest.is_some());
+
+        let discord_msg_topic = get_input_topic_by_discord_message_id(&pool, "some_id")
+            .await
+            .unwrap();
+        assert!(discord_msg_topic.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ambient_preferences() {
+        let pool = setup_db().await;
+
+        update_user_preferred_services(&pool, "user1", "bricklink,lego")
+            .await
+            .unwrap();
+        let services = get_user_preferred_services(&pool, "user1").await.unwrap();
+        assert_eq!(services.unwrap(), "bricklink,lego");
+
+        set_user_ambient_preference(&pool, "user2", true)
+            .await
+            .unwrap();
+        let ambient_ignored = is_user_ambient_ignored(&pool, "user2").await.unwrap();
+        assert!(ambient_ignored);
+
+        let training_opt_out = is_user_training_opt_out(&pool, "user1").await.unwrap();
+        assert!(!training_opt_out);
+    }
+
+    #[tokio::test]
+    async fn test_ambient_cooldowns_extended() {
+        let pool = setup_db().await;
+
+        set_topic_cooldown(&pool, 123, "LegoSet").await.unwrap();
+        let topic_cd = get_topic_cooldown(&pool, 123, "LegoSet").await.unwrap();
+        assert!(topic_cd.is_some());
+
+        set_item_cooldown(&pool, 123, "LegoSet", "42083-1")
+            .await
+            .unwrap();
+        let item_cd = get_item_cooldown(&pool, 123, "LegoSet", "42083-1")
+            .await
+            .unwrap();
+        assert!(item_cd.is_some());
+    }
 }

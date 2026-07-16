@@ -28,3 +28,44 @@ pub mod rebrickable {
         format!("https://rebrickable.com/sets/{set_id}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bricklink_urls() {
+        assert_eq!(
+            bricklink::set_url("42083-1"),
+            "https://www.bricklink.com/v2/catalog/catalogitem.page?S=42083-1"
+        );
+        assert_eq!(
+            bricklink::part_url("3001"),
+            "https://www.bricklink.com/v2/catalog/catalogitem.page?P=3001"
+        );
+    }
+
+    #[test]
+    fn test_lego_search_url() {
+        assert_eq!(
+            lego::search_url("42083"),
+            "https://www.lego.com/fi-fi/search?q=42083"
+        );
+    }
+
+    #[test]
+    fn test_brickset_url() {
+        assert_eq!(
+            brickset::set_url("42083-1"),
+            "https://brickset.com/sets/42083-1"
+        );
+    }
+
+    #[test]
+    fn test_rebrickable_url() {
+        assert_eq!(
+            rebrickable::set_url("42083-1"),
+            "https://rebrickable.com/sets/42083-1"
+        );
+    }
+}

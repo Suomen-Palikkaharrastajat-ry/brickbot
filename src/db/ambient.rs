@@ -102,34 +102,6 @@ pub async fn clear_ambient_cooldown(
     Ok(())
 }
 
-pub async fn is_channel_ignored(
-    db: &SqlitePool,
-    guild_id: &str,
-    channel_id: &str,
-) -> Result<bool, sqlx::Error> {
-    let count: i32 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM ignored_channels WHERE guild_id = ? AND channel_id = ?",
-    )
-    .bind(guild_id)
-    .bind(channel_id)
-    .fetch_one(db)
-    .await?;
-    Ok(count > 0)
-}
-
-pub async fn is_user_opted_out(
-    db: &SqlitePool,
-    guild_id: &str,
-    user_id: &str,
-) -> Result<bool, sqlx::Error> {
-    let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM user_preferences WHERE guild_id = ? AND user_id = ? AND ambient_enabled = 0")
-        .bind(guild_id)
-        .bind(user_id)
-        .fetch_one(db)
-        .await?;
-    Ok(count > 0)
-}
-
 pub async fn is_user_ambient_ignored(db: &SqlitePool, user_id: &str) -> Result<bool, sqlx::Error> {
     let row: Option<i32> = sqlx::query_scalar(
         "SELECT 1 FROM ambient_user_preferences WHERE user_id = ? AND ignore_all = 1",
