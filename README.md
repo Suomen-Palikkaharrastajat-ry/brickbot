@@ -194,4 +194,4 @@ moderators = ["moderator@example.com"]
 The bot uses Zulip's Real-time Events API (Long-Polling). This means it automatically connects outbound to your Zulip instance and holds the connection open, waiting for new events (like `@bot reply <answer>`).
 **No incoming webhook configuration, open ports, or public IPs are required!** As long as the bot has internet access to your Zulip URL, it will instantly receive replies and approvals.
 
-[Invite Brickbot to your server](https://discord.com/oauth2/authorize?client_id=1519031617132302597&permissions=8806830525440&integration_type=0&scope=bot+applications.commands)
+[Invite Brickbot to your server](https://discord.com/oauth2/authorize?client_id=1519031617132302597&permissions=8589954048&integration_type=0&scope=bot+applications.commands)
