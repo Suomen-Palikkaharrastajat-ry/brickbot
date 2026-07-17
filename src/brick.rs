@@ -16,6 +16,17 @@ pub struct RebrickablePart {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct RebrickablePartSearchResponse {
+    pub results: Vec<RebrickablePartSearchResult>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct RebrickablePartSearchResult {
+    pub part_num: String,
+    pub name: String,
+}
+
+#[derive(Deserialize, Debug)]
 struct BricksetResponse {
     status: String,
     sets: Option<Vec<BricksetSet>>,
@@ -57,6 +68,24 @@ pub async fn fetch_part(
     Ok(res)
 }
 
+pub async fn search_parts(
+    http: &dyn crate::http::HttpProvider,
+    query: &str,
+    limit: u64,
+) -> anyhow::Result<Vec<RebrickablePartSearchResult>> {
+    let api_key = env::var("REBRICKABLE_API_KEY")?;
+    let url = reqwest::Url::parse_with_params(
+        "https://rebrickable.com/api/v3/lego/parts/",
+        &[("search", query), ("page_size", "25")],
+    )?;
+    let url_str = url.into_string();
+    let res_text = http
+        .get_json_with_auth(&url_str, Some(&format!("key {api_key}")), false, limit)
+        .await?;
+    let res: RebrickablePartSearchResponse = serde_json::from_str(&res_text)?;
+    Ok(res.results)
+}
+
 pub async fn fetch_set(
     http: &dyn crate::http::HttpProvider,
     set_num: &str,
@@ -95,6 +124,37 @@ pub async fn fetch_set(
     Err(anyhow::anyhow!("Set not found or API error"))
 }
 
+pub async fn search_sets(
+    http: &dyn crate::http::HttpProvider,
+    query: &str,
+    limit: u64,
+) -> anyhow::Result<Vec<BricksetSet>> {
+    let api_key = env::var("BRICKSET_API_KEY")?;
+    let params = format!("{{\"query\": \"{query}\"}}");
+
+    let res_text = http
+        .post_form(
+            "https://brickset.com/api/v3.asmx/getSets",
+            vec![
+                ("apiKey".to_string(), api_key),
+                ("userHash".to_string(), String::new()),
+                ("params".to_string(), params),
+            ],
+            limit,
+        )
+        .await?;
+
+    let res: BricksetResponse = serde_json::from_str(&res_text)?;
+
+    if res.status == "success" {
+        if let Some(sets) = res.sets {
+            return Ok(sets);
+        }
+    }
+
+    Err(anyhow::anyhow!("Sets not found or API error"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +176,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_search_parts_mock() {
+        let mut mock_http = MockHttpProvider::new();
+        mock_http.expect_get_json_with_auth()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(r#"{"count": 1, "next": null, "previous": null, "results": [{"part_num": "3001", "name": "Brick 2 x 4"}]}"#.to_string())
+            });
+
+        std::env::set_var("REBRICKABLE_API_KEY", "test");
+        let result = search_parts(&mock_http, "brick", 1024 * 1024).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn test_fetch_set_mock() {
         let mut mock_http = MockHttpProvider::new();
         mock_http.expect_post_form()
@@ -128,6 +203,21 @@ mod tests {
         let result = fetch_set(&mock_http, "42083", 1024 * 1024).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().name, "Bugatti");
+    }
+
+    #[tokio::test]
+    async fn test_search_sets_mock() {
+        let mut mock_http = MockHttpProvider::new();
+        mock_http.expect_post_form()
+            .times(1)
+            .returning(|_, _, _| {
+                Ok(r#"{"status": "success", "sets": [{"number": "42083", "numberVariant": 1, "name": "Bugatti", "year": 2018, "theme": "Technic"}, {"number": "42083", "numberVariant": 2, "name": "Bugatti V2", "year": 2019, "theme": "Technic"}]}"#.to_string())
+            });
+
+        std::env::set_var("BRICKSET_API_KEY", "test");
+        let result = search_sets(&mock_http, "Bugatti", 1024 * 1024).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
     }
 
     #[test]

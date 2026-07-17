@@ -59,6 +59,8 @@ pub struct CommandsConfig {
     #[serde(default)]
     pub set: SetCommandConfig,
     #[serde(default)]
+    pub part: PartCommandConfig,
+    #[serde(default)]
     pub diagnostics: DiagnosticsCommandConfig,
 }
 
@@ -66,6 +68,7 @@ pub struct CommandsConfig {
 pub struct GuildCommandsConfig {
     pub events: Option<EventsCommandConfig>,
     pub set: Option<SetCommandConfig>,
+    pub part: Option<PartCommandConfig>,
     pub diagnostics: Option<DiagnosticsCommandConfig>,
 }
 
@@ -89,6 +92,18 @@ pub struct SetCommandConfig {
 }
 
 impl Default for SetCommandConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct PartCommandConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for PartCommandConfig {
     fn default() -> Self {
         Self { enabled: true }
     }
@@ -306,6 +321,9 @@ impl Config {
             set: g
                 .and_then(|c| c.set.clone())
                 .unwrap_or_else(|| self.commands.set.clone()),
+            part: g
+                .and_then(|c| c.part.clone())
+                .unwrap_or_else(|| self.commands.part.clone()),
             diagnostics: g
                 .and_then(|c| c.diagnostics.clone())
                 .unwrap_or_else(|| self.commands.diagnostics.clone()),

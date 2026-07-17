@@ -4,22 +4,66 @@ use chrono::Datelike;
 use rust_i18n::t;
 use serenity::all::{Context, CreateEmbed, Framework};
 
+pub enum PartInteractionResponse {
+    DirectMatch(String, Box<CreateEmbed>),
+    SearchResults(Vec<serenity::all::CreateSelectMenuOption>),
+}
+
 pub async fn part_interaction(
     _ctx: &Context,
     http: &dyn crate::http::HttpProvider,
-    part_num: &str,
+    query: &str,
     locale: &str,
+    services: &[String],
     limit: u64,
-) -> anyhow::Result<(String, Option<CreateEmbed>)> {
-    let part_num = part_num.split_whitespace().next().unwrap_or("").to_string();
+) -> anyhow::Result<PartInteractionResponse> {
+    let clean_query = query.trim();
 
-    match fetch_part(http, &part_num, limit).await {
-        Ok(part) => {
-            let (content, builder) = build_part_message(&part, &part_num, locale);
-            Ok((content, Some(builder)))
+    // Attempt direct lookup first using the first token
+    let first_word = clean_query.split_whitespace().next().unwrap_or("");
+    if let Ok(part) = fetch_part(http, first_word, limit).await {
+        let (content, builder) = build_part_message(&part, first_word, locale, services);
+        return Ok(PartInteractionResponse::DirectMatch(
+            content,
+            Box::new(builder),
+        ));
+    }
+
+    // Fallback to search
+    match crate::brick::search_parts(http, clean_query, limit).await {
+        Ok(results) => {
+            if results.is_empty() {
+                Err(anyhow::anyhow!("No parts found matching query"))
+            } else if results.len() == 1 {
+                let p_num = &results[0].part_num;
+                fetch_part(http, p_num, limit).await.map_or_else(
+                    |_| Err(anyhow::anyhow!("Failed to fetch part details")),
+                    |part| {
+                        let (content, builder) = build_part_message(&part, p_num, locale, services);
+                        Ok(PartInteractionResponse::DirectMatch(
+                            content,
+                            Box::new(builder),
+                        ))
+                    },
+                )
+            } else {
+                let options: Vec<serenity::all::CreateSelectMenuOption> = results
+                    .into_iter()
+                    .map(|r| {
+                        let label = format!("{} - {}", r.part_num, r.name);
+                        let truncated_label = if label.len() > 100 {
+                            format!("{}...", &label[..97])
+                        } else {
+                            label
+                        };
+                        serenity::all::CreateSelectMenuOption::new(truncated_label, r.part_num)
+                    })
+                    .collect();
+                Ok(PartInteractionResponse::SearchResults(options))
+            }
         }
         Err(e) => {
-            tracing::error!("Failed to fetch part {}: {}", part_num, e);
+            tracing::error!("Failed to fetch/search part {}: {}", clean_query, e);
             Err(anyhow::anyhow!("Failed to fetch part"))
         }
     }
@@ -27,8 +71,9 @@ pub async fn part_interaction(
 
 fn build_part_message(
     part: &crate::brick::RebrickablePart,
-    part_num: &str,
+    _part_num: &str,
     locale: &str,
+    services: &[String],
 ) -> (String, CreateEmbed) {
     let in_production = if part.year_to >= chrono::Utc::now().naive_utc().year() {
         t!("common.yes", locale = locale).to_string()
@@ -81,24 +126,59 @@ fn build_part_message(
         builder = builder.thumbnail(img.clone());
     }
 
-    // Bricklink integration
-    let bl_id = part
-        .external_ids
-        .get("BrickLink")
-        .and_then(|v| v.first())
-        .cloned()
-        .unwrap_or_else(|| part.part_num.clone());
-    let bl_url = crate::links::bricklink::part_url(&bl_id);
+    let mut links_text = Vec::new();
 
-    let content = t!(
-        "command.part.content",
-        locale = locale,
-        num = part_num,
-        url = &bl_url
-    )
-    .to_string();
+    if services.contains(&"bricklink".to_string()) {
+        let bl_id = part
+            .external_ids
+            .get("BrickLink")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_else(|| part.part_num.clone());
+        links_text.push(format!(
+            "**BrickLink**: {}",
+            crate::links::bricklink::part_url(&bl_id)
+        ));
+    }
+
+    if services.contains(&"lego".to_string()) {
+        links_text.push(format!(
+            "**LEGO Pick a Brick**: {}",
+            crate::links::lego::pick_a_brick_url(&part.part_num)
+        ));
+    }
+
+    if services.contains(&"rebrickable".to_string()) {
+        links_text.push(format!(
+            "**Rebrickable**: {}",
+            crate::links::rebrickable::part_url(&part.part_num)
+        ));
+    }
+
+    let content = if links_text.is_empty() {
+        String::new()
+    } else {
+        links_text.join(" \n")
+    };
 
     (content, builder)
+}
+
+pub fn build_part_command(locale: &str) -> serenity::all::CreateCommand {
+    use serenity::all::{CommandOptionType, CreateCommand, CreateCommandOption};
+
+    let cmd_name = rust_i18n::t!("command.part.name", locale = locale).to_string();
+    let cmd_desc = rust_i18n::t!("command.part.desc", locale = locale).to_string();
+    let part_arg_name = rust_i18n::t!("command.part.part_arg_name", locale = locale).to_string();
+    let part_desc = rust_i18n::t!("command.part.part_desc", locale = locale).to_string();
+
+    let part_option =
+        CreateCommandOption::new(CommandOptionType::String, &part_arg_name, &part_desc)
+            .required(true);
+
+    CreateCommand::new(&cmd_name)
+        .description(&cmd_desc)
+        .add_option(part_option)
 }
 
 #[cfg(test)]
@@ -124,10 +204,16 @@ mod tests {
             alternates: vec![],
         };
 
-        let (content, embed) = build_part_message(&part, "3001", "en-US");
+        let (content, embed) = build_part_message(
+            &part,
+            "3001",
+            "en-US",
+            &["bricklink".to_string(), "rebrickable".to_string()],
+        );
         assert!(content.contains("https://www.bricklink.com/v2/catalog/catalogitem.page?P=3001"));
+        assert!(content.contains("https://rebrickable.com/parts/3001"));
 
-        let embed_json = serde_json::to_value(&embed).unwrap();
+        let embed_json = serde_json::to_value(embed).unwrap();
         assert_eq!(embed_json["title"], "Part: Brick 2x4 (3001)");
         assert_eq!(
             embed_json["thumbnail"]["url"],

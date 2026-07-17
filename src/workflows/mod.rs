@@ -130,6 +130,25 @@ pub async fn handle_component_interaction(
         "wizard_retry_submit" => {
             events::handle_wizard_retry_submit(ctx, &app_ctx, interaction, arg).await
         }
+        "update_services_part" => {
+            search::handle_update_services_part(ctx, &app_ctx, interaction, arg, &locale).await
+        }
+        "part_search_select" => {
+            search::handle_part_search_select(ctx, &app_ctx, interaction, arg).await
+        }
+        "part_search_show" => {
+            search::handle_part_search_show(ctx, &app_ctx, interaction, arg).await
+        }
+        "part_search_again" => {
+            search::handle_part_search_again(ctx, &app_ctx, interaction, arg).await
+        }
+        "set_search_select" => {
+            search::handle_set_search_select(ctx, &app_ctx, interaction, arg).await
+        }
+        "set_search_show" => search::handle_set_search_show(ctx, &app_ctx, interaction, arg).await,
+        "set_search_again" => {
+            search::handle_set_search_again(ctx, &app_ctx, interaction, arg).await
+        }
         _ => Ok(()),
     }
 }

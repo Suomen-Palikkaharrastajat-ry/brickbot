@@ -110,6 +110,11 @@ impl EventHandler for Handler {
                 commands.push(crate::commands::set::build_set_command(locale));
             }
 
+            if self.config.commands_for(guild.guild_id).part.enabled {
+                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
+                commands.push(crate::commands::part::build_part_command(locale));
+            }
+
             if self.config.commands_for(guild.guild_id).diagnostics.enabled {
                 let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
                 commands.push(crate::commands::diagnostics::build_diagnostics_command(
@@ -589,6 +594,22 @@ impl EventHandler for Handler {
                     crate::workflows::search::handle_set_command(&ctx, &app_ctx, &command).await
                 {
                     tracing::error!("Error handling set command: {}", e);
+                }
+            }
+            Interaction::Command(command)
+                if (command.data.name.as_str() == "part"
+                    || command.data.name.as_str() == "pala")
+                    && self
+                        .config
+                        .commands_for(command.guild_id.unwrap_or_default().get())
+                        .part
+                        .enabled =>
+            {
+                let app_ctx = crate::workflows::AppContext::from_serenity_ctx(&ctx).await;
+                if let Err(e) =
+                    crate::workflows::search::handle_part_command(&ctx, &app_ctx, &command).await
+                {
+                    tracing::error!("Error handling part command: {}", e);
                 }
             }
             Interaction::Command(command)

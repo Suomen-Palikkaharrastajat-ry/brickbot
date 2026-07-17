@@ -9,9 +9,11 @@ workflow:
   set_search:
     label: "Näytä setti"
     error: "Settiä ei löytynyt. Varmista, että setin numero on oikea."
+    select: "Valitse setti:"
   part_search:
     label: "Näytä osa"
     error: "Osaa ei löytynyt. Varmista, että osan numero on oikea."
+    select: "Valitse osa:"
 
   ignore:
     label: "Ohita nyt"
@@ -32,12 +34,14 @@ workflow:
 modal:
   set_search:
     title: "Etsi LEGO-setti"
-    input_label: "Setin numero"
+    input_label: "Setin numero tai hakusana"
     input_placeholder: "esim. 42083"
+    query: "Hakusana"
   part_search:
     title: "Etsi LEGO-osa"
-    input_label: "Osan numero"
+    input_label: "Osan numero tai hakusana"
     input_placeholder: "esim. 3001"
+    query: "Hakusana"
   services:
     placeholder: "Valitse linkitettävät palvelut"
 
@@ -45,8 +49,8 @@ command:
   set:
     name: "setti"
     desc: "Etsi LEGO-settiä"
-    set_arg_name: "setin_numero"
-    set_desc: "Setin numero (esim. 42083)"
+    set_arg_name: "haku"
+    set_desc: "Setin numero tai hakusana (esim. 42083 tai 'Bugatti')"
     year: "Vuosi"
     theme: "Teema"
     pieces: "Osia"
@@ -56,13 +60,29 @@ command:
     legocom: "LEGO.com"
     related_articles: "Aiheeseen liittyvät artikkelit"
     articles: "Artikkelit"
+    search_placeholder: "Valitse setti..."
+    search_no_results: "Hakusanalla ei löytynyt settejä."
+    show: "Julkaise kanavalle"
+    search_again: "Hae uudelleen"
+    posted: "Setin tiedot julkaistu!"
     title: "Setti: %{name} (%{id})"
   part:
+    name: "pala"
+    desc: "Etsi LEGO-osaa"
+    part_arg_name: "haku"
+    part_desc: "Osan numero tai hakusana (esim. 3001 tai 'Brick 2x4')"
+    search_placeholder: "Valitse osa..."
+    search_no_results: "Hakusanalla ei löytynyt osia."
+    search_results_title: "Hakutulokset: '%{query}'"
+    search_results_content: "Löysin useita hakua vastaavia osia. Tässä parhaat tulokset:"
     years: "Vuodet"
     in_production: "Tuotannossa"
     print_of: "Painatus"
     molds: "Muotit"
-    alternates: "Vaihtoehdot"
+    alternates: "Vaihtoehtoiset"
+    show: "Julkaise kanavalle"
+    search_again: "Hae uudelleen"
+    posted: "Osan tiedot julkaistu!"
     title: "Osa: %{name} (%{id})"
     content: "Tässä tietoa osasta `%{num}`! \n**BrickLink**: %{url}"
   diagnostics:

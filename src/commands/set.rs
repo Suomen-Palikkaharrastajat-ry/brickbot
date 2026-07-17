@@ -5,29 +5,75 @@ use serenity::all::{Context, CreateEmbed, Framework};
 
 use sqlx::SqlitePool;
 
+pub enum SetInteractionResponse {
+    DirectMatch(String, Box<CreateEmbed>),
+    SearchResults(Vec<serenity::all::CreateSelectMenuOption>),
+}
+
 pub async fn set_interaction(
-    _ctx: &Context,
     http: &dyn crate::http::HttpProvider,
     db: &SqlitePool,
-    set_num: &str,
+    query: &str,
     locale: &str,
     services: &[String],
     limit: u64,
-) -> anyhow::Result<(String, Option<CreateEmbed>)> {
-    match fetch_set(http, set_num, limit).await {
-        Ok(set) => {
+) -> anyhow::Result<SetInteractionResponse> {
+    let clean_query = query.trim();
+
+    let first_word = clean_query.split_whitespace().next().unwrap_or("");
+    if first_word.chars().any(|c| c.is_ascii_digit()) {
+        if let Ok(set) = fetch_set(http, first_word, limit).await {
             let articles = crate::db::search_feed_items(db, &set.number, &set.name, &set.theme)
                 .await
                 .unwrap_or_default();
             let (content, embed) = build_set_message(&set, locale, services, &articles);
-            Ok((content, embed))
+            if let Some(e) = embed {
+                return Ok(SetInteractionResponse::DirectMatch(content, Box::new(e)));
+            }
+        }
+    }
+
+    match crate::brick::search_sets(http, clean_query, limit).await {
+        Ok(results) => {
+            if results.is_empty() {
+                Err(anyhow::anyhow!("No sets found matching query"))
+            } else if results.len() == 1 {
+                let s_id = format!("{}-{}", results[0].number, results[0].numberVariant);
+                if let Ok(set) = fetch_set(http, &s_id, limit).await {
+                    let articles =
+                        crate::db::search_feed_items(db, &set.number, &set.name, &set.theme)
+                            .await
+                            .unwrap_or_default();
+                    let (content, embed) = build_set_message(&set, locale, services, &articles);
+                    if let Some(e) = embed {
+                        return Ok(SetInteractionResponse::DirectMatch(content, Box::new(e)));
+                    }
+                }
+                Err(anyhow::anyhow!("Failed to fetch set details"))
+            } else {
+                let options: Vec<serenity::all::CreateSelectMenuOption> = results
+                    .into_iter()
+                    .map(|r| {
+                        let set_id = format!("{}-{}", r.number, r.numberVariant);
+                        let label = format!("{} - {}", set_id, r.name);
+                        let truncated_label = if label.len() > 100 {
+                            format!("{}...", &label[..97])
+                        } else {
+                            label
+                        };
+                        serenity::all::CreateSelectMenuOption::new(truncated_label, set_id)
+                    })
+                    .collect();
+                Ok(SetInteractionResponse::SearchResults(options))
+            }
         }
         Err(e) => {
-            tracing::error!("Failed to fetch set {}: {}", set_num, e);
+            tracing::error!("Failed to fetch/search set {}: {}", clean_query, e);
             Err(anyhow::anyhow!("Failed to fetch set"))
         }
     }
 }
+
 fn build_set_message(
     set: &BricksetSet,
     locale: &str,
@@ -235,5 +281,60 @@ mod tests {
             }
         }
         assert!(has_pieces);
+    }
+
+    #[tokio::test]
+    async fn test_set_interaction_direct_match() {
+        let mut mock_http = crate::http::MockHttpProvider::new();
+        mock_http.expect_post_form()
+            .times(1)
+            .returning(|_, _, _| {
+                Ok(r#"{"status": "success", "sets": [{"number": "42083", "numberVariant": 1, "name": "Bugatti", "year": 2018, "theme": "Technic"}]}"#.to_string())
+            });
+
+        std::env::set_var("BRICKSET_API_KEY", "test");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let result = set_interaction(&mock_http, &pool, "42083", "en-US", &[], 1024 * 1024).await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            SetInteractionResponse::DirectMatch(_, embed) => {
+                let embed_json = serde_json::to_value(*embed).unwrap();
+                assert_eq!(embed_json["title"], "Set: Bugatti (42083-1)");
+            }
+            _ => panic!("Expected DirectMatch"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_interaction_search_results() {
+        let mut mock_http = crate::http::MockHttpProvider::new();
+        mock_http.expect_post_form()
+            .times(1)
+            .returning(|_, _, _| {
+                Ok(r#"{"status": "success", "sets": [{"number": "42083", "numberVariant": 1, "name": "Bugatti", "year": 2018, "theme": "Technic"}, {"number": "42083", "numberVariant": 2, "name": "Bugatti V2", "year": 2019, "theme": "Technic"}]}"#.to_string())
+            });
+
+        std::env::set_var("BRICKSET_API_KEY", "test");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let result = set_interaction(&mock_http, &pool, "Bugatti", "en-US", &[], 1024 * 1024).await;
+        assert!(result.is_ok());
+        match result.unwrap() {
+            SetInteractionResponse::SearchResults(options) => {
+                assert_eq!(options.len(), 2);
+                let json_0 = serde_json::to_value(&options[0]).unwrap();
+                let json_1 = serde_json::to_value(&options[1]).unwrap();
+                assert_eq!(json_0["value"], "42083-1");
+                assert_eq!(json_1["value"], "42083-2");
+            }
+            _ => panic!("Expected SearchResults"),
+        }
     }
 }

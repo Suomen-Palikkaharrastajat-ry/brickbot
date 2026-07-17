@@ -9,9 +9,11 @@ workflow:
   set_search:
     label: "Show Set"
     error: "Failed to find the set. Make sure it's a valid set number."
+    select: "Please select a set:"
   part_search:
     label: "Show Part"
     error: "Failed to find the part. Make sure it's a valid part number."
+    select: "Please select a part:"
 
   ignore:
     label: "Ignore Now"
@@ -32,12 +34,14 @@ workflow:
 modal:
   set_search:
     title: "Search for a LEGO Set"
-    input_label: "Set Number"
+    input_label: "Set Number or Keyword"
     input_placeholder: "e.g. 42083"
+    query: "Search Term"
   part_search:
     title: "Search for a LEGO Part"
-    input_label: "Part Number"
+    input_label: "Part Number or Keyword"
     input_placeholder: "e.g. 3001"
+    query: "Search Term"
   services:
     placeholder: "Select services to link"
 
@@ -45,8 +49,8 @@ command:
   set:
     name: "set"
     desc: "Search for a LEGO set"
-    set_arg_name: "set_number"
-    set_desc: "The set number to search for (e.g. 42083)"
+    set_arg_name: "query"
+    set_desc: "The set number or search term (e.g. 42083 or 'Bugatti')"
     year: "Year"
     theme: "Theme"
     pieces: "Pieces"
@@ -56,13 +60,29 @@ command:
     legocom: "LEGO.com"
     related_articles: "Related Articles"
     articles: "Articles"
+    search_placeholder: "Select a set..."
+    search_no_results: "No sets found matching that query."
+    show: "Post to Channel"
+    search_again: "Search Again"
+    posted: "Set info posted!"
     title: "Set: %{name} (%{id})"
   part:
+    name: "part"
+    desc: "Search for a LEGO part"
+    part_arg_name: "query"
+    part_desc: "The part number or search term (e.g. 3001 or 'Brick 2x4')"
+    search_placeholder: "Select a part..."
+    search_no_results: "No parts found matching that query."
+    search_results_title: "Search Results for '%{query}'"
+    search_results_content: "I found multiple parts matching your search. Here are the top results:"
     years: "Years"
     in_production: "In Production"
     print_of: "Print Of"
     molds: "Molds"
     alternates: "Alternates"
+    show: "Post to Channel"
+    search_again: "Search Again"
+    posted: "Part info posted!"
     title: "Part: %{name} (%{id})"
     content: "Here is the information for part `%{num}`! \n**BrickLink**: %{url}"
   diagnostics:
