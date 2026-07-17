@@ -731,6 +731,8 @@ pub async fn handle_wizard_events_edit(
     let (locale, _) = extract_locale_and_bot_name(app_ctx, interaction.guild_id).await;
 
     let mut selected_uid = String::new();
+    let mut events_cache: Vec<crate::events_sync::Event> = Vec::new();
+
     if let Some(sid) = session_id_arg {
         let user_id = interaction.user.id.get().to_string();
         if let Some(payload) =
@@ -739,10 +741,15 @@ pub async fn handle_wizard_events_edit(
             if let Some(uid) = payload.get("selected_event_uid").and_then(|v| v.as_str()) {
                 selected_uid = uid.to_string();
             }
+            if let Some(events) = payload.get("events_cache") {
+                if let Ok(parsed) = serde_json::from_value(events.clone()) {
+                    events_cache = parsed;
+                }
+            }
         }
     }
 
-    if selected_uid.is_empty() {
+    if selected_uid.is_empty() || events_cache.is_empty() {
         let resp = serenity::builder::CreateInteractionResponseMessage::new().content(
             rust_i18n::t!("errors.no_events_to_edit", locale = locale.as_str()),
         );
@@ -755,146 +762,135 @@ pub async fn handle_wizard_events_edit(
         return Ok(());
     }
 
-    if let Some(pb_cfg) = &app_ctx.config.pocketbase {
-        if let Ok(events) = crate::events_sync::fetch_pocketbase_events(
-            app_ctx.http.as_ref(),
-            pb_cfg,
-            app_ctx.config.resource_limits.max_http_body_bytes,
+    if let Some(ev) = events_cache.into_iter().find(|e| e.uid == selected_uid) {
+        let current_tag = ev
+            .tags
+            .as_ref()
+            .and_then(|t| t.first())
+            .map_or("", std::string::String::as_str);
+
+        let user_id = interaction.user.id.get().to_string();
+        let guild_id = interaction
+            .guild_id
+            .map(|g| g.get().to_string())
+            .unwrap_or_default();
+        let channel_id = interaction.channel_id.get().to_string();
+
+        let session_payload = serde_json::json!({
+            "uid": selected_uid,
+            "tag": current_tag
+        });
+
+        let session_id = crate::db::create_workflow_session(
+            &app_ctx.db,
+            "edit_event",
+            &user_id,
+            &guild_id,
+            &channel_id,
+            session_payload,
+            15,
         )
-        .await
-        {
-            if let Some(ev) = events.into_iter().find(|e| e.uid == selected_uid) {
-                let current_tag = ev
-                    .tags
-                    .as_ref()
-                    .and_then(|t| t.first())
-                    .map_or("", std::string::String::as_str);
+        .await?;
 
-                let user_id = interaction.user.id.get().to_string();
-                let guild_id = interaction
-                    .guild_id
-                    .map(|g| g.get().to_string())
-                    .unwrap_or_default();
-                let channel_id = interaction.channel_id.get().to_string();
-
-                let session_payload = serde_json::json!({
-                    "uid": selected_uid,
-                    "tag": current_tag
-                });
-
-                let session_id = crate::db::create_workflow_session(
-                    &app_ctx.db,
-                    "edit_event",
-                    &user_id,
-                    &guild_id,
-                    &channel_id,
-                    session_payload,
-                    15,
-                )
-                .await?;
-
-                let start_str = ev
-                    .start_time
-                    .with_timezone(&chrono_tz::Europe::Helsinki)
+        let start_str = ev
+            .start_time
+            .with_timezone(&chrono_tz::Europe::Helsinki)
+            .format("%Y-%m-%d %H:%M")
+            .to_string();
+        let end_str = ev
+            .end_time
+            .map(|d| {
+                d.with_timezone(&chrono_tz::Europe::Helsinki)
                     .format("%Y-%m-%d %H:%M")
-                    .to_string();
-                let end_str = ev
-                    .end_time
-                    .map(|d| {
-                        d.with_timezone(&chrono_tz::Europe::Helsinki)
-                            .format("%Y-%m-%d %H:%M")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
+                    .to_string()
+            })
+            .unwrap_or_default();
 
-                let mut safe_desc = ev.description.clone().unwrap_or_default();
-                if safe_desc.len() > 1000 {
-                    let mut cutoff = 997;
-                    while !safe_desc.is_char_boundary(cutoff) && cutoff > 0 {
-                        cutoff -= 1;
-                    }
-                    safe_desc.truncate(cutoff);
-                    safe_desc.push_str("...");
-                }
-
-                let dates_str = if end_str.is_empty() {
-                    start_str.clone()
-                } else {
-                    format!("{start_str} - {end_str}")
-                };
-
-                let modal = serenity::builder::CreateModal::new(
-                    format!("modal_edit_event_{session_id}"),
-                    "Edit Event",
-                )
-                .components(vec![
-                    serenity::builder::CreateActionRow::InputText(
-                        serenity::builder::CreateInputText::new(
-                            serenity::all::InputTextStyle::Short,
-                            "Title",
-                            "title",
-                        )
-                        .value(&ev.summary)
-                        .required(true),
-                    ),
-                    serenity::builder::CreateActionRow::InputText(
-                        serenity::builder::CreateInputText::new(
-                            serenity::all::InputTextStyle::Short,
-                            "Dates (YYYY-MM-DD HH:MM - HH:MM)",
-                            "dates",
-                        )
-                        .value(&dates_str)
-                        .required(true),
-                    ),
-                    serenity::builder::CreateActionRow::InputText(
-                        serenity::builder::CreateInputText::new(
-                            serenity::all::InputTextStyle::Short,
-                            "Location",
-                            "location",
-                        )
-                        .value(ev.location.as_deref().unwrap_or_default())
-                        .required(false),
-                    ),
-                    serenity::builder::CreateActionRow::InputText(
-                        serenity::builder::CreateInputText::new(
-                            serenity::all::InputTextStyle::Short,
-                            "URL",
-                            "url",
-                        )
-                        .value(ev.url.as_deref().unwrap_or_default())
-                        .required(false),
-                    ),
-                    serenity::builder::CreateActionRow::InputText(
-                        serenity::builder::CreateInputText::new(
-                            serenity::all::InputTextStyle::Paragraph,
-                            "Description",
-                            "description",
-                        )
-                        .value(&safe_desc)
-                        .required(false),
-                    ),
-                ]);
-
-                interaction
-                    .create_response(
-                        &ctx.http,
-                        serenity::builder::CreateInteractionResponse::Modal(modal),
-                    )
-                    .await?;
-
-                let msg =
-                    rust_i18n::t!("command.events.opening_edit_form", locale = locale.as_str());
-                let _ = interaction
-                    .edit_response(
-                        &ctx.http,
-                        serenity::builder::EditInteractionResponse::new()
-                            .content(msg.as_ref())
-                            .components(vec![]),
-                    )
-                    .await;
-                return Ok(());
+        let mut safe_desc = ev.description.clone().unwrap_or_default();
+        if safe_desc.len() > 1000 {
+            let mut cutoff = 997;
+            while !safe_desc.is_char_boundary(cutoff) && cutoff > 0 {
+                cutoff -= 1;
             }
+            safe_desc.truncate(cutoff);
+            safe_desc.push_str("...");
         }
+
+        let dates_str = if end_str.is_empty() {
+            start_str.clone()
+        } else {
+            format!("{start_str} - {end_str}")
+        };
+
+        let modal = serenity::builder::CreateModal::new(
+            format!("modal_edit_event_{session_id}"),
+            "Edit Event",
+        )
+        .components(vec![
+            serenity::builder::CreateActionRow::InputText(
+                serenity::builder::CreateInputText::new(
+                    serenity::all::InputTextStyle::Short,
+                    "Title",
+                    "title",
+                )
+                .value(&ev.summary)
+                .required(true),
+            ),
+            serenity::builder::CreateActionRow::InputText(
+                serenity::builder::CreateInputText::new(
+                    serenity::all::InputTextStyle::Short,
+                    "Dates (YYYY-MM-DD HH:MM - HH:MM)",
+                    "dates",
+                )
+                .value(&dates_str)
+                .required(true),
+            ),
+            serenity::builder::CreateActionRow::InputText(
+                serenity::builder::CreateInputText::new(
+                    serenity::all::InputTextStyle::Short,
+                    "Location",
+                    "location",
+                )
+                .value(ev.location.as_deref().unwrap_or_default())
+                .required(false),
+            ),
+            serenity::builder::CreateActionRow::InputText(
+                serenity::builder::CreateInputText::new(
+                    serenity::all::InputTextStyle::Short,
+                    "URL",
+                    "url",
+                )
+                .value(ev.url.as_deref().unwrap_or_default())
+                .required(false),
+            ),
+            serenity::builder::CreateActionRow::InputText(
+                serenity::builder::CreateInputText::new(
+                    serenity::all::InputTextStyle::Paragraph,
+                    "Description",
+                    "description",
+                )
+                .value(&safe_desc)
+                .required(false),
+            ),
+        ]);
+
+        interaction
+            .create_response(
+                &ctx.http,
+                serenity::builder::CreateInteractionResponse::Modal(modal),
+            )
+            .await?;
+
+        let msg = rust_i18n::t!("command.events.opening_edit_form", locale = locale.as_str());
+        let _ = interaction
+            .edit_response(
+                &ctx.http,
+                serenity::builder::EditInteractionResponse::new()
+                    .content(msg.as_ref())
+                    .components(vec![]),
+            )
+            .await;
+        return Ok(());
     }
 
     let resp = serenity::builder::CreateInteractionResponseMessage::new().content(rust_i18n::t!(

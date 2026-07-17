@@ -12,7 +12,7 @@ pub mod pocketbase;
 pub use discord::*;
 pub use pocketbase::*;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Event {
     pub uid: String,
     pub summary: String,

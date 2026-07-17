@@ -117,6 +117,7 @@ pub async fn handle_events_wizard_command(
     let mut components = vec![];
     let mut first_uid = None;
     let mut edit_options = vec![];
+    let mut cached_upcoming_events = vec![];
 
     if let Some(pb_cfg) = &app_ctx.config.pocketbase {
         if let Ok(events) = crate::events_sync::fetch_pocketbase_events(
@@ -136,6 +137,8 @@ pub async fn handle_events_wizard_command(
             if let Some(first) = upcoming_events.first() {
                 first_uid = Some(first.uid.clone());
             }
+
+            cached_upcoming_events.clone_from(&upcoming_events);
 
             let guild_id_str = interaction
                 .guild_id()
@@ -195,7 +198,8 @@ pub async fn handle_events_wizard_command(
             serde_json::json!({
                 "draft_id": draft_id,
                 "selected_event_uid": first_uid,
-                "selected_tag": "event"
+                "selected_tag": "event",
+                "events_cache": cached_upcoming_events
             }),
             30,
         )
