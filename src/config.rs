@@ -52,6 +52,8 @@ pub struct CommandsConfig {
     pub events: EventsCommandConfig,
     #[serde(default)]
     pub set: SetCommandConfig,
+    #[serde(default)]
+    pub diagnostics: DiagnosticsCommandConfig,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -77,6 +79,12 @@ impl Default for SetCommandConfig {
     fn default() -> Self {
         Self { enabled: true }
     }
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct DiagnosticsCommandConfig {
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -322,6 +330,9 @@ mod tests {
 
         [commands.set]
         enabled = false
+
+        [commands.diagnostics]
+        enabled = true
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -346,6 +357,7 @@ mod tests {
         assert!(!config.commands.events.enable_propose);
         assert!(config.commands.events.enable_fallback_mention);
         assert!(!config.commands.set.enabled);
+        assert!(config.commands.diagnostics.enabled);
 
         assert!(!config.interactions_for(123).set);
         assert!(!config.commands_for(123).events.enabled);

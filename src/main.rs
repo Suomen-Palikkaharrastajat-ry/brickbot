@@ -110,6 +110,13 @@ impl EventHandler for Handler {
                 commands.push(crate::commands::set::build_set_command(locale));
             }
 
+            if self.config.commands_for(guild.guild_id).diagnostics.enabled {
+                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
+                commands.push(crate::commands::diagnostics::build_diagnostics_command(
+                    locale,
+                ));
+            }
+
             if let Err(e) = GuildId::new(guild.guild_id)
                 .set_commands(&ctx.http, commands)
                 .await
@@ -573,6 +580,29 @@ impl EventHandler for Handler {
                     crate::workflows::search::handle_set_command(&ctx, &app_ctx, &command).await
                 {
                     tracing::error!("Error handling set command: {}", e);
+                }
+            }
+            Interaction::Command(command)
+                if (command.data.name.as_str() == "diagnostics"
+                    || command.data.name.as_str() == "diagnostiikka")
+                    && self
+                        .config
+                        .commands_for(command.guild_id.unwrap_or_default().get())
+                        .diagnostics
+                        .enabled =>
+            {
+                let app_ctx = crate::workflows::AppContext::from_serenity_ctx(&ctx).await;
+                let locale = self
+                    .config
+                    .locale_for(command.guild_id.unwrap_or_default().get())
+                    .unwrap_or("en-US")
+                    .to_string();
+                if let Err(e) = crate::commands::diagnostics::handle_diagnostics_command(
+                    &ctx, &app_ctx, &command, &locale,
+                )
+                .await
+                {
+                    tracing::error!("Error handling diagnostics command: {}", e);
                 }
             }
             _ => {}

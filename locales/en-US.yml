@@ -65,6 +65,18 @@ command:
     alternates: "Alternates"
     title: "Part: %{name} (%{id})"
     content: "Here is the information for part `%{num}`! \n**BrickLink**: %{url}"
+  diagnostics:
+    name: "diagnostics"
+    desc: "Run system diagnostics to check bot health"
+    title: "System Diagnostics"
+    db_ok: "✅ Database: Connected"
+    db_err: "❌ Database: Error (%{err})"
+    pb_ok: "✅ PocketBase: Connected"
+    pb_err: "❌ PocketBase: Error (%{err})"
+    pb_disabled: "➖ PocketBase: Disabled"
+    zulip_ok: "✅ Zulip: Connected"
+    zulip_err: "❌ Zulip: Error (%{err})"
+    zulip_disabled: "➖ Zulip: Disabled"
   events:
     name: "events"
     desc: "Manage and synchronize events"

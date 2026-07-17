@@ -159,13 +159,14 @@ pub async fn handle_events_wizard_command(
     ctx: &Context,
     interaction: &CommandInteraction,
 ) -> anyhow::Result<()> {
+    let _ = interaction.defer_ephemeral(&ctx.http).await;
     let app_ctx = AppContext::from_serenity_ctx(ctx).await;
     events::handle_events_wizard_command(
         ctx,
         &app_ctx,
         events::WizardInteraction::Command(interaction),
         None,
-        false,
+        true,
     )
     .await
 }
