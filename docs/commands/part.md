@@ -61,14 +61,14 @@ The fragmentation exists due to differing goals:
 ### 3. Examples and API Integration
 To illustrate how the same physical piece is represented across the ecosystem, let's look at the classic **2x4 Brick in Bright Red**:
 
-| Service / API | Type of ID | Example ID | Example Web URL / API Endpoint |
-| :--- | :--- | :--- | :--- |
-| **LEGO Pick a Brick** | Element ID | `300121` | [Web Search (`?query=300121`)](https://www.lego.com/pick-and-build/pick-a-brick?query=300121)<br/>*(Note: LEGO does not provide a public API for PaB)* |
-| **Rebrickable** | Design ID | `3001` | [Web Part Page](https://rebrickable.com/parts/3001/)<br/>[API Endpoint (`/api/v3/lego/parts/3001/`)](https://rebrickable.com/api/v3/lego/parts/3001/) |
-| **BrickLink** | Item No | `3001` | [Web Catalog (`?P=3001`)](https://www.bricklink.com/v2/catalog/catalogitem.page?P=3001)<br/>[API Endpoint (`/api/store/v1/items/part/3001`)](https://api.bricklink.com/api/store/v1/items/part/3001) |
-| **Brickset** | Design ID / Element ID | `3001` | [Web Parts Catalog](https://brickset.com/parts/design-3001)<br/>*(Note: Brickset API focuses on sets, not parts)* |
+| Service / API | Type of ID | Example ID | Example Display Name | Example Web URL / API Endpoint |
+| :--- | :--- | :--- | :--- | :--- |
+| **LEGO Pick a Brick** | Element ID | `300121` | `BRICK 2X4` | [Web Search (`?query=300121`)](https://www.lego.com/pick-and-build/pick-a-brick?query=300121)<br/>*(Note: LEGO does not provide a public API for PaB)* |
+| **Rebrickable** | Design ID | `3001` | `Brick 2 x 4` | [Web Part Page](https://rebrickable.com/parts/3001/)<br/>[API Endpoint (`/api/v3/lego/parts/3001/`)](https://rebrickable.com/api/v3/lego/parts/3001/) |
+| **BrickLink** | Item No | `3001` | `Brick 2 x 4` | [Web Catalog (`?P=3001`)](https://www.bricklink.com/v2/catalog/catalogitem.page?P=3001)<br/>[API Endpoint (`/api/store/v1/items/part/3001`)](https://api.bricklink.com/api/store/v1/items/part/3001) |
+| **Brickset** | Design ID / Element ID | `3001` | `BRICK 2X4` | [Web Parts Catalog](https://brickset.com/parts/design-3001)<br/>*(Note: Brickset API focuses on sets, not parts)* |
 
 #### Printed Part Example (Tile 2x2 with Newspaper Print)
-*   **LEGO Element ID:** `4263624` (Shape 3068 + Color White + Specific Newspaper Print)
-*   **BrickLink Item No:** `3068bpb001` (Shape 3068b + Print Identifier 001)
-*   **Rebrickable Part Num:** `3068bpr0004` (Uses a similar but slightly different suffix system mapped to BrickLink)
+*   **LEGO Pick a Brick:** `4263624` (Name: `FLAT TILE 2X2 WITH DECORATION`) - Relies on Element ID for print variation.
+*   **BrickLink:** `3068bpb001` (Name: `Tile 2 x 2 with Newspaper 'The LEGO News' Pattern`) - Uses Shape `3068b` + Print Identifier `001`.
+*   **Rebrickable:** `3068bpr0004` (Name: `Tile 2 x 2 with Newspaper 'THE LEGO NEWS' Print`) - Uses a similar but slightly different suffix system mapped to BrickLink.
