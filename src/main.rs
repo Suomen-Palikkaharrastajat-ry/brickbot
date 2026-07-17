@@ -117,11 +117,14 @@ impl EventHandler for Handler {
                 ));
             }
 
-            if let Err(e) = GuildId::new(guild.guild_id)
+            match GuildId::new(guild.guild_id)
                 .set_commands(&ctx.http, commands)
                 .await
             {
-                tracing::error!("Failed to set guild commands for {}: {}", guild.guild_id, e);
+                Ok(_) => tracing::info!("Successfully set guild commands for {}", guild.guild_id),
+                Err(e) => {
+                    tracing::error!("Failed to set guild commands for {}: {}", guild.guild_id, e);
+                }
             }
         }
     }
@@ -129,7 +132,13 @@ impl EventHandler for Handler {
     async fn guild_create(&self, ctx: Context, guild: serenity::all::Guild, _is_new: Option<bool>) {
         let guild_id = guild.id.get();
 
-        if !is_guild_allowed(&self.config, guild_id) {
+        if is_guild_allowed(&self.config, guild_id) {
+            tracing::info!(
+                "Connected to authorized guild: {} ({})",
+                guild.name,
+                guild_id
+            );
+        } else {
             tracing::warn!(
                 "Joined unauthorized guild {}, leaving immediately.",
                 guild_id
