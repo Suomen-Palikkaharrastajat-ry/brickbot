@@ -25,6 +25,5 @@ rustPlatform.buildRustPackage {
   };
 
   cargoLock.lockFile = ./Cargo.lock;
-
-  CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+  # CARGO_BUILD_TARGET is automatically handled by pkgsStatic
 }
