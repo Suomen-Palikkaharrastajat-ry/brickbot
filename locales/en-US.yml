@@ -77,6 +77,8 @@ command:
     zulip_ok: "✅ Zulip: Connected"
     zulip_err: "❌ Zulip: Error (%{err})"
     zulip_disabled: "➖ Zulip: Disabled"
+    discord_ok: "✅ Discord: Permissions OK"
+    discord_err: "❌ Discord: Missing %{err}"
   events:
     name: "events"
     desc: "Manage and synchronize events"

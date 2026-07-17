@@ -33,6 +33,12 @@ pub struct InteractionsConfig {
     pub part: bool,
 }
 
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct GuildInteractionsConfig {
+    pub set: Option<bool>,
+    pub part: Option<bool>,
+}
+
 impl Default for InteractionsConfig {
     fn default() -> Self {
         Self {
@@ -54,6 +60,13 @@ pub struct CommandsConfig {
     pub set: SetCommandConfig,
     #[serde(default)]
     pub diagnostics: DiagnosticsCommandConfig,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct GuildCommandsConfig {
+    pub events: Option<EventsCommandConfig>,
+    pub set: Option<SetCommandConfig>,
+    pub diagnostics: Option<DiagnosticsCommandConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -98,8 +111,8 @@ pub struct GuildConfig {
     pub help_forum_channel_ids: Vec<u64>,
     #[serde(default)]
     pub ambient_channel_ids: Option<Vec<u64>>,
-    pub interactions: Option<InteractionsConfig>,
-    pub commands: Option<CommandsConfig>,
+    pub interactions: Option<GuildInteractionsConfig>,
+    pub commands: Option<GuildCommandsConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -271,17 +284,32 @@ impl Config {
     }
 
     #[must_use]
-    pub fn interactions_for(&self, guild_id: u64) -> &InteractionsConfig {
-        self.get_guild_config(guild_id)
-            .and_then(|g| g.interactions.as_ref())
-            .unwrap_or(&self.interactions)
+    pub fn interactions_for(&self, guild_id: u64) -> InteractionsConfig {
+        let g = self
+            .get_guild_config(guild_id)
+            .and_then(|g| g.interactions.as_ref());
+        InteractionsConfig {
+            set: g.and_then(|c| c.set).unwrap_or(self.interactions.set),
+            part: g.and_then(|c| c.part).unwrap_or(self.interactions.part),
+        }
     }
 
     #[must_use]
-    pub fn commands_for(&self, guild_id: u64) -> &CommandsConfig {
-        self.get_guild_config(guild_id)
-            .and_then(|g| g.commands.as_ref())
-            .unwrap_or(&self.commands)
+    pub fn commands_for(&self, guild_id: u64) -> CommandsConfig {
+        let g = self
+            .get_guild_config(guild_id)
+            .and_then(|g| g.commands.as_ref());
+        CommandsConfig {
+            events: g
+                .and_then(|c| c.events.clone())
+                .unwrap_or_else(|| self.commands.events.clone()),
+            set: g
+                .and_then(|c| c.set.clone())
+                .unwrap_or_else(|| self.commands.set.clone()),
+            diagnostics: g
+                .and_then(|c| c.diagnostics.clone())
+                .unwrap_or_else(|| self.commands.diagnostics.clone()),
+        }
     }
 
     #[must_use]

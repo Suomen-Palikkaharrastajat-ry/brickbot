@@ -12,6 +12,7 @@ pub fn build_diagnostics_command(locale: &str) -> CreateCommand {
     CreateCommand::new(&cmd_name).description(&cmd_desc)
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn handle_diagnostics_command(
     ctx: &Context,
     app_ctx: &AppContext,
@@ -99,9 +100,50 @@ pub async fn handle_diagnostics_command(
         t!("command.diagnostics.zulip_disabled", locale = locale).to_string()
     };
 
+    // Check Discord Permissions
+    let mut discord_status = t!("command.diagnostics.discord_ok", locale = locale).to_string();
+    if let Some(guild_id) = interaction.guild_id {
+        if let Ok(current_user) = ctx.http.get_current_user().await {
+            if let Ok(guild) = guild_id.to_partial_guild(&ctx.http).await {
+                if let Ok(member) = guild_id.member(&ctx.http, current_user.id).await {
+                    let mut bot_perms = guild
+                        .roles
+                        .get(&serenity::all::RoleId::new(guild_id.get()))
+                        .map_or(serenity::model::Permissions::empty(), |r| r.permissions);
+
+                    for role_id in &member.roles {
+                        if let Some(role) = guild.roles.get(role_id) {
+                            bot_perms |= role.permissions;
+                        }
+                    }
+
+                    // If the bot has administrator, it has all permissions implicitly
+                    if !bot_perms.contains(serenity::model::Permissions::ADMINISTRATOR) {
+                        let mut missing = Vec::new();
+                        if !bot_perms.contains(serenity::model::Permissions::MANAGE_EVENTS) {
+                            missing.push("Manage Events");
+                        }
+                        if !bot_perms.contains(serenity::model::Permissions::CREATE_EVENTS) {
+                            missing.push("Create Events");
+                        }
+
+                        if !missing.is_empty() {
+                            discord_status = t!(
+                                "command.diagnostics.discord_err",
+                                locale = locale,
+                                err = missing.join(", ")
+                            )
+                            .to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let title = t!("command.diagnostics.title", locale = locale).to_string();
 
-    let description = format!("{db_status}\n{pb_status}\n{zulip_status}");
+    let description = format!("{db_status}\n{pb_status}\n{zulip_status}\n{discord_status}");
 
     let embed = CreateEmbed::new()
         .title(title)

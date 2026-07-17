@@ -77,6 +77,8 @@ command:
     zulip_ok: "✅ Zulip: Yhdistetty"
     zulip_err: "❌ Zulip: Virhe (%{err})"
     zulip_disabled: "➖ Zulip: Ei käytössä"
+    discord_ok: "✅ Discord: Oikeudet kunnossa"
+    discord_err: "❌ Discord: Oikeuksia puuttuu (%{err})"
   events:
     name: "tapahtumat"
     desc: "Hallitse ja synkronoi tapahtumia"
