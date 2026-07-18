@@ -142,9 +142,15 @@ fn build_part_message(
     }
 
     if services.contains(&"lego".to_string()) {
+        let lego_id = part
+            .external_ids
+            .get("Lego")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_else(|| part.part_num.clone());
         links_text.push(format!(
             "**LEGO Pick a Brick**: {}",
-            crate::links::lego::pick_a_brick_url(&part.part_num)
+            crate::links::lego::pick_a_brick_url(&lego_id)
         ));
     }
 
@@ -190,6 +196,7 @@ mod tests {
     fn test_build_part_message_en() {
         let mut ext_ids = HashMap::new();
         ext_ids.insert("BrickLink".to_string(), vec!["3001".to_string()]);
+        ext_ids.insert("Lego".to_string(), vec!["98765".to_string()]);
 
         let part = crate::brick::RebrickablePart {
             part_num: "3001".to_string(),
@@ -208,10 +215,17 @@ mod tests {
             &part,
             "3001",
             "en-US",
-            &["bricklink".to_string(), "rebrickable".to_string()],
+            &[
+                "bricklink".to_string(),
+                "rebrickable".to_string(),
+                "lego".to_string(),
+            ],
         );
         assert!(content.contains("https://www.bricklink.com/v2/catalog/catalogitem.page?P=3001"));
         assert!(content.contains("https://rebrickable.com/parts/3001"));
+        assert!(
+            content.contains("https://www.lego.com/fi-fi/pick-and-build/pick-a-brick?query=98765")
+        );
 
         let embed_json = serde_json::to_value(embed).unwrap();
         assert_eq!(embed_json["title"], "Part: Brick 2x4 (3001)");

@@ -978,30 +978,9 @@ pub async fn handle_set_search_show(
             )
             .await?;
 
-        let options = vec![
-            CreateSelectMenuOption::new("BrickLink", "bricklink")
-                .default_selection(default_services.contains(&"bricklink".to_string())),
-            CreateSelectMenuOption::new("Brickset", "brickset")
-                .default_selection(default_services.contains(&"brickset".to_string())),
-            CreateSelectMenuOption::new("LEGO.com", "lego")
-                .default_selection(default_services.contains(&"lego".to_string())),
-            CreateSelectMenuOption::new("Rebrickable", "rebrickable")
-                .default_selection(default_services.contains(&"rebrickable".to_string())),
-            CreateSelectMenuOption::new(t!("command.set.articles", locale = locale), "articles")
-                .default_selection(default_services.contains(&"articles".to_string())),
-        ];
-        let select = CreateSelectMenu::new(
-            format!("update_services_set:{query}"),
-            CreateSelectMenuKind::String { options },
-        )
-        .min_values(0)
-        .max_values(5)
-        .placeholder(t!("modal.services.placeholder", locale = locale));
-
         let msg = serenity::all::CreateMessage::new()
             .content(content_str)
-            .embed(*embed)
-            .components(vec![CreateActionRow::SelectMenu(select)]);
+            .embed(*embed);
 
         interaction.channel_id.send_message(&ctx.http, msg).await?;
     }

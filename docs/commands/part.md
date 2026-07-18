@@ -64,9 +64,9 @@ To illustrate how the same physical piece is represented across the ecosystem, l
 | Service / API | Type of ID | Example ID | Example Display Name | Example Web URL / API Endpoint |
 | :--- | :--- | :--- | :--- | :--- |
 | **LEGO Pick a Brick** | Element ID | `300121` | `BRICK 2X4` | [Web Search (`?query=300121`)](https://www.lego.com/pick-and-build/pick-a-brick?query=300121)<br/>*(Note: LEGO does not provide a public API for PaB)* |
-| **Rebrickable** | Design ID | `3001` | `Brick 2 x 4` | [Web Part Page](https://rebrickable.com/parts/3001/)<br/>[API Endpoint (`/api/v3/lego/parts/3001/`)](https://rebrickable.com/api/v3/lego/parts/3001/) |
+| **Rebrickable** | Design ID | `3001` | `Brick 2 x 4` | [Web Part Page](https://rebrickable.com/parts/3001/)<br/>API Endpoint (`https://rebrickable.com/api/v3/lego/parts/3001/`) |
 | **BrickLink** | Item No | `3001` | `Brick 2 x 4` | [Web Catalog (`?P=3001`)](https://www.bricklink.com/v2/catalog/catalogitem.page?P=3001)<br/>[API Endpoint (`/api/store/v1/items/part/3001`)](https://api.bricklink.com/api/store/v1/items/part/3001) |
-| **Brickset** | Design ID / Element ID | `3001` | `BRICK 2X4` | [Web Parts Catalog](https://brickset.com/parts/design-3001)<br/>*(Note: Brickset API focuses on sets, not parts)* |
+| **Brickset** | Design ID / Element ID | `3001` | `BRICK 2X4` | Web Parts Catalog (`https://brickset.com/parts/design-3001`)<br/>*(Note: Brickset API focuses on sets, not parts)* |
 
 #### Printed Part Example (Tile 2x2 with Newspaper Print)
 *   **LEGO Pick a Brick:** `4263624` (Name: `FLAT TILE 2X2 WITH DECORATION`) - Relies on Element ID for print variation.
