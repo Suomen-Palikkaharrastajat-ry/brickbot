@@ -92,13 +92,13 @@ pub async fn build_set_response_data(
     .await
     .ok()
     .map(|response| match response {
-        crate::commands::set::SetInteractionResponse::DirectMatch(content, embed) => {
+        crate::commands::set::SetInteractionResponse::DirectMatch(content, embed, has_articles) => {
             let mut data = CreateInteractionResponseMessage::new()
                 .content(content)
                 .add_embed(*embed)
                 .ephemeral(preview_mode);
 
-            let options = vec![
+            let mut options = vec![
                 CreateSelectMenuOption::new("BrickLink", "bricklink")
                     .default_selection(default_services.contains(&"bricklink".to_string())),
                 CreateSelectMenuOption::new("Brickset", "brickset")
@@ -108,6 +108,16 @@ pub async fn build_set_response_data(
                 CreateSelectMenuOption::new("Rebrickable", "rebrickable")
                     .default_selection(default_services.contains(&"rebrickable".to_string())),
             ];
+
+            if has_articles {
+                options.push(
+                    CreateSelectMenuOption::new(
+                        t!("command.set.articles", locale = locale),
+                        "articles",
+                    )
+                    .default_selection(default_services.contains(&"articles".to_string())),
+                );
+            }
             let select = CreateSelectMenu::new(
                 format!("update_services_set:{query}"),
                 CreateSelectMenuKind::String { options },
@@ -944,7 +954,7 @@ pub async fn handle_set_search_show(
         ]
     };
 
-    if let Ok(crate::commands::set::SetInteractionResponse::DirectMatch(content_str, embed)) =
+    if let Ok(crate::commands::set::SetInteractionResponse::DirectMatch(content_str, embed, _)) =
         crate::commands::set::set_interaction(
             app_ctx.http.as_ref(),
             &app_ctx.db,

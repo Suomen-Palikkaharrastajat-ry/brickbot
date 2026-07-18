@@ -6,7 +6,7 @@ use serenity::all::{Context, CreateEmbed, Framework};
 use sqlx::SqlitePool;
 
 pub enum SetInteractionResponse {
-    DirectMatch(String, Box<CreateEmbed>),
+    DirectMatch(String, Box<CreateEmbed>, bool),
     SearchResults(Vec<serenity::all::CreateSelectMenuOption>),
 }
 
@@ -28,7 +28,11 @@ pub async fn set_interaction(
                 .unwrap_or_default();
             let (content, embed) = build_set_message(&set, locale, services, &articles);
             if let Some(e) = embed {
-                return Ok(SetInteractionResponse::DirectMatch(content, Box::new(e)));
+                return Ok(SetInteractionResponse::DirectMatch(
+                    content,
+                    Box::new(e),
+                    !articles.is_empty(),
+                ));
             }
         }
     }
@@ -46,7 +50,11 @@ pub async fn set_interaction(
                             .unwrap_or_default();
                     let (content, embed) = build_set_message(&set, locale, services, &articles);
                     if let Some(e) = embed {
-                        return Ok(SetInteractionResponse::DirectMatch(content, Box::new(e)));
+                        return Ok(SetInteractionResponse::DirectMatch(
+                            content,
+                            Box::new(e),
+                            !articles.is_empty(),
+                        ));
                     }
                 }
                 Err(anyhow::anyhow!("Failed to fetch set details"))
@@ -158,7 +166,7 @@ fn build_set_message(
         ));
     }
 
-    if !articles.is_empty() {
+    if services.contains(&"articles".to_string()) && !articles.is_empty() {
         links_text.push(format!(
             "\n**{}**:",
             t!(
@@ -302,7 +310,7 @@ mod tests {
         let result = set_interaction(&mock_http, &pool, "42083", "en-US", &[], 1024 * 1024).await;
         assert!(result.is_ok());
         match result.unwrap() {
-            SetInteractionResponse::DirectMatch(_, embed) => {
+            SetInteractionResponse::DirectMatch(_, embed, _) => {
                 let embed_json = serde_json::to_value(*embed).unwrap();
                 assert_eq!(embed_json["title"], "Set: Bugatti (42083-1)");
             }
