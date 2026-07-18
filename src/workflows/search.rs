@@ -107,11 +107,6 @@ pub async fn build_set_response_data(
                     .default_selection(default_services.contains(&"lego".to_string())),
                 CreateSelectMenuOption::new("Rebrickable", "rebrickable")
                     .default_selection(default_services.contains(&"rebrickable".to_string())),
-                CreateSelectMenuOption::new(
-                    t!("command.set.articles", locale = locale),
-                    "articles",
-                )
-                .default_selection(default_services.contains(&"articles".to_string())),
             ];
             let select = CreateSelectMenu::new(
                 format!("update_services_set:{query}"),

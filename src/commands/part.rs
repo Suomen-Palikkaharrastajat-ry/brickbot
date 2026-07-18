@@ -142,7 +142,8 @@ fn build_part_message(
         ));
     }
 
-    if services.contains(&"lego".to_string()) {
+    let in_production = part.year_to >= chrono::Utc::now().naive_utc().year();
+    if services.contains(&"lego".to_string()) && in_production {
         let lego_id = part
             .external_ids
             .get("Lego")

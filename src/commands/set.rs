@@ -158,7 +158,7 @@ fn build_set_message(
         ));
     }
 
-    if services.contains(&"articles".to_string()) && !articles.is_empty() {
+    if !articles.is_empty() {
         links_text.push(format!(
             "\n**{}**:",
             t!(
