@@ -5,7 +5,7 @@ The `set` interaction provides detailed information about LEGO sets. Unlike trad
 
 ## Trigger
 - Triggered via the `workflow_set_search` button presented by the ambient assistant.
-- Users input the set number in a modal dialog (`modal_set_search`).
+- Users input the set number or keyword in a modal dialog (`modal_set_search`).
 
 ## Features
 - **Set Data**: Fetches data (name, year, theme, pieces, rating, image) using the `fetch_set` function (connecting to external APIs like Brickset).

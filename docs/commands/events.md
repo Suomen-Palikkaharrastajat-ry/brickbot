@@ -10,8 +10,7 @@ The bot natively synchronizes events from the configured PocketBase REST API dir
 
 ## Trigger
 - Triggered per-guild as either `/events` or `/tapahtumat` depending on the `locale` defined in `config.toml` (falls back to `default_locale` if unspecified).
-- The command supports two **optional** arguments to bypass the initial wizard and provide advanced functionality:
-  - `action`: A dropdown to directly select an action (`List Events`, `Sync Events`, `Submit Event`, `Edit Event`).
+- The command supports an **optional** argument to bypass the initial wizard and provide advanced functionality:
   - `image`: An optional image attachment, used when proposing a new event.
 - If no arguments are provided, the command responds with an ephemeral prompt offering the wizard options.
 - The event listing interface can also be triggered via the `workflow_events_list` button when the ambient assistant detects discussions about events (`Topic::Events`).
@@ -49,7 +48,7 @@ When an event or edit is proposed, it appears in Zulip with its full JSON payloa
 
 ## Event Cover Images
 Due to Discord's Modal interaction framework lacking support for file attachments, the bot uses a hybrid approach to support event cover images:
-1. The user must provide the image via the optional `image` slash command argument while simultaneously setting the `action` argument to `Submit Event`.
+1. The user can optionally provide the image via the `image` slash command argument while initiating the `/events` command.
 2. The bot temporarily stores the image URL in a `drafting` state in the SQLite database and binds a unique UUID to the modal's `custom_id` after the Type selection.
 3. When the text modal is submitted, the bot retrieves the stored image URL and bundles it into the final Zulip proposal payload.
 

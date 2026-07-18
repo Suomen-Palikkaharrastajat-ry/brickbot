@@ -5,7 +5,7 @@ The `/part` command provides an easy way to search and display information about
 
 ## Trigger
 - Triggered as `/part` (or `/pala` depending on the `locale` defined in `config.toml`).
-- The command takes one **required** argument: `part_number` (e.g. `3001`).
+- The command takes one **required** argument: `query` (a part number e.g. `3001` or a search term e.g. `Brick 2x4`).
 
 ## Features
 
@@ -13,8 +13,18 @@ The `/part` command provides an easy way to search and display information about
    - Displays the part's name, production years, print details, molds, and alternates.
    - Embeds the part image thumbnail.
 
-2. **External Link Integration**:
-   - The bot dynamically generates and displays a link to BrickLink for the requested part.
+2. **Search Capability**:
+   - If the `query` matches multiple parts, the bot will return an ephemeral dropdown menu allowing the user to select the specific part they intended.
+
+3. **External Link Integration**:
+   - The bot dynamically generates and displays links to:
+     - BrickLink
+     - LEGO Pick a Brick (if currently in production)
+     - Rebrickable
+
+4. **Service Customization**:
+   - Upon running the command, the user is presented with a dropdown menu allowing them to toggle which external services (BrickLink, LEGO.com, etc.) they want visible.
+   - The bot persists these preferences per-user in the local SQLite database, ensuring that future queries default to the user's preferred platforms.
 
 ## Configuration
 The command can be enabled or disabled globally or on a per-guild basis using the `config.toml` file:
