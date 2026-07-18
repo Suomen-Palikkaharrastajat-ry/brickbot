@@ -53,6 +53,7 @@ pub async fn set_interaction(
             } else {
                 let options: Vec<serenity::all::CreateSelectMenuOption> = results
                     .into_iter()
+                    .take(25)
                     .map(|r| {
                         let set_id = format!("{}-{}", r.number, r.numberVariant);
                         let label = format!("{} - {}", set_id, r.name);

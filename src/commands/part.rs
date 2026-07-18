@@ -49,6 +49,7 @@ pub async fn part_interaction(
             } else {
                 let options: Vec<serenity::all::CreateSelectMenuOption> = results
                     .into_iter()
+                    .take(25)
                     .map(|r| {
                         let label = format!("{} - {}", r.part_num, r.name);
                         let truncated_label = if label.len() > 100 {
