@@ -776,6 +776,23 @@ pub async fn handle_part_search_show(
 ) -> anyhow::Result<()> {
     let (locale, _) = super::extract_locale_and_bot_name(app_ctx, interaction.guild_id).await;
     let query = arg.unwrap_or_default();
+    let user_id = interaction.user.id.get().to_string();
+
+    let default_services = if let Ok(Some(services_str)) =
+        crate::db::get_user_preferred_services(&app_ctx.db, &user_id).await
+    {
+        if services_str.is_empty() {
+            vec![]
+        } else {
+            services_str.split(',').map(ToString::to_string).collect()
+        }
+    } else {
+        vec![
+            "bricklink".to_string(),
+            "lego".to_string(),
+            "articles".to_string(),
+        ]
+    };
 
     let mut data = None;
     if let Ok(crate::commands::part::PartInteractionResponse::DirectMatch(content_str, embed)) =
@@ -784,7 +801,7 @@ pub async fn handle_part_search_show(
             app_ctx.http.as_ref(),
             query,
             &locale,
-            &[],
+            &default_services,
             app_ctx.config.resource_limits.max_http_body_bytes,
         )
         .await
@@ -802,6 +819,7 @@ pub async fn handle_part_search_show(
         let update_data = CreateInteractionResponseMessage::new()
             .content(update_content)
             .components(vec![])
+            .embeds(vec![])
             .ephemeral(true);
 
         interaction
@@ -950,6 +968,7 @@ pub async fn handle_set_search_show(
         let update_data = CreateInteractionResponseMessage::new()
             .content(update_content)
             .components(vec![])
+            .embeds(vec![])
             .ephemeral(true);
 
         interaction
