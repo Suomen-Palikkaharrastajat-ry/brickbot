@@ -11,7 +11,6 @@ The `part` interaction provides detailed information about LEGO parts. It is tri
 - **Part Data**: Fetches data (name, production years, mold variants, alternates, print details) using the `fetch_part` function (connecting to the Rebrickable API).
 - **Service Links**: Users can select which third-party services they want links for via a dropdown menu (`update_services_part`). Supported services include:
   - BrickLink
-  - LEGO.com
   - Rebrickable
 - **Localization**: Fully localized using `rust-i18n`.
 

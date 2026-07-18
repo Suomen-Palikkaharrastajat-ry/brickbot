@@ -70,23 +70,6 @@ pub fn is_guild_allowed(config: &crate::config::Config, guild_id: u64) -> bool {
     config.guilds.iter().any(|g| g.guild_id == guild_id)
 }
 
-#[must_use]
-pub fn should_forward_help_message(
-    guild_config: &crate::config::GuildConfig,
-    channel_id: u64,
-    parent_channel_id: Option<u64>,
-) -> bool {
-    if guild_config.help_channel_ids.contains(&channel_id) {
-        return true;
-    }
-    if let Some(parent_id) = parent_channel_id {
-        if guild_config.help_forum_channel_ids.contains(&parent_id) {
-            return true;
-        }
-    }
-    false
-}
-
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
@@ -169,45 +152,6 @@ impl EventHandler for Handler {
                 .find(|g| g.guild_id == guild_id_u64)
             {
                 let channel_id_u64 = msg.channel_id.get();
-                let mut parent_id = None;
-
-                if !guild_config.help_forum_channel_ids.is_empty() {
-                    if let Ok(serenity::all::Channel::Guild(gc)) =
-                        msg.channel_id.to_channel(&ctx.http).await
-                    {
-                        parent_id = gc.parent_id.map(serenity::all::ChannelId::get);
-                    }
-                }
-
-                if should_forward_help_message(guild_config, channel_id_u64, parent_id) {
-                    let zulip_topic = format!("{guild_id_u64}-{channel_id_u64}");
-                    let jump_url = msg.link();
-                    let author_name = msg.author.name.clone();
-
-                    let content = if msg.content.is_empty() {
-                        "<attachment/embed>".to_string()
-                    } else {
-                        msg.content.clone()
-                    };
-
-                    let body =
-                        format!("**{author_name}** posted in [Discord]({jump_url}):\n\n{content}");
-
-                    if let Some(zulip_cfg) = &self.config.zulip {
-                        if let Some(support_stream) = &zulip_cfg.support_stream {
-                            let http_client = std::sync::Arc::new(crate::http::HttpClient::new());
-                            let _ = crate::zulip::api::post_topic_to_stream(
-                                http_client.as_ref(),
-                                zulip_cfg,
-                                support_stream,
-                                &zulip_topic,
-                                &body,
-                                self.config.resource_limits.max_http_body_bytes,
-                            )
-                            .await;
-                        }
-                    }
-                }
 
                 // Align ambient assistant with the consent/noise design
                 if let Some(ambient_ids) = &guild_config.ambient_channel_ids {
@@ -842,8 +786,6 @@ mod tests {
                     guild_id: 12345,
                     locale: None,
                     bot_name: None,
-                    help_channel_ids: vec![],
-                    help_forum_channel_ids: vec![],
                     ambient_channel_ids: None,
                     interactions: None,
                     commands: None,
@@ -852,8 +794,6 @@ mod tests {
                     guild_id: 67890,
                     locale: None,
                     bot_name: None,
-                    help_channel_ids: vec![],
-                    help_forum_channel_ids: vec![],
                     ambient_channel_ids: None,
                     interactions: None,
                     commands: None,
@@ -865,25 +805,5 @@ mod tests {
         assert!(is_guild_allowed(&config, 12345));
         assert!(is_guild_allowed(&config, 67890));
         assert!(!is_guild_allowed(&config, 11111));
-    }
-
-    #[test]
-    fn test_should_forward_help_message() {
-        let guild_config = GuildConfig {
-            guild_id: 123,
-            locale: None,
-            bot_name: None,
-            help_channel_ids: vec![100],
-            help_forum_channel_ids: vec![200],
-            ambient_channel_ids: None,
-            interactions: None,
-            commands: None,
-        };
-
-        assert!(should_forward_help_message(&guild_config, 100, None));
-        assert!(!should_forward_help_message(&guild_config, 101, None));
-
-        assert!(should_forward_help_message(&guild_config, 300, Some(200)));
-        assert!(!should_forward_help_message(&guild_config, 300, Some(201)));
     }
 }

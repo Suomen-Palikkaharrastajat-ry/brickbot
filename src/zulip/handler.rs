@@ -833,7 +833,6 @@ mod tests {
             url: "https://zulip.example.com".to_string(),
             bot_email: "bot@example.com".to_string(),
             moderation_stream: "mod".to_string(),
-            support_stream: Some("support".to_string()),
             moderators: vec!["mod@example.com".to_string()],
         };
 
@@ -851,7 +850,6 @@ mod tests {
             url: "https://zulip.example.com".to_string(),
             bot_email: "bot@example.com".to_string(),
             moderation_stream: "mod".to_string(),
-            support_stream: Some("support".to_string()),
             moderators: vec![],
         };
 

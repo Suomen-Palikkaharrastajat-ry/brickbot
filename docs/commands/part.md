@@ -19,7 +19,6 @@ The `/part` command provides an easy way to search and display information about
 3. **External Link Integration**:
    - The bot dynamically generates and displays links to:
      - BrickLink
-     - LEGO Pick a Brick (if currently in production)
      - Rebrickable
 
 4. **Service Customization**:
@@ -44,10 +43,10 @@ enabled = false # Disables /part for this specific guild
 Because `brickbot` relies on APIs like Rebrickable and integrates with sites like BrickLink, understanding how different platforms identify parts is crucial. The ecosystem uses a variety of overlapping numbering systems.
 
 ### 1. The Official LEGO Numbers
-The LEGO Group utilizes two primary identifiers internally and on their services (like Pick a Brick):
+The LEGO Group utilizes two primary identifiers internally and on their services:
 
 *   **Design ID:** This is a 4- or 5-digit number (e.g., `3001`) that identifies the **shape** of a part, regardless of color. It is often molded directly onto the underside of the physical brick. This is the most universal number across all platforms.
-*   **Element ID:** This is a 6- or 7-digit number that identifies a specific part in a specific **color** (and print). It represents a unique variation of a Design ID. These numbers are printed in the back of official instruction manuals and are used for customer service and "Pick a Brick" orders.
+*   **Element ID:** This is a 6- or 7-digit number that identifies a specific part in a specific **color** (and print). It represents a unique variation of a Design ID. These numbers are printed in the back of official instruction manuals and are used for customer service orders.
 
 ### 2. Community and Marketplace Systems
 Third-party platforms have evolved independently, leading to variations in how they catalog parts, especially printed or modified ones.
@@ -73,12 +72,10 @@ To illustrate how the same physical piece is represented across the ecosystem, l
 
 | Service / API | Type of ID | Example ID | Example Display Name | Example Web URL / API Endpoint |
 | :--- | :--- | :--- | :--- | :--- |
-| **LEGO Pick a Brick** | Element ID | `300121` | `BRICK 2X4` | [Web Search (`?query=300121`)](https://www.lego.com/pick-and-build/pick-a-brick?query=300121)<br/>*(Note: LEGO does not provide a public API for PaB)* |
 | **Rebrickable** | Design ID | `3001` | `Brick 2 x 4` | [Web Part Page](https://rebrickable.com/parts/3001/)<br/>API Endpoint (`https://rebrickable.com/api/v3/lego/parts/3001/`) |
 | **BrickLink** | Item No | `3001` | `Brick 2 x 4` | [Web Catalog (`?P=3001`)](https://www.bricklink.com/v2/catalog/catalogitem.page?P=3001)<br/>[API Endpoint (`/api/store/v1/items/part/3001`)](https://api.bricklink.com/api/store/v1/items/part/3001) |
 | **Brickset** | Design ID / Element ID | `3001` | `BRICK 2X4` | Web Parts Catalog (`https://brickset.com/parts/design-3001`)<br/>*(Note: Brickset API focuses on sets, not parts)* |
 
 #### Printed Part Example (Tile 2x2 with Newspaper Print)
-*   **LEGO Pick a Brick:** `4263624` (Name: `FLAT TILE 2X2 WITH DECORATION`) - Relies on Element ID for print variation.
 *   **BrickLink:** `3068bpb001` (Name: `Tile 2 x 2 with Newspaper 'The LEGO News' Pattern`) - Uses Shape `3068b` + Print Identifier `001`.
 *   **Rebrickable:** `3068bpr0004` (Name: `Tile 2 x 2 with Newspaper 'THE LEGO NEWS' Print`) - Uses a similar but slightly different suffix system mapped to BrickLink.

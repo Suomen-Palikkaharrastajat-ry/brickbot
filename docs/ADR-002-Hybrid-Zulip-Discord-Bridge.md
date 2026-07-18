@@ -17,8 +17,7 @@ Conversely, our internal trusted team utilizes Zulip, which excels at topic-base
 
 We need a reliable, low-friction mechanism to:
 1. Vet and moderate community submissions from Discord before inserting them into our primary database (PocketBase).
-2. Allow internal team members to provide support to Discord users without having to leave Zulip.
-3. Deliver asynchronous moderation updates (approvals, rejections, questions) back to Discord users securely.
+2. Deliver asynchronous moderation updates (approvals, rejections, questions) back to Discord users securely.
 
 ---
 
@@ -30,7 +29,7 @@ The bot will isolate the platforms while maintaining a lightweight tracking ledg
 
 ### Key Components
 
-1. **Discord (Untrusted Intake)**: Utilizes native Discord Modals (via Slash Commands like `/events`) for structured data submission, and monitors specific `#help` channels for support queries.
+1. **Discord (Untrusted Intake)**: Utilizes native Discord Modals (via Slash Commands like `/events`) for structured data submission.
 2. **Zulip (Trusted Triage)**: Receives mirrored data as dedicated Topics. Uses Zulip's Real-Time Events API (Long-Polling) to monitor text-commands (`@bot reply`) for bidirectional messaging and state changes.
 3. **SQLite Ledger (State Mapping)**: Caches pending metadata and maps Zulip topics to Discord message IDs/Channels and PocketBase payloads.
 4. **PocketBase (Source of Truth)**: Receives only fully vetted and approved data payloads from the bot.
@@ -55,16 +54,6 @@ The bot will isolate the platforms while maintaining a lightweight tracking ledg
 2. **Triage (Zulip):** Bot creates a dedicated Topic in an internal moderation stream, prints the data, and awaits review.
 3. **Execution (PocketBase):** Admin replies in Zulip with `@bot reply approved`. The bot parses the command via long-polling, pushes the cached payload to PocketBase, and updates the Discord user.
 
-### Use Case B: Help & Query Handling
-*Bidirectional proxy allowing internal teams to answer community queries without leaving Zulip.*
-
-**The Flow:**
-1. **Intake (Discord):** User asks a question in a `#help` channel or Forum thread.
-2. **Escalation (Zulip):** Bot mirrors the text into a `Support` stream under a topic matching the user/thread ID.
-3. **Resolution (Zulip):** Team member replies in the topic using `@bot reply [message]`.
-4. **Delivery (Discord):** Bot parses the command, strips the prefix, and forwards the clean message back to the original Discord thread.
-
----
 
 ## Asynchronous Zulip Updates & Delivery Fallback
 

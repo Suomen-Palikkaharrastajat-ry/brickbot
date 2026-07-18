@@ -313,11 +313,7 @@ pub async fn build_part_response_data(
             services_str.split(',').map(ToString::to_string).collect()
         }
     } else {
-        vec![
-            "bricklink".to_string(),
-            "lego".to_string(),
-            "rebrickable".to_string(),
-        ]
+        vec!["bricklink".to_string(), "rebrickable".to_string()]
     };
 
     crate::commands::part::part_interaction(
@@ -340,8 +336,6 @@ pub async fn build_part_response_data(
             let options = vec![
                 CreateSelectMenuOption::new("BrickLink", "bricklink")
                     .default_selection(default_services.contains(&"bricklink".to_string())),
-                CreateSelectMenuOption::new("LEGO Pick a Brick", "lego")
-                    .default_selection(default_services.contains(&"lego".to_string())),
                 CreateSelectMenuOption::new("Rebrickable", "rebrickable")
                     .default_selection(default_services.contains(&"rebrickable".to_string())),
             ];
@@ -350,7 +344,7 @@ pub async fn build_part_response_data(
                 CreateSelectMenuKind::String { options },
             )
             .min_values(0)
-            .max_values(3)
+            .max_values(2)
             .placeholder(t!("modal.services.placeholder", locale = locale));
 
             let mut components = vec![];

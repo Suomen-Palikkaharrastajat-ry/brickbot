@@ -121,10 +121,6 @@ pub struct GuildConfig {
     pub locale: Option<String>,
     pub bot_name: Option<String>,
     #[serde(default)]
-    pub help_channel_ids: Vec<u64>,
-    #[serde(default)]
-    pub help_forum_channel_ids: Vec<u64>,
-    #[serde(default)]
     pub ambient_channel_ids: Option<Vec<u64>>,
     pub interactions: Option<GuildInteractionsConfig>,
     pub commands: Option<GuildCommandsConfig>,
@@ -158,7 +154,6 @@ pub struct ZulipConfig {
     pub url: String,
     pub bot_email: String,
     pub moderation_stream: String,
-    pub support_stream: Option<String>,
     #[serde(default)]
     pub moderators: Vec<String>,
 }
@@ -353,7 +348,6 @@ mod tests {
         guild_id = 123
         bot_name = "Server Bot"
         locale = "fi-FI"
-        help_channel_ids = [100, 200]
         ambient_channel_ids = [300]
 
         [guilds.interactions]
@@ -390,9 +384,7 @@ mod tests {
         assert_eq!(guild.guild_id, 123);
         assert_eq!(guild.bot_name.as_deref(), Some("Server Bot"));
         assert_eq!(guild.locale.as_deref(), Some("fi-FI"));
-        assert_eq!(guild.help_channel_ids, vec![100, 200]);
         assert_eq!(guild.ambient_channel_ids.as_ref().unwrap(), &vec![300]);
-        assert!(guild.help_forum_channel_ids.is_empty());
         assert_eq!(config.feeds.len(), 1);
         assert_eq!(config.feeds[0].feed_urls[0], "http://example.com/rss");
         assert_eq!(config.poll_interval, Some(300));

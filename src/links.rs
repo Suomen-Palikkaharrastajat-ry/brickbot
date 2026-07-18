@@ -15,10 +15,6 @@ pub mod lego {
     pub fn search_url(query: &str) -> String {
         format!("https://www.lego.com/fi-fi/search?q={query}")
     }
-
-    pub fn pick_a_brick_url(part_id: &str) -> String {
-        format!("https://www.lego.com/fi-fi/pick-and-build/pick-a-brick?query={part_id}")
-    }
 }
 
 pub mod brickset {

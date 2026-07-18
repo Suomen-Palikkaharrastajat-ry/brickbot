@@ -160,7 +160,6 @@ The bot continuously syncs events from PocketBase into Discord's native Schedule
 ### Ambient Assistant
 The bot monitors chat passively using an Ambient Assistant:
 - **LEGO Sets & Parts:** If the bot detects discussion about LEGO sets or parts, it offers a button to fetch details and images from Rebrickable/Brickset.
-- **Support Proxy (Deprecated):** Messages sent in channels with "help" in their name are automatically mirrored to the Zulip support stream, enabling the team to assist Discord users without leaving Zulip.
 
 ### Interaction Privacy Policy
 - **Ephemeral Interaction Responses:** All user-initiated command flows (like `/events` or interacting with ambient components) begin with an ephemeral response visible only to the invoking user.

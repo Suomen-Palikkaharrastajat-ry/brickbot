@@ -32,7 +32,7 @@ All API outbound calls are routed through `src/http.rs`, which implements strict
 - **Methodology**:
   - Requires standard `key {api_key}` Authorization header.
   - Returns incredibly rich metadata, including a dictionary of `external_ids`.
-- **Optimization Status**: **Optimal, with one minor improvement possible**. The bot brilliantly parses the `external_ids` map to generate accurate BrickLink URLs (falling back to Rebrickable's design ID if missing). However, it does not currently use the `external_ids` map for generating the LEGO Pick-a-Brick URLs.
+- **Optimization Status**: **Optimal**. The bot brilliantly parses the `external_ids` map to generate accurate BrickLink URLs (falling back to Rebrickable's design ID if missing).
 
 ## 3. BrickLink API
 **File:** `src/links.rs`
@@ -42,6 +42,6 @@ All API outbound calls are routed through `src/http.rs`, which implements strict
 
 ## 4. LEGO.com (Official)
 **File:** `src/links.rs`
-- **Purpose**: Generating outbound links for retail search and "Pick a Brick".
+- **Purpose**: Generating outbound links for retail search.
 - **Methodology**: The bot dynamically builds locale-specific URLs (`https://www.lego.com/fi-fi/search?q={query}`).
 - **Optimization Status**: **Optimal**. LEGO does not offer a stable, public official API. Scraping or querying their internal GraphQL endpoints often results in aggressive bot-blocking or Cloudflare captchas. Relying on simple URL redirection is the safest method.
