@@ -327,24 +327,38 @@ pub async fn build_part_response_data(
     .await
     .ok()
     .map(|response| match response {
-        crate::commands::part::PartInteractionResponse::DirectMatch(content, embed) => {
+        crate::commands::part::PartInteractionResponse::DirectMatch(
+            content,
+            embed,
+            in_production,
+        ) => {
             let mut data = CreateInteractionResponseMessage::new()
                 .content(content)
                 .add_embed(*embed)
                 .ephemeral(preview_mode);
 
-            let options = vec![
+            let mut options = vec![
                 CreateSelectMenuOption::new("BrickLink", "bricklink")
                     .default_selection(default_services.contains(&"bricklink".to_string())),
+            ];
+            if in_production {
+                options.push(
+                    CreateSelectMenuOption::new("LEGO Pick a Brick", "lego")
+                        .default_selection(default_services.contains(&"lego".to_string())),
+                );
+            }
+            options.push(
                 CreateSelectMenuOption::new("Rebrickable", "rebrickable")
                     .default_selection(default_services.contains(&"rebrickable".to_string())),
-            ];
+            );
+
+            let max_vals = if in_production { 3 } else { 2 };
             let select = CreateSelectMenu::new(
                 format!("update_services_part:{query}"),
                 CreateSelectMenuKind::String { options },
             )
             .min_values(0)
-            .max_values(2)
+            .max_values(max_vals)
             .placeholder(t!("modal.services.placeholder", locale = locale));
 
             let mut components = vec![];
@@ -794,7 +808,7 @@ pub async fn handle_part_search_show(
     };
 
     let mut data = None;
-    if let Ok(crate::commands::part::PartInteractionResponse::DirectMatch(content_str, embed)) =
+    if let Ok(crate::commands::part::PartInteractionResponse::DirectMatch(content_str, embed, _)) =
         crate::commands::part::part_interaction(
             ctx,
             app_ctx.http.as_ref(),

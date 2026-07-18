@@ -5,7 +5,7 @@ use rust_i18n::t;
 use serenity::all::{Context, CreateEmbed, Framework};
 
 pub enum PartInteractionResponse {
-    DirectMatch(String, Box<CreateEmbed>),
+    DirectMatch(String, Box<CreateEmbed>, bool),
     SearchResults(Vec<serenity::all::CreateSelectMenuOption>),
 }
 
@@ -23,9 +23,11 @@ pub async fn part_interaction(
     let first_word = clean_query.split_whitespace().next().unwrap_or("");
     if let Ok(part) = fetch_part(http, first_word, limit).await {
         let (content, builder) = build_part_message(&part, first_word, locale, services);
+        let in_production = part.year_to >= chrono::Utc::now().naive_utc().year();
         return Ok(PartInteractionResponse::DirectMatch(
             content,
             Box::new(builder),
+            in_production,
         ));
     }
 
@@ -40,9 +42,11 @@ pub async fn part_interaction(
                     |_| Err(anyhow::anyhow!("Failed to fetch part details")),
                     |part| {
                         let (content, builder) = build_part_message(&part, p_num, locale, services);
+                        let in_production = part.year_to >= chrono::Utc::now().naive_utc().year();
                         Ok(PartInteractionResponse::DirectMatch(
                             content,
                             Box::new(builder),
+                            in_production,
                         ))
                     },
                 )
@@ -142,6 +146,20 @@ fn build_part_message(
         ));
     }
 
+    let in_production = part.year_to >= chrono::Utc::now().naive_utc().year();
+    if services.contains(&"lego".to_string()) && in_production {
+        let lego_id = part
+            .external_ids
+            .get("Lego")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_else(|| part.part_num.clone());
+        links_text.push(format!(
+            "**LEGO Pick a Brick**: {}",
+            crate::links::lego::pick_a_brick_url(&lego_id)
+        ));
+    }
+
     if services.contains(&"rebrickable".to_string()) {
         links_text.push(format!(
             "**Rebrickable**: {}",
@@ -203,10 +221,17 @@ mod tests {
             &part,
             "3001",
             "en-US",
-            &["bricklink".to_string(), "rebrickable".to_string()],
+            &[
+                "bricklink".to_string(),
+                "rebrickable".to_string(),
+                "lego".to_string(),
+            ],
         );
         assert!(content.contains("https://www.bricklink.com/v2/catalog/catalogitem.page?P=3001"));
         assert!(content.contains("https://rebrickable.com/parts/3001"));
+        assert!(
+            content.contains("https://www.lego.com/fi-fi/pick-and-build/pick-a-brick?query=98765")
+        );
 
         let embed_json = serde_json::to_value(embed).unwrap();
         assert_eq!(embed_json["title"], "Part: Brick 2x4 (3001)");
