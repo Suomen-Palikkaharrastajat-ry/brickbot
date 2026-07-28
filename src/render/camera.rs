@@ -42,12 +42,7 @@ fn basis(azimuth_deg: f32, elevation_deg: f32) -> (Vec3, Vec3, Vec3) {
     let el = elevation_deg.to_radians();
 
     // Direction from the model towards the camera.
-    let to_eye = Vec3::new(
-        el.cos() * az.sin(),
-        el.sin(),
-        el.cos() * az.cos(),
-    )
-    .normalize();
+    let to_eye = Vec3::new(el.cos() * az.sin(), el.sin(), el.cos() * az.cos()).normalize();
     let forward = -to_eye;
 
     // World up is +Y. If we are looking straight down, fall back to +Z so the
@@ -186,7 +181,10 @@ mod tests {
     #[test]
     fn looking_straight_down_does_not_degenerate() {
         let (right, up, forward) = basis(0.0, 90.0);
-        assert!((right.length() - 1.0).abs() < 1e-4, "degenerate right vector");
+        assert!(
+            (right.length() - 1.0).abs() < 1e-4,
+            "degenerate right vector"
+        );
         assert!((up.length() - 1.0).abs() < 1e-4, "degenerate up vector");
         assert!(
             (forward.length() - 1.0).abs() < 1e-4,

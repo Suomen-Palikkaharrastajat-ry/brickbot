@@ -35,9 +35,7 @@ pub fn describe_effect(op: &Op, effect: &Effect, locale: &str) -> String {
         Op::Replace { .. } => "command.build.replaced",
         Op::Select { .. } => "command.build.selected",
         Op::Group { .. } => "command.build.grouped",
-        Op::Landmark { .. } => {
-            return t!("command.build.named_point", locale = locale).to_string()
-        }
+        Op::Landmark { .. } => return t!("command.build.named_point", locale = locale).to_string(),
         Op::Rename { .. } => return t!("command.build.renamed", locale = locale).to_string(),
     };
 
@@ -48,24 +46,39 @@ pub fn describe_effect(op: &Op, effect: &Effect, locale: &str) -> String {
 #[must_use]
 pub fn describe_error(error: &LowerError, locale: &str) -> String {
     match error {
-        LowerError::UnresolvedReference(what) => {
-            t!("command.build.error_unresolved", locale = locale, what = what).to_string()
-        }
-        LowerError::UnknownName(name) => {
-            t!("command.build.error_unknown_name", locale = locale, name = name).to_string()
-        }
+        LowerError::UnresolvedReference(what) => t!(
+            "command.build.error_unresolved",
+            locale = locale,
+            what = what
+        )
+        .to_string(),
+        LowerError::UnknownName(name) => t!(
+            "command.build.error_unknown_name",
+            locale = locale,
+            name = name
+        )
+        .to_string(),
         LowerError::NothingToActOn => {
             t!("command.build.error_nothing", locale = locale).to_string()
         }
-        LowerError::UnknownStructure(name) => {
-            t!("command.build.error_unknown_structure", locale = locale, name = name).to_string()
-        }
-        LowerError::NeedsPartLookup { query, .. } => {
-            t!("command.build.error_needs_lookup", locale = locale, query = query).to_string()
-        }
-        LowerError::Unsupported(what) => {
-            t!("command.build.error_unsupported", locale = locale, what = what).to_string()
-        }
+        LowerError::UnknownStructure(name) => t!(
+            "command.build.error_unknown_structure",
+            locale = locale,
+            name = name
+        )
+        .to_string(),
+        LowerError::NeedsPartLookup { query, .. } => t!(
+            "command.build.error_needs_lookup",
+            locale = locale,
+            query = query
+        )
+        .to_string(),
+        LowerError::Unsupported(what) => t!(
+            "command.build.error_unsupported",
+            locale = locale,
+            what = what
+        )
+        .to_string(),
     }
 }
 
@@ -97,7 +110,11 @@ pub fn describe_parse_error(error: &ParseError, locale: &str) -> String {
 #[must_use]
 pub fn describe_answer(answer: &QueryAnswer, model: &Model, locale: &str) -> String {
     match answer {
-        QueryAnswer::Height { ldu, bricks, plates } => t!(
+        QueryAnswer::Height {
+            ldu,
+            bricks,
+            plates,
+        } => t!(
             "command.build.answer_height",
             locale = locale,
             name = &model.name,
@@ -134,9 +151,12 @@ pub fn describe_answer(answer: &QueryAnswer, model: &Model, locale: &str) -> Str
         )
         .to_string(),
 
-        QueryAnswer::Author(author) => {
-            t!("command.build.answer_author", locale = locale, author = author).to_string()
-        }
+        QueryAnswer::Author(author) => t!(
+            "command.build.answer_author",
+            locale = locale,
+            author = author
+        )
+        .to_string(),
 
         QueryAnswer::Changed(Some(what)) => {
             t!("command.build.answer_changed", locale = locale, what = what).to_string()
@@ -154,7 +174,12 @@ pub fn describe_answer(answer: &QueryAnswer, model: &Model, locale: &str) -> Str
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            t!("command.build.answer_inventory", locale = locale, list = list).to_string()
+            t!(
+                "command.build.answer_inventory",
+                locale = locale,
+                list = list
+            )
+            .to_string()
         }
 
         QueryAnswer::NothingToReport => {

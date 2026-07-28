@@ -102,9 +102,11 @@ impl Mesh {
     /// The bounding box of every vertex in the mesh.
     #[must_use]
     pub fn bounds(&self) -> crate::math::Aabb {
-        self.triangles.iter().fold(crate::math::Aabb::EMPTY, |b, t| {
-            b.expand(t.a).expand(t.b).expand(t.c)
-        })
+        self.triangles
+            .iter()
+            .fold(crate::math::Aabb::EMPTY, |b, t| {
+                b.expand(t.a).expand(t.b).expand(t.c)
+            })
     }
 }
 

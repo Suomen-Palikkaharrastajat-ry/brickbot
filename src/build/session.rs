@@ -62,7 +62,8 @@ pub async fn handle_build_command(
     app_ctx: &crate::workflows::AppContext,
     command: &CommandInteraction,
 ) -> anyhow::Result<()> {
-    let (locale, _) = crate::workflows::extract_locale_and_bot_name(app_ctx, command.guild_id).await;
+    let (locale, _) =
+        crate::workflows::extract_locale_and_bot_name(app_ctx, command.guild_id).await;
     let cfg = app_ctx
         .config
         .commands_for(command.guild_id.unwrap_or_default().get())
@@ -202,7 +203,16 @@ pub async fn handle_thread_message(
         let library = library_for(ctx, config).await;
 
         if outcome.needs_render {
-            post_render(ctx, msg.channel_id, &history, &library, &cfg, &session.id, &locale).await;
+            post_render(
+                ctx,
+                msg.channel_id,
+                &history,
+                &library,
+                &cfg,
+                &session.id,
+                &locale,
+            )
+            .await;
         }
         if outcome.needs_export && cfg.enable_io_export {
             post_export(ctx, msg.channel_id, &history, &library, &cfg, &locale).await;
@@ -319,7 +329,11 @@ async fn post_render(
 
     let model = history.materialize();
     let message = CreateMessage::new()
-        .content(build_cmd::render_caption(&model, history.revision(), locale))
+        .content(build_cmd::render_caption(
+            &model,
+            history.revision(),
+            locale,
+        ))
         .add_file(CreateAttachment::bytes(png, "model.png"))
         .components(vec![build_cmd::build_session_buttons(
             session_id,
@@ -351,12 +365,21 @@ async fn post_export(
         return;
     }
 
-    let thumbnail = render_model(history, library, cfg).await.unwrap_or_default();
+    let thumbnail = render_model(history, library, cfg)
+        .await
+        .unwrap_or_default();
     let bytes = super::export::to_io(&model, &thumbnail);
     let name = format!("{}.io", super::export::file_stem(&model.name));
 
     let message = CreateMessage::new()
-        .content(rust_i18n::t!("command.build.export_ready", locale = locale, name = &model.name).to_string())
+        .content(
+            rust_i18n::t!(
+                "command.build.export_ready",
+                locale = locale,
+                name = &model.name
+            )
+            .to_string(),
+        )
         .add_file(CreateAttachment::bytes(bytes, name));
 
     if let Err(e) = channel_id.send_message(&ctx.http, message).await {
@@ -416,11 +439,17 @@ pub async fn handle_build_button(
 ) -> anyhow::Result<()> {
     let guild_id = interaction.guild_id.unwrap_or_default().get();
     let cfg = app_ctx.config.commands_for(guild_id).build;
-    let locale = app_ctx.config.locale_for(guild_id).unwrap_or("en-US").to_string();
+    let locale = app_ctx
+        .config
+        .locale_for(guild_id)
+        .unwrap_or("en-US")
+        .to_string();
 
-    let Some(session) =
-        db::build::get_active_session_by_channel(&app_ctx.db, &interaction.channel_id.get().to_string())
-            .await?
+    let Some(session) = db::build::get_active_session_by_channel(
+        &app_ctx.db,
+        &interaction.channel_id.get().to_string(),
+    )
+    .await?
     else {
         return Ok(());
     };

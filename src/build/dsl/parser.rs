@@ -593,7 +593,8 @@ impl<'a> Parser<'a> {
         });
 
         match direction {
-            Some(direction) => {
+            Some(direction) =>
+            {
                 #[allow(clippy::cast_possible_truncation)]
                 Some(Modifier::Distance {
                     direction,
@@ -894,8 +895,15 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
             }
             ObjectExpr::Reference(reference)
         }
-        Verb::Move | Verb::Remove | Verb::Rotate | Verb::Raise | Verb::Lower | Verb::Mirror
-        | Verb::Duplicate | Verb::Attach | Verb::Repeat => {
+        Verb::Move
+        | Verb::Remove
+        | Verb::Rotate
+        | Verb::Raise
+        | Verb::Lower
+        | Verb::Mirror
+        | Verb::Duplicate
+        | Verb::Attach
+        | Verb::Repeat => {
             let reference = parser.reference().unwrap_or(Ref::Last);
             ObjectExpr::Reference(reference)
         }
@@ -1124,10 +1132,7 @@ mod tests {
     #[test]
     fn parses_movement_with_and_without_units() {
         let c = command("Move the red brick one stud east");
-        assert_eq!(
-            c.distance(),
-            Some((Direction::East, 1, Unit::Stud))
-        );
+        assert_eq!(c.distance(), Some((Direction::East, 1, Unit::Stud)));
 
         let c = command("Move east 3 studs");
         assert_eq!(c.distance(), Some((Direction::East, 3, Unit::Stud)));
@@ -1227,10 +1232,7 @@ mod tests {
         assert_eq!(c.target_color, Some(320));
 
         let c = command("Replace 2x4 bricks with 2x2 bricks");
-        assert_eq!(
-            c.target_part.as_ref().and_then(|s| s.size),
-            Some((2, 2))
-        );
+        assert_eq!(c.target_part.as_ref().and_then(|s| s.size), Some((2, 2)));
     }
 
     // --- High-level structures --------------------------------------------

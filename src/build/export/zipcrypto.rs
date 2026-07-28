@@ -198,7 +198,11 @@ mod tests {
 
         let cipher = encrypt(plaintext, STUDIO_PASSWORD, crc);
         assert_eq!(cipher.len(), plaintext.len() + 12);
-        assert_ne!(&cipher[12..], plaintext.as_slice(), "it must actually encrypt");
+        assert_ne!(
+            &cipher[12..],
+            plaintext.as_slice(),
+            "it must actually encrypt"
+        );
 
         assert_eq!(decrypt(&cipher, STUDIO_PASSWORD), plaintext);
     }

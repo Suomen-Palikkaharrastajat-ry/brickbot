@@ -92,7 +92,14 @@ impl Flattener<'_> {
         self.out.push(MeshTriangle { color, a, b, c });
     }
 
-    fn walk(&mut self, lines: &[LdrawLine], transform: &Mat4, color: u16, depth: usize, path: &mut Vec<String>) {
+    fn walk(
+        &mut self,
+        lines: &[LdrawLine],
+        transform: &Mat4,
+        color: u16,
+        depth: usize,
+        path: &mut Vec<String>,
+    ) {
         if depth > self.limits.max_depth {
             self.truncated = true;
             return;
@@ -104,7 +111,12 @@ impl Flattener<'_> {
                 return;
             }
             match line {
-                LdrawLine::Triangle { color: c, a, b, c: third } => {
+                LdrawLine::Triangle {
+                    color: c,
+                    a,
+                    b,
+                    c: third,
+                } => {
                     let resolved = resolve_inherited(*c, color);
                     self.push(
                         resolved,
@@ -251,10 +263,7 @@ mod tests {
     #[test]
     fn composes_nested_transforms() {
         // outer places inner at x=100; inner places a triangle at x=5.
-        let cache = cache_of(&[(
-            "inner.dat",
-            "3 16 5 0 0 6 0 0 5 1 0\n",
-        )]);
+        let cache = cache_of(&[("inner.dat", "3 16 5 0 0 6 0 0 5 1 0\n")]);
         let lines = parse_file("1 16 100 0 0 1 0 0 0 1 0 0 0 1 inner.dat\n");
         let result = flatten(&lines, &cache, 4, FlattenLimits::default());
         assert_eq!(result.mesh.len(), 1);
@@ -283,18 +292,15 @@ mod tests {
 
     #[test]
     fn edges_and_metadata_produce_no_geometry() {
-        let lines = parse_file(
-            "0 BFC CERTIFY CCW\n2 24 0 0 0 1 0 0\n5 24 0 0 0 1 0 0 0 1 0 0 0 1\n",
-        );
+        let lines =
+            parse_file("0 BFC CERTIFY CCW\n2 24 0 0 0 1 0 0\n5 24 0 0 0 1 0 0 0 1 0 0 0 1\n");
         let result = flatten(&lines, &PartCache::new(), 4, FlattenLimits::default());
         assert!(result.mesh.is_empty());
     }
 
     #[test]
     fn missing_subfiles_are_reported_not_fatal() {
-        let lines = parse_file(
-            "3 4 0 0 0 1 0 0 0 1 0\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 absent.dat\n",
-        );
+        let lines = parse_file("3 4 0 0 0 1 0 0 0 1 0\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 absent.dat\n");
         let result = flatten(&lines, &PartCache::new(), 4, FlattenLimits::default());
         assert_eq!(result.mesh.len(), 1);
         assert_eq!(result.missing, vec!["absent.dat".to_string()]);
@@ -303,7 +309,10 @@ mod tests {
     #[test]
     fn cyclic_references_terminate() {
         let cache = cache_of(&[
-            ("a.dat", "1 16 0 0 0 1 0 0 0 1 0 0 0 1 b.dat\n3 4 0 0 0 1 0 0 0 1 0\n"),
+            (
+                "a.dat",
+                "1 16 0 0 0 1 0 0 0 1 0 0 0 1 b.dat\n3 4 0 0 0 1 0 0 0 1 0\n",
+            ),
             ("b.dat", "1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n"),
         ]);
         let lines = parse_file("1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n");
@@ -353,7 +362,10 @@ mod tests {
         );
         assert_eq!(pending_parts(&lines, &cache), vec!["b.dat".to_string()]);
 
-        cache.insert("b.dat".to_string(), Arc::new(parse_file("3 4 0 0 0 1 0 0 0 1 0\n")));
+        cache.insert(
+            "b.dat".to_string(),
+            Arc::new(parse_file("3 4 0 0 0 1 0 0 0 1 0\n")),
+        );
         assert!(pending_parts(&lines, &cache).is_empty());
     }
 
@@ -363,9 +375,8 @@ mod tests {
             "a.dat",
             "1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 x.dat\n",
         )]);
-        let lines = parse_file(
-            "1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n",
-        );
+        let lines =
+            parse_file("1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n");
         assert_eq!(pending_parts(&lines, &cache), vec!["x.dat".to_string()]);
     }
 

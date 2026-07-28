@@ -181,7 +181,11 @@ pub async fn load_history(
 
 /// Records how many revisions are currently in effect, so undo and redo
 /// survive a restart.
-pub async fn set_cursor(db: &SqlitePool, session_id: &str, cursor: usize) -> Result<(), sqlx::Error> {
+pub async fn set_cursor(
+    db: &SqlitePool,
+    session_id: &str,
+    cursor: usize,
+) -> Result<(), sqlx::Error> {
     // The cursor is expressed by deleting nothing and instead marking the tail
     // skipped, so a restart reproduces exactly what the thread last saw.
     sqlx::query("UPDATE build_revisions SET skipped = (n >= ?) WHERE session_id = ? AND n >= ?")
@@ -460,10 +464,18 @@ mod tests {
             .unwrap()
             .is_some());
         assert_eq!(
-            load_history(&db, &live.id, "Castle").await.unwrap().ops.len(),
+            load_history(&db, &live.id, "Castle")
+                .await
+                .unwrap()
+                .ops
+                .len(),
             1
         );
-        assert!(load_history(&db, "old", "Old").await.unwrap().ops.is_empty());
+        assert!(load_history(&db, "old", "Old")
+            .await
+            .unwrap()
+            .ops
+            .is_empty());
     }
 
     #[tokio::test]

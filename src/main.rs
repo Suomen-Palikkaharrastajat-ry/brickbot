@@ -25,12 +25,12 @@ mod zulip;
 use clap::Parser;
 use config::Config;
 use serenity::all::{
-    Client, Command, Context, CreateMessage, EventHandler, GatewayIntents, GuildId, Interaction,
-    Message, Ready, async_trait,
+    async_trait, Client, Command, Context, CreateMessage, EventHandler, GatewayIntents, GuildId,
+    Interaction, Message, Ready,
 };
 use serenity::prelude::*;
-use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::SqlitePool;
 use std::env;
 use std::str::FromStr;
 
@@ -677,6 +677,30 @@ impl EventHandler for Handler {
     }
 }
 
+/// Installs the `LDraw` part library and exits.
+///
+/// Split out of `main` because it is a self-contained one-shot: it needs
+/// neither the database nor a Discord token.
+async fn install_ldraw_library(config: &Config) -> ! {
+    let http_client = crate::http::HttpClient::new();
+    match crate::ldraw::library::sync(&http_client, &config.ldraw).await {
+        Ok(report) => {
+            tracing::info!(
+                "Installed {} LDraw files ({} bytes) into {}; skipped {} non-redistributable file(s).",
+                report.files_written,
+                report.bytes_written,
+                config.ldraw.data_dir,
+                report.skipped_non_redistributable
+            );
+            std::process::exit(0);
+        }
+        Err(e) => {
+            tracing::error!("Failed to install the LDraw library: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 async fn setup_database(database_url: &str) -> anyhow::Result<SqlitePool> {
     let connect_options = SqliteConnectOptions::from_str(database_url)?.create_if_missing(true);
 
@@ -782,23 +806,7 @@ async fn main() -> anyhow::Result<()> {
     // Installing the part library needs neither a database nor a Discord
     // token, so it runs before either is set up.
     if cli.fetch_ldraw {
-        let http_client = crate::http::HttpClient::new();
-        match crate::ldraw::library::sync(&http_client, &config.ldraw).await {
-            Ok(report) => {
-                tracing::info!(
-                    "Installed {} LDraw files ({} bytes) into {}; skipped {} non-redistributable file(s).",
-                    report.files_written,
-                    report.bytes_written,
-                    config.ldraw.data_dir,
-                    report.skipped_non_redistributable
-                );
-                std::process::exit(0);
-            }
-            Err(e) => {
-                tracing::error!("Failed to install the LDraw library: {e}");
-                std::process::exit(1);
-            }
-        }
+        install_ldraw_library(&config).await;
     }
 
     let database_url =
@@ -825,8 +833,8 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     tracing::debug!("Successfully cleaned up expired rows.");
                 }
-                #[allow(clippy::duration_suboptimal_units)]
-                tokio::time::sleep(std::time::Duration::from_secs(86400)).await;
+                // Once a day.
+                tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
             }
         });
     }

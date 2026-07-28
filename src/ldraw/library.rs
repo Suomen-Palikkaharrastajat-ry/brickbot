@@ -157,10 +157,7 @@ pub fn is_installed(data_dir: &Path) -> bool {
 /// Downloads the library and installs it into the configured directory.
 pub async fn sync(http: &dyn HttpProvider, cfg: &LdrawConfig) -> anyhow::Result<SyncReport> {
     let data_dir = PathBuf::from(&cfg.data_dir);
-    tracing::info!(
-        "Downloading the LDraw library from {} ...",
-        cfg.library_url
-    );
+    tracing::info!("Downloading the LDraw library from {} ...", cfg.library_url);
 
     // The archive is far larger than any ordinary API response, so it gets its
     // own limit rather than `resource_limits.max_http_body_bytes`, and it
@@ -186,10 +183,8 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "brickbot-ldraw-test-{tag}-{}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("brickbot-ldraw-test-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).unwrap();
             Self(path)
@@ -223,7 +218,8 @@ mod tests {
     }
 
     const BRICK: &str = "0 Brick 2 x 4\n0 !LICENSE Redistributable under CCAL version 2.0\n3 16 0 0 0 1 0 0 0 1 0\n";
-    const STUD: &str = "0 Stud\n0 !LICENSE Redistributable under CCAL version 2.0\n3 16 0 0 0 1 0 0 0 1 0\n";
+    const STUD: &str =
+        "0 Stud\n0 !LICENSE Redistributable under CCAL version 2.0\n3 16 0 0 0 1 0 0 0 1 0\n";
 
     #[test]
     fn extracts_parts_and_primitives_into_the_data_dir() {
@@ -264,10 +260,7 @@ mod tests {
         let dir = TempDir::new("licence");
         let forbidden =
             "0 Secret Part\n0 !LICENSE Not redistributable : see NonCAreadme.txt\n3 16 0 0 0 1 0 0 0 1 0\n";
-        let archive = make_archive(&[
-            ("parts/3001.dat", BRICK),
-            ("parts/9999.dat", forbidden),
-        ]);
+        let archive = make_archive(&[("parts/3001.dat", BRICK), ("parts/9999.dat", forbidden)]);
 
         let report = extract_archive(&archive, dir.path()).unwrap();
         assert_eq!(report.files_written, 1);

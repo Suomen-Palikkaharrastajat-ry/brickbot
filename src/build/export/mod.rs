@@ -161,11 +161,7 @@ mod tests {
 
     #[test]
     fn a_quarter_turn_writes_its_rotation_matrix() {
-        let model = model_with(vec![placement(
-            4,
-            IVec3::ZERO,
-            Orientation::new(1, false),
-        )]);
+        let model = model_with(vec![placement(4, IVec3::ZERO, Orientation::new(1, false))]);
         let line = to_ldr(&model)
             .lines()
             .find(|l| l.starts_with("1 "))

@@ -99,21 +99,17 @@ fn placement_bounds(placement: &Placement) -> (Vec3, Vec3) {
         // it is visible rather than silently missing.
         let stud = super::units::LDU_STUD;
         (
-            placement.pos.sub(super::units::IVec3::new(stud / 2, stud, stud / 2)),
-            placement.pos.add(super::units::IVec3::new(stud / 2, 0, stud / 2)),
+            placement
+                .pos
+                .sub(super::units::IVec3::new(stud / 2, stud, stud / 2)),
+            placement
+                .pos
+                .add(super::units::IVec3::new(stud / 2, 0, stud / 2)),
         )
     });
 
-    let a = Vec3::new(
-        min.to_vec3().x,
-        -max.to_vec3().y,
-        min.to_vec3().z,
-    );
-    let b = Vec3::new(
-        max.to_vec3().x,
-        -min.to_vec3().y,
-        max.to_vec3().z,
-    );
+    let a = Vec3::new(min.to_vec3().x, -max.to_vec3().y, min.to_vec3().z);
+    let b = Vec3::new(max.to_vec3().x, -min.to_vec3().y, max.to_vec3().z);
     (a, b)
 }
 
@@ -252,10 +248,7 @@ mod tests {
     #[test]
     fn a_stacked_brick_appears_above_the_one_below() {
         let lower = crate::render::bounds_of(&box_triangles(&placement(4, IVec3::ZERO)));
-        let upper = crate::render::bounds_of(&box_triangles(&placement(
-            4,
-            IVec3::new(0, -24, 0),
-        )));
+        let upper = crate::render::bounds_of(&box_triangles(&placement(4, IVec3::new(0, -24, 0))));
         assert!(
             upper.min.y >= lower.max.y - 0.01,
             "the stacked brick should sit on top, not inside"
@@ -296,7 +289,10 @@ mod tests {
     #[tokio::test]
     async fn mesh_mode_falls_back_to_boxes_without_an_installed_library() {
         let mut model = Model::new("t");
-        model.placements = vec![placement(4, IVec3::ZERO), placement(14, IVec3::new(100, 0, 0))];
+        model.placements = vec![
+            placement(4, IVec3::ZERO),
+            placement(14, IVec3::new(100, 0, 0)),
+        ];
 
         let (triangles, report) = build_scene(&model, &empty_library(), SceneMode::Meshes).await;
         assert_eq!(triangles.len(), 24, "both placements drawn as boxes");
@@ -359,7 +355,8 @@ mod visual_check {
             model.height_in_bricks()
         );
 
-        let (triangles, report) = build_scene(&model, &empty_library_for_visual(), SceneMode::Boxes).await;
+        let (triangles, report) =
+            build_scene(&model, &empty_library_for_visual(), SceneMode::Boxes).await;
         eprintln!("scene: {} triangles, {report:?}", triangles.len());
 
         let png = crate::render::render_png(&triangles, &crate::render::RenderOptions::default())

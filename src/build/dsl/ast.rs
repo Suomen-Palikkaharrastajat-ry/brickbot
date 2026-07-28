@@ -40,10 +40,8 @@ impl PartSpec {
             return part_num.clone();
         }
         let kind = self.kind.map_or("brick", PartKind::as_str);
-        self.size.map_or_else(
-            || kind.to_string(),
-            |(w, d)| format!("{kind} {w} x {d}"),
-        )
+        self.size
+            .map_or_else(|| kind.to_string(), |(w, d)| format!("{kind} {w} x {d}"))
     }
 }
 
@@ -86,7 +84,10 @@ pub enum Location {
     /// `under the roof`
     Under(Ref),
     /// `north of the window`
-    Direction { direction: Direction, of: Ref },
+    Direction {
+        direction: Direction,
+        of: Ref,
+    },
 }
 
 /// Anything that qualifies a command.
@@ -354,14 +355,8 @@ mod tests {
             target_part: None,
         };
 
-        assert_eq!(
-            command.extent(ExtentAxis::Length),
-            Some((10, Unit::Stud))
-        );
-        assert_eq!(
-            command.extent(ExtentAxis::Height),
-            Some((6, Unit::Brick))
-        );
+        assert_eq!(command.extent(ExtentAxis::Length), Some((10, Unit::Stud)));
+        assert_eq!(command.extent(ExtentAxis::Height), Some((6, Unit::Brick)));
         assert_eq!(command.extent(ExtentAxis::Width), None);
         assert_eq!(command.quantity(), Some(3));
         assert_eq!(command.distance(), None);

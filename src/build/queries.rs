@@ -65,10 +65,9 @@ const fn height_answer(ldu: i32) -> QueryAnswer {
 pub fn inventory(model: &Model) -> Vec<(PartRef, u16, usize)> {
     let mut counts: Vec<(PartRef, u16, usize)> = Vec::new();
     for placement in &model.placements {
-        if let Some(entry) = counts
-            .iter_mut()
-            .find(|(part, color, _)| part.ldraw_id == placement.part.ldraw_id && *color == placement.color)
-        {
+        if let Some(entry) = counts.iter_mut().find(|(part, color, _)| {
+            part.ldraw_id == placement.part.ldraw_id && *color == placement.color
+        }) {
             entry.2 += 1;
         } else {
             counts.push((placement.part.clone(), placement.color, 1));
@@ -79,11 +78,7 @@ pub fn inventory(model: &Model) -> Vec<(PartRef, u16, usize)> {
 }
 
 /// Answers a question about the model.
-pub fn answer(
-    model: &Model,
-    history: &History,
-    query: &Query,
-) -> Result<QueryAnswer, LowerError> {
+pub fn answer(model: &Model, history: &History, query: &Query) -> Result<QueryAnswer, LowerError> {
     match query {
         Query::HowTall(reference) => match reference {
             None => Ok(height_answer(model.height_ldu())),
@@ -357,7 +352,11 @@ mod tests {
     fn inventory_groups_by_part_and_colour() {
         let mut model = Model::new("t");
         for i in 0..3 {
-            apply(&mut model, i, &add(4, IVec3::new(i32::try_from(i).unwrap() * 100, 0, 0)));
+            apply(
+                &mut model,
+                i,
+                &add(4, IVec3::new(i32::try_from(i).unwrap() * 100, 0, 0)),
+            );
         }
         apply(&mut model, 9, &add(14, IVec3::new(500, 0, 0)));
 

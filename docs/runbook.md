@@ -27,6 +27,22 @@ All other feature configurations (intervals, resource limits, integrations) live
   cargo run --bin brickbot -- --check-config --config config.toml
   ```
 
+## LDraw Part Library
+
+The `/build` command renders models from the LDraw part library. The library is **not** bundled with the binary and is **not** downloaded during a render; install it once:
+
+```bash
+make fetch-ldraw            # or: cargo run --bin brickbot -- --fetch-ldraw
+```
+
+- It is installed into `[ldraw] data_dir` (default `data/ldraw`), from `[ldraw] library_url`.
+- Afterwards `data/ldraw/parts/`, `data/ldraw/p/` and `data/ldraw/.ldraw-sync.json` should exist. The lockfile records what was installed.
+- Files marked *Not redistributable* are skipped and never written to disk; the count appears in the log line and in the lockfile.
+- **Until the library is installed `/build` still works**, rendering every part as a plain box and saying so once per session. Nothing else is affected.
+- Re-run the command to update the library after a new LDraw release.
+
+See [ADR-003](ADR-003-LDraw-Rendering-And-Studio-Export.md) for why it is installed rather than bundled.
+
 ## Database Backup, Restore, and Migration
 
 The bot uses SQLite (`data/bot.db`).

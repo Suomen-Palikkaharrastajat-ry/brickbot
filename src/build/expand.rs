@@ -195,7 +195,10 @@ pub fn expand(
                     let x = step_x * col as i32;
                     #[allow(clippy::cast_possible_wrap)]
                     let far = step_z * (along.saturating_sub(1)) as i32;
-                    ops.push(make(start.add(IVec3::new(x, 0, 0)).add(up), Orientation::DEFAULT));
+                    ops.push(make(
+                        start.add(IVec3::new(x, 0, 0)).add(up),
+                        Orientation::DEFAULT,
+                    ));
                     if along > 1 {
                         ops.push(make(
                             start.add(IVec3::new(x, 0, far)).add(up),
@@ -208,7 +211,10 @@ pub fn expand(
                     let z = step_z * row as i32;
                     #[allow(clippy::cast_possible_wrap)]
                     let far = step_x * (across.saturating_sub(1)) as i32;
-                    ops.push(make(start.add(IVec3::new(0, 0, z)).add(up), Orientation::DEFAULT));
+                    ops.push(make(
+                        start.add(IVec3::new(0, 0, z)).add(up),
+                        Orientation::DEFAULT,
+                    ));
                     if across > 1 {
                         ops.push(make(
                             start.add(IVec3::new(far, 0, z)).add(up),
@@ -413,7 +419,10 @@ mod tests {
     #[test]
     fn every_wall_brick_belongs_to_the_wall_group() {
         let model = run(&["Build a wall 4 studs long 1 brick high"]);
-        assert!(model.placements.iter().all(|p| p.group.as_deref() == Some("wall")));
+        assert!(model
+            .placements
+            .iter()
+            .all(|p| p.group.as_deref() == Some("wall")));
         assert_eq!(
             model.resolve_group("wall").map(|ids| ids.len()),
             Some(model.len())
@@ -438,7 +447,10 @@ mod tests {
         }
         assert_eq!(history.materialize().len(), 12);
         history.undo();
-        assert!(history.materialize().is_empty(), "one undo removes the wall");
+        assert!(
+            history.materialize().is_empty(),
+            "one undo removes the wall"
+        );
     }
 
     #[test]
@@ -511,7 +523,6 @@ mod tests {
             hollow.bounds().map(|(min, max)| max.x - min.x),
             solid.bounds().map(|(min, max)| max.x - min.x)
         );
-
     }
 
     #[test]
@@ -568,12 +579,8 @@ mod tests {
 
     #[test]
     fn studs_convert_to_part_counts_by_rounding_up() {
-        let brick = crate::build::parts::lookup(
-            crate::build::model::PartKind::Brick,
-            2,
-            4,
-        )
-        .unwrap();
+        let brick =
+            crate::build::parts::lookup(crate::build::model::PartKind::Brick, 2, 4).unwrap();
         // A 2-wide brick spans 2 studs, so 8 studs needs 4 of them.
         assert_eq!(studs_to_count(8, &brick, Direction::East), 4);
         // 7 studs still needs 4, rounded up.
