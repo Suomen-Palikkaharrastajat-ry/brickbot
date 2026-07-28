@@ -7,10 +7,12 @@
 
 pub mod dsl;
 pub mod expand;
+pub mod export;
 pub mod lower;
 pub mod model;
 pub mod ops;
 pub mod parts;
+pub mod queries;
 pub mod scene;
 pub mod units;
 
