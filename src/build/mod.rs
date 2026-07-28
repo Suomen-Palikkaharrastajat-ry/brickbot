@@ -5,6 +5,7 @@
 //! `session` is pure and unit-testable, with no serenity, reqwest or sqlx
 //! types crossing into it.
 
+pub mod dispatch;
 pub mod dsl;
 pub mod expand;
 pub mod export;
@@ -13,7 +14,9 @@ pub mod model;
 pub mod ops;
 pub mod parts;
 pub mod queries;
+pub mod report;
 pub mod scene;
+pub mod session;
 pub mod units;
 
 pub use lower::{lower_command, LowerError};

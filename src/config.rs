@@ -115,6 +115,8 @@ pub struct CommandsConfig {
     pub part: PartCommandConfig,
     #[serde(default)]
     pub diagnostics: DiagnosticsCommandConfig,
+    #[serde(default)]
+    pub build: BuildCommandConfig,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -124,6 +126,7 @@ pub struct GuildCommandsConfig {
     pub set: Option<SetCommandConfig>,
     pub part: Option<PartCommandConfig>,
     pub diagnostics: Option<DiagnosticsCommandConfig>,
+    pub build: Option<BuildCommandConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -180,6 +183,67 @@ impl Default for PartCommandConfig {
 pub struct DiagnosticsCommandConfig {
     #[serde(default)]
     pub enabled: bool,
+}
+
+/// Settings for the collaborative `/build` command.
+#[derive(Deserialize, Debug, Clone)]
+pub struct BuildCommandConfig {
+    /// Off by default, like `events` and `diagnostics`: it opens threads and
+    /// listens to chat, so it should be switched on deliberately.
+    #[serde(default)]
+    pub enabled: bool,
+    /// How long a session lives without activity.
+    #[serde(default = "default_build_session_ttl_hours")]
+    pub session_ttl_hours: u32,
+    #[serde(default = "default_build_render_width")]
+    pub render_width: u32,
+    #[serde(default = "default_build_render_height")]
+    pub render_height: u32,
+    /// Render at this multiple and downsample, for cheap anti-aliasing.
+    #[serde(default = "default_build_supersample")]
+    pub supersample: u32,
+    /// A burst of commands coalesces into one render after this long, so four
+    /// people typing at once produce one picture rather than four.
+    #[serde(default = "default_build_render_debounce_ms")]
+    pub render_debounce_ms: u64,
+    /// Turn off if `BrickLink` Studio rejects our `.io` container; the export
+    /// then falls back to a plain `.ldr`, which Studio imports natively.
+    #[serde(default = "default_true")]
+    pub enable_io_export: bool,
+}
+
+impl Default for BuildCommandConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            session_ttl_hours: default_build_session_ttl_hours(),
+            render_width: default_build_render_width(),
+            render_height: default_build_render_height(),
+            supersample: default_build_supersample(),
+            render_debounce_ms: default_build_render_debounce_ms(),
+            enable_io_export: true,
+        }
+    }
+}
+
+const fn default_build_session_ttl_hours() -> u32 {
+    24
+}
+
+const fn default_build_render_width() -> u32 {
+    800
+}
+
+const fn default_build_render_height() -> u32 {
+    600
+}
+
+const fn default_build_supersample() -> u32 {
+    2
+}
+
+const fn default_build_render_debounce_ms() -> u64 {
+    1200
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -426,6 +490,9 @@ impl Config {
             diagnostics: g
                 .and_then(|c| c.diagnostics.clone())
                 .unwrap_or_else(|| self.commands.diagnostics.clone()),
+            build: g
+                .and_then(|c| c.build.clone())
+                .unwrap_or_else(|| self.commands.build.clone()),
         }
     }
 
@@ -440,6 +507,45 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_command_config_defaults_are_sane() {
+        let config: Config = toml::from_str("").unwrap();
+        let build = &config.commands.build;
+        // Off unless switched on deliberately, like events and diagnostics.
+        assert!(!build.enabled);
+        assert!(build.session_ttl_hours > 0);
+        assert!(build.render_width >= 100 && build.render_height >= 100);
+        assert!(build.supersample >= 1);
+        assert!(build.render_debounce_ms > 0);
+        assert!(build.enable_io_export);
+    }
+
+    #[test]
+    fn build_command_can_be_enabled_and_overridden_per_guild() {
+        let toml_str = r"
+        [commands.build]
+        enabled = true
+        render_width = 1200
+
+        [[guilds]]
+        guild_id = 123
+
+        [guilds.commands.build]
+        enabled = false
+        ";
+        let config: Config = toml::from_str(toml_str).unwrap();
+
+        assert!(config.commands.build.enabled);
+        assert_eq!(config.commands.build.render_width, 1200);
+        // Unset keys still take their defaults.
+        assert_eq!(config.commands.build.render_height, 600);
+
+        // The guild turns it back off.
+        assert!(!config.commands_for(123).build.enabled);
+        // An unlisted guild inherits the global setting.
+        assert!(config.commands_for(999).build.enabled);
+    }
 
     #[test]
     fn ldraw_config_defaults_are_sane() {

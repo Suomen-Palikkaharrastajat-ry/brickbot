@@ -169,6 +169,17 @@ pub async fn handle_component_interaction(
         "workflow_part_search" => {
             search::handle_workflow_part_search(ctx, &app_ctx, interaction, arg, &locale).await
         }
+        // The /build render buttons all carry the session id as their argument.
+        "build_export" | "build_undo" | "build_finish" => {
+            crate::build::session::handle_build_button(
+                ctx,
+                &app_ctx,
+                interaction,
+                base_id,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
         "wizard_events_toggle_visibility" => {
             events::handle_wizard_events_toggle_visibility(
                 ctx,
