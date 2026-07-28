@@ -1,6 +1,7 @@
 use sqlx::SqlitePool;
 
 pub mod ambient;
+pub mod build;
 pub mod events;
 pub mod feed;
 pub mod inputs;
@@ -8,6 +9,7 @@ pub mod notifications;
 pub mod workflow_sessions;
 
 pub use ambient::*;
+pub use build::*;
 pub use events::*;
 pub use feed::*;
 pub use inputs::*;
@@ -48,6 +50,16 @@ pub async fn cleanup_expired_rows(db: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(db)
         .await?
         .rows_affected();
+
+    // Build sessions carry their own revision log, so they are swept together.
+    total_deleted += crate::db::build::cleanup_expired_sessions(db).await?;
+
+    // Expired workflow sessions were never purged by anything; sweep them too.
+    total_deleted +=
+        sqlx::query("DELETE FROM workflow_sessions WHERE expires_at < CURRENT_TIMESTAMP")
+            .execute(db)
+            .await?
+            .rows_affected();
 
     let _ = sqlx::query("PRAGMA optimize").execute(db).await;
 
