@@ -76,6 +76,16 @@ impl SelectPredicate {
     }
 }
 
+/// One part in a multi-placement operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Placed {
+    pub part: PartRef,
+    pub color: u16,
+    pub pos: IVec3,
+    #[serde(default)]
+    pub orientation: Orientation,
+}
+
 /// A single atomic edit.
 ///
 /// Targets are stored as concrete [`PlacementId`]s rather than as references,
@@ -83,6 +93,17 @@ impl SelectPredicate {
 /// exist quietly does nothing, which keeps replay total.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Op {
+    /// Several placements created together.
+    ///
+    /// A structure such as `Build a wall 10 studs long 6 bricks high.` is one
+    /// operation, not sixty: it is a single undo step, and the placements get
+    /// sequence numbers 0..n within the same revision so each brick still has
+    /// its own stable id and stays individually editable.
+    AddMany {
+        placements: Vec<Placed>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+    },
     Add {
         part: PartRef,
         color: u16,
@@ -161,6 +182,36 @@ impl Effect {
 #[allow(clippy::too_many_lines)]
 pub fn apply(model: &mut Model, rev: u32, op: &Op) -> Effect {
     match op {
+        Op::AddMany { placements, group } => {
+            let mut added = Vec::with_capacity(placements.len());
+            for (seq, placed) in placements.iter().enumerate() {
+                #[allow(clippy::cast_possible_truncation)]
+                let id = PlacementId::new(rev, seq as u32);
+                model.placements.push(Placement {
+                    id,
+                    part: placed.part.clone(),
+                    color: placed.color,
+                    pos: placed.pos,
+                    orientation: placed.orientation,
+                    group: group.clone(),
+                });
+                added.push(id);
+            }
+            if let Some(name) = group {
+                model
+                    .groups
+                    .entry(name.to_lowercase())
+                    .or_default()
+                    .extend(added.iter().copied());
+            }
+            model.touch(added.clone());
+            Effect {
+                no_op: added.is_empty(),
+                added,
+                affected: Vec::new(),
+            }
+        }
+
         Op::Add {
             part,
             color,
@@ -503,6 +554,57 @@ mod tests {
         assert_eq!(model.placements[0].id, PlacementId::new(7, 0));
         assert_eq!(model.placements[2].id, PlacementId::new(7, 2));
         assert_eq!(model.placements[2].pos, IVec3::new(0, -48, 0));
+    }
+
+    #[test]
+    fn add_many_gives_every_placement_its_own_sequence_number() {
+        // Regression: an expanded structure used to emit one Op::Add per
+        // brick, and every one of them claimed PlacementId(rev, 0). Later
+        // edits then all landed on the same brick.
+        let mut model = Model::new("t");
+        let op = Op::AddMany {
+            placements: (0..4)
+                .map(|i| Placed {
+                    part: brick(),
+                    color: 4,
+                    pos: IVec3::new(i * 100, 0, 0),
+                    orientation: Orientation::DEFAULT,
+                })
+                .collect(),
+            group: Some("wall".to_string()),
+        };
+        let effect = apply(&mut model, 3, &op);
+
+        assert_eq!(model.len(), 4);
+        assert_eq!(effect.added.len(), 4);
+        let ids: std::collections::HashSet<_> = effect.added.iter().collect();
+        assert_eq!(ids.len(), 4, "placement ids must be distinct");
+        assert_eq!(model.placements[0].id, PlacementId::new(3, 0));
+        assert_eq!(model.placements[3].id, PlacementId::new(3, 3));
+        // Every one belongs to the structure's group.
+        assert_eq!(model.resolve_group("wall").map(|ids| ids.len()), Some(4));
+    }
+
+    #[test]
+    fn add_many_is_a_single_undo_step() {
+        let mut history = History::new("t");
+        history.push(
+            Op::AddMany {
+                placements: (0..5)
+                    .map(|i| Placed {
+                        part: brick(),
+                        color: 4,
+                        pos: IVec3::new(i * 100, 0, 0),
+                        orientation: Orientation::DEFAULT,
+                    })
+                    .collect(),
+                group: None,
+            },
+            "alice",
+        );
+        assert_eq!(history.materialize().len(), 5);
+        history.undo();
+        assert!(history.materialize().is_empty(), "one undo removes them all");
     }
 
     #[test]

@@ -54,6 +54,13 @@ pub enum SentenceOutcome {
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    /// One past the last token this parser may read.
+    ///
+    /// Temporarily narrowed when a trailing token has already been claimed —
+    /// `Paint selection dark tan.` puts the colour at the very end, so the
+    /// object must be parsed from everything *before* it or the part
+    /// description would swallow the colour.
+    end: usize,
     sentence: &'a str,
 }
 
@@ -62,19 +69,29 @@ impl<'a> Parser<'a> {
         Self {
             tokens: &sentence.tokens,
             pos: 0,
+            end: sentence.tokens.len(),
             sentence: &sentence.text,
         }
     }
 
     fn peek(&self) -> Option<&Token> {
+        if self.pos >= self.end {
+            return None;
+        }
         self.tokens.get(self.pos)
     }
 
     fn peek_at(&self, offset: usize) -> Option<&Token> {
+        if self.pos + offset >= self.end {
+            return None;
+        }
         self.tokens.get(self.pos + offset)
     }
 
     fn next(&mut self) -> Option<&Token> {
+        if self.pos >= self.end {
+            return None;
+        }
         let token = self.tokens.get(self.pos);
         if token.is_some() {
             self.pos += 1;
@@ -83,7 +100,14 @@ impl<'a> Parser<'a> {
     }
 
     const fn at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
+        self.pos >= self.end
+    }
+
+    /// The index of the last colour token at or after `from`, if any.
+    fn last_color_index(&self, from: usize) -> Option<usize> {
+        (from..self.end)
+            .rev()
+            .find(|i| matches!(self.tokens.get(*i), Some(Token::Color(_))))
     }
 
     /// Consumes the token if it is this keyword.
@@ -775,6 +799,9 @@ fn parse_name(parser: &mut Parser<'_>) -> SentenceOutcome {
 fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
     let mut target_color = None;
     let mut target_part = None;
+    // Modifiers recognised while parsing the object, which must survive into
+    // the final command alongside the trailing ones.
+    let mut extra_modifiers: Vec<Modifier> = Vec::new();
 
     let object = match verb {
         Verb::Build => {
@@ -788,6 +815,15 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
                 _ => return SentenceOutcome::Error(parser.error("something to build")),
             };
             parser.pos += 1;
+
+            // "Build a row of 20 black tiles east." — the `of` clause carries
+            // both how many and what to build it from.
+            if parser.eat_keyword(Keyword::Of) {
+                let spec = parser.part_spec();
+                if !spec.is_empty() {
+                    extra_modifiers.push(Modifier::Using(Box::new(spec)));
+                }
+            }
             ObjectExpr::Structure(structure)
         }
         Verb::Add | Verb::Fill => {
@@ -798,18 +834,23 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
             ObjectExpr::Part(Box::new(spec))
         }
         Verb::Paint => {
-            let reference = parser
-                .reference()
-                .unwrap_or(Ref::Selection);
-            // The colour comes after the object: "Paint selection dark tan."
-            parser.skip_filler();
-            if let Some(Token::Color(code)) = parser.peek() {
-                target_color = Some(*code);
-                parser.pos += 1;
-            }
-            if target_color.is_none() {
+            // The colour always comes last: "Paint selection dark tan.",
+            // "Paint all red bricks blue." Claim it before parsing the object,
+            // or the part description would absorb it.
+            let Some(color_index) = parser.last_color_index(parser.pos) else {
                 return SentenceOutcome::Error(parser.error("a colour to paint with"));
-            }
+            };
+            let Some(Token::Color(code)) = parser.tokens.get(color_index) else {
+                return SentenceOutcome::Error(parser.error("a colour to paint with"));
+            };
+            target_color = Some(*code);
+
+            let full_end = parser.end;
+            parser.end = color_index;
+            let reference = parser.reference().unwrap_or(Ref::Selection);
+            parser.end = full_end;
+            parser.pos = color_index + 1;
+
             ObjectExpr::Reference(reference)
         }
         Verb::Replace => {
@@ -862,7 +903,8 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
     };
 
     let location = parser.location();
-    let mut modifiers = parser.modifiers();
+    let mut modifiers = extra_modifiers;
+    modifiers.extend(parser.modifiers());
 
     // "Raise by one plate." and "Lower by two bricks." carry their direction
     // in the verb, so rewrite the bare distance the parser produced.
