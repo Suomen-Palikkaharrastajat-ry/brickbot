@@ -15,6 +15,7 @@ mod links;
 pub mod math;
 mod notifications;
 mod pocketbase;
+pub mod render;
 mod rss;
 mod workflows;
 mod zulip;

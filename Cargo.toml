@@ -48,5 +48,14 @@ futures-util = "0.3.30"
 async-trait = "0.1.77"
 chrono-tz = "0.10.4"
 
+# PNG encoding for the /build model renderer. Chosen over `image` because we
+# only ever write one format, and it is pure Rust so the static Nix build keeps
+# working.
+png = "0.17"
+
 [dev-dependencies]
 mockall = "0.15.0"
+# Reads back the .io archives written by src/build/export: the crate can
+# decrypt ZipCrypto even though it cannot write it, which makes the export
+# round-trip testable against an independent implementation.
+zip = { version = "2", default-features = false, features = ["deflate"] }
