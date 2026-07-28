@@ -8,6 +8,7 @@
 
 pub mod colors;
 pub mod geometry;
+pub mod library;
 pub mod parser;
 pub mod resolve;
 pub mod types;

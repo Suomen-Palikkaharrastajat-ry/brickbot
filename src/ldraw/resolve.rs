@@ -1,10 +1,11 @@
-//! Fetches LDraw part files and turns them into flattened meshes.
+//! Reads LDraw part files from disk and turns them into flattened meshes.
 //!
-//! This is the only module in [`super`] that performs IO. Everything goes
-//! through [`crate::http::HttpProvider`], so the shared moka response cache and
-//! the body-size bound apply, and tests can drive it with `MockHttpProvider`.
+//! This is the only module in [`super`] that touches the filesystem. The
+//! library is installed once by [`super::library`] into a configured data
+//! directory; nothing here ever reaches the network, so a render's cost is
+//! predictable and does not depend on a third-party server being up.
 //!
-//! Two caches sit on top of that:
+//! Two caches sit on top of the files:
 //!
 //! * parsed files, so a `.dat` is tokenised once rather than per placement;
 //! * flattened meshes, keyed by part name only. Meshes are flattened with the
@@ -26,22 +27,22 @@
 use super::geometry::{flatten, pending_parts, FlattenLimits};
 use super::parser::{normalize_name, parse_file};
 use super::types::{LdrawLine, Mesh, PartCache, COLOR_INHERIT};
-use crate::http::HttpProvider;
 use moka::future::Cache;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 /// How hard the resolver is allowed to work for a single part.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolveLimits {
-    /// Maximum number of distinct files fetched while resolving one part.
+    /// Maximum number of distinct files read while resolving one part.
     pub max_files: usize,
     /// Maximum number of breadth-first rounds, a backstop against a
     /// pathological dependency chain.
     pub max_rounds: usize,
     /// Passed through to [`flatten`].
     pub flatten: FlattenLimits,
-    /// How many files may be in flight at once.
+    /// How many files may be read at once.
     pub concurrency: usize,
 }
 
@@ -60,12 +61,13 @@ impl Default for ResolveLimits {
 /// back to box geometry.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolveReport {
+    /// Files read from disk.
     pub fetched: usize,
     pub unresolved: Vec<String>,
     pub budget_exhausted: bool,
 }
 
-/// Builds the candidate URLs for a sub-file reference, most likely first.
+/// Builds the candidate paths for a sub-file reference, most likely first.
 ///
 /// LDraw splits its library into `parts/` (real elements), `parts/s/`
 /// (sub-parts) and `p/` (primitives, including the `p/48` and `p/8`
@@ -95,28 +97,24 @@ pub fn root_path(name: &str) -> String {
     format!("parts/{name}")
 }
 
-fn join_url(base: &str, path: &str) -> String {
-    format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'))
-}
-
-/// A cached view over a remote LDraw part library.
+/// A cached view over the installed LDraw part library.
 #[derive(Clone)]
 pub struct LdrawLibrary {
-    base_url: String,
+    data_dir: PathBuf,
     limits: ResolveLimits,
     files: Cache<String, Option<Arc<Vec<LdrawLine>>>>,
     meshes: Cache<String, Arc<Mesh>>,
 }
 
 impl LdrawLibrary {
-    /// Part files never change within a library release, so they are cached
-    /// far longer than the shared HTTP cache's ten minutes.
+    /// Part files never change within a library release, so both caches hold
+    /// their entries for a day rather than minutes.
     const FILE_TTL_SECS: u64 = 24 * 60 * 60;
 
     #[must_use]
-    pub fn new(base_url: impl Into<String>, limits: ResolveLimits) -> Self {
+    pub fn new(data_dir: impl Into<PathBuf>, limits: ResolveLimits) -> Self {
         Self {
-            base_url: base_url.into(),
+            data_dir: data_dir.into(),
             limits,
             files: Cache::builder()
                 .max_capacity(20_000)
@@ -130,36 +128,37 @@ impl LdrawLibrary {
     }
 
     #[must_use]
-    pub fn base_url(&self) -> &str {
-        &self.base_url
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 
-    /// Fetches and parses one file, trying each candidate path in turn.
+    /// True when the library has been installed. When it is false the caller
+    /// should render in box mode rather than failing.
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        super::library::is_installed(&self.data_dir)
+    }
+
+    /// Reads and parses one file, trying each candidate path in turn.
     ///
-    /// A negative result is cached too: the official library is full of
-    /// references that only resolve in one of the two trees, and re-probing
-    /// the missing one on every render would double the request count.
-    async fn load_file(
-        &self,
-        http: &dyn HttpProvider,
-        name: &str,
-        paths: Vec<String>,
-        body_limit: u64,
-    ) -> Option<Arc<Vec<LdrawLine>>> {
+    /// A negative result is cached too: the library is full of references that
+    /// only resolve in one of the two trees, and re-probing the missing one on
+    /// every render would double the work.
+    async fn load_file(&self, name: &str, paths: Vec<String>) -> Option<Arc<Vec<LdrawLine>>> {
         if let Some(cached) = self.files.get(name).await {
             return cached;
         }
 
         let mut found = None;
         for path in paths {
-            let url = join_url(&self.base_url, &path);
-            match http.get_bounded_text(&url, body_limit, false).await {
+            let full = self.data_dir.join(&path);
+            match tokio::fs::read_to_string(&full).await {
                 Ok(text) => {
                     found = Some(Arc::new(parse_file(&text)));
                     break;
                 }
                 Err(e) => {
-                    tracing::debug!("ldraw: {url} unavailable: {e}");
+                    tracing::trace!("ldraw: {} unavailable: {e}", full.display());
                 }
             }
         }
@@ -169,20 +168,12 @@ impl LdrawLibrary {
     }
 
     /// Resolves a part and every file it references into `cache`.
-    async fn load_tree(
-        &self,
-        http: &dyn HttpProvider,
-        part: &str,
-        body_limit: u64,
-    ) -> (PartCache, ResolveReport) {
+    async fn load_tree(&self, part: &str) -> (PartCache, ResolveReport) {
         let mut cache = PartCache::new();
         let mut report = ResolveReport::default();
 
         let root = normalize_name(part);
-        let Some(root_lines) = self
-            .load_file(http, &root, vec![root_path(&root)], body_limit)
-            .await
-        else {
+        let Some(root_lines) = self.load_file(&root, vec![root_path(&root)]).await else {
             report.unresolved.push(root);
             return (cache, report);
         };
@@ -202,14 +193,12 @@ impl LdrawLibrary {
                     return (cache, report);
                 }
 
-                let fetches = batch.iter().map(|name| async move {
-                    let lines = self
-                        .load_file(http, name, candidate_paths(name), body_limit)
-                        .await;
+                let reads = batch.iter().map(|name| async move {
+                    let lines = self.load_file(name, candidate_paths(name)).await;
                     (name.clone(), lines)
                 });
 
-                for (name, lines) in futures_util::future::join_all(fetches).await {
+                for (name, lines) in futures_util::future::join_all(reads).await {
                     report.fetched += 1;
                     match lines {
                         Some(lines) => {
@@ -224,24 +213,26 @@ impl LdrawLibrary {
         (cache, report)
     }
 
-    /// Returns the flattened mesh for a part, fetching it if necessary.
+    /// Returns the flattened mesh for a part, reading it from disk if it is
+    /// not already cached.
     ///
     /// The mesh keeps the `inherit` colour code, so callers substitute their
     /// own colour when instancing it.
-    pub async fn mesh(
-        &self,
-        http: &dyn HttpProvider,
-        part: &str,
-        body_limit: u64,
-    ) -> anyhow::Result<Arc<Mesh>> {
+    pub async fn mesh(&self, part: &str) -> anyhow::Result<Arc<Mesh>> {
         let key = normalize_name(part);
         if let Some(mesh) = self.meshes.get(&key).await {
             return Ok(mesh);
         }
 
-        let (cache, report) = self.load_tree(http, &key, body_limit).await;
+        let (cache, report) = self.load_tree(&key).await;
         if cache.is_empty() {
-            anyhow::bail!("LDraw part '{key}' could not be fetched");
+            if self.is_available() {
+                anyhow::bail!("LDraw part '{key}' is not in the installed library");
+            }
+            anyhow::bail!(
+                "the LDraw library is not installed in {}; run `brickbot --fetch-ldraw`",
+                self.data_dir.display()
+            );
         }
         if !report.unresolved.is_empty() {
             tracing::debug!(
@@ -254,7 +245,7 @@ impl LdrawLibrary {
         let lines = cache
             .get(&key)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("LDraw part '{key}' missing after fetch"))?;
+            .ok_or_else(|| anyhow::anyhow!("LDraw part '{key}' missing after loading"))?;
         let result = flatten(&lines, &cache, COLOR_INHERIT, self.limits.flatten);
         if result.mesh.is_empty() {
             anyhow::bail!("LDraw part '{key}' produced no geometry");
@@ -275,9 +266,45 @@ impl LdrawLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http::MockHttpProvider;
+    use std::path::Path;
 
-    const LIMIT: u64 = 1_000_000;
+    /// A scratch library directory that cleans itself up.
+    struct TempLibrary(PathBuf);
+
+    impl TempLibrary {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "brickbot-resolve-test-{tag}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(path.join("parts")).unwrap();
+            std::fs::create_dir_all(path.join("p")).unwrap();
+            Self(path)
+        }
+
+        /// Writes a part file at a path relative to the library root.
+        fn write(&self, relative: &str, contents: &str) -> &Self {
+            let full = self.0.join(relative);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, contents).unwrap();
+            self
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn library(&self, limits: ResolveLimits) -> LdrawLibrary {
+            LdrawLibrary::new(&self.0, limits)
+        }
+    }
+
+    impl Drop for TempLibrary {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn primitives_and_parts_are_both_probed_for_bare_names() {
@@ -314,105 +341,139 @@ mod tests {
         assert_eq!(root_path("3001.dat"), "parts/3001.dat");
     }
 
-    #[test]
-    fn urls_join_without_doubling_slashes() {
-        assert_eq!(
-            join_url("https://example.org/ldraw/", "/parts/3001.dat"),
-            "https://example.org/ldraw/parts/3001.dat"
-        );
-    }
-
     #[tokio::test]
-    async fn fetches_a_part_and_its_subfiles_then_flattens() {
-        let mut http = MockHttpProvider::new();
-        http.expect_get_bounded_text()
-            .withf(|url, _, _| url.ends_with("parts/3001.dat"))
-            .times(1)
-            .returning(|_, _, _| {
-                Ok("0 Brick 2 x 4\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 box.dat\n".to_string())
-            });
-        http.expect_get_bounded_text()
-            .withf(|url, _, _| url.ends_with("p/box.dat"))
-            .times(1)
-            .returning(|_, _, _| Ok("3 16 0 0 0 20 0 0 0 24 0\n".to_string()));
+    async fn reads_a_part_and_its_subfiles_from_disk() {
+        let dir = TempLibrary::new("subfiles");
+        dir.write(
+            "parts/3001.dat",
+            "0 Brick 2 x 4\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 box.dat\n",
+        )
+        .write("p/box.dat", "3 16 0 0 0 20 0 0 0 24 0\n");
 
-        let lib = LdrawLibrary::new("https://example.org/ldraw", ResolveLimits::default());
-        let mesh = lib.mesh(&http, "3001", LIMIT).await.unwrap();
+        let mesh = dir
+            .library(ResolveLimits::default())
+            .mesh("3001")
+            .await
+            .unwrap();
         assert_eq!(mesh.len(), 1);
         // The inherit code survives so one mesh serves every colour.
         assert_eq!(mesh.triangles[0].color, COLOR_INHERIT);
     }
 
     #[tokio::test]
-    async fn meshes_are_cached_so_a_second_lookup_makes_no_requests() {
-        let mut http = MockHttpProvider::new();
-        http.expect_get_bounded_text()
-            .times(1)
-            .returning(|_, _, _| Ok("3 16 0 0 0 1 0 0 0 1 0\n".to_string()));
+    async fn meshes_are_cached_so_a_second_lookup_reuses_the_first() {
+        let dir = TempLibrary::new("cache");
+        dir.write("parts/3001.dat", "3 16 0 0 0 1 0 0 0 1 0\n");
 
-        let lib = LdrawLibrary::new("https://example.org/ldraw", ResolveLimits::default());
-        let first = lib.mesh(&http, "3001", LIMIT).await.unwrap();
-        let second = lib.mesh(&http, "3001", LIMIT).await.unwrap();
+        let library = dir.library(ResolveLimits::default());
+        let first = library.mesh("3001").await.unwrap();
+        // Deleting the file proves the second lookup never touched the disk.
+        std::fs::remove_file(dir.path().join("parts/3001.dat")).unwrap();
+        let second = library.mesh("3001").await.unwrap();
+
         assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(lib.cached_mesh_count().await, 1);
+        assert_eq!(library.cached_mesh_count().await, 1);
     }
 
     #[tokio::test]
-    async fn a_missing_root_part_is_an_error_not_an_empty_mesh() {
-        let mut http = MockHttpProvider::new();
-        http.expect_get_bounded_text()
-            .returning(|_, _, _| Err(anyhow::anyhow!("404")));
+    async fn an_absent_library_is_reported_not_panicked() {
+        let library = LdrawLibrary::new(
+            std::env::temp_dir().join("brickbot-no-such-ldraw-library"),
+            ResolveLimits::default(),
+        );
+        assert!(!library.is_available());
 
-        let lib = LdrawLibrary::new("https://example.org/ldraw", ResolveLimits::default());
-        assert!(lib.mesh(&http, "9999", LIMIT).await.is_err());
+        let error = library.mesh("3001").await.unwrap_err().to_string();
+        assert!(
+            error.contains("--fetch-ldraw"),
+            "the error should tell the operator how to fix it, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_part_missing_from_an_installed_library_says_so() {
+        let dir = TempLibrary::new("missingpart");
+        dir.write("parts/3001.dat", "3 16 0 0 0 1 0 0 0 1 0\n");
+        let library = dir.library(ResolveLimits::default());
+        assert!(library.is_available());
+
+        let error = library.mesh("9999").await.unwrap_err().to_string();
+        assert!(error.contains("not in the installed library"), "got: {error}");
     }
 
     #[tokio::test]
     async fn a_part_with_no_geometry_is_an_error() {
-        let mut http = MockHttpProvider::new();
-        http.expect_get_bounded_text()
-            .returning(|_, _, _| Ok("0 Just a comment\n".to_string()));
-
-        let lib = LdrawLibrary::new("https://example.org/ldraw", ResolveLimits::default());
-        assert!(lib.mesh(&http, "3001", LIMIT).await.is_err());
+        let dir = TempLibrary::new("nogeometry");
+        dir.write("parts/3001.dat", "0 Just a comment\n");
+        assert!(dir
+            .library(ResolveLimits::default())
+            .mesh("3001")
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn an_unresolvable_subfile_does_not_sink_the_whole_part() {
-        let mut http = MockHttpProvider::new();
-        http.expect_get_bounded_text()
-            .withf(|url, _, _| url.ends_with("parts/3001.dat"))
-            .returning(|_, _, _| {
-                Ok("3 16 0 0 0 1 0 0 0 1 0\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 gone.dat\n".to_string())
-            });
-        http.expect_get_bounded_text()
-            .returning(|_, _, _| Err(anyhow::anyhow!("404")));
+        let dir = TempLibrary::new("partial");
+        dir.write(
+            "parts/3001.dat",
+            "3 16 0 0 0 1 0 0 0 1 0\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 gone.dat\n",
+        );
 
-        let lib = LdrawLibrary::new("https://example.org/ldraw", ResolveLimits::default());
-        let mesh = lib.mesh(&http, "3001", LIMIT).await.unwrap();
+        let mesh = dir
+            .library(ResolveLimits::default())
+            .mesh("3001")
+            .await
+            .unwrap();
         assert_eq!(mesh.len(), 1);
     }
 
     #[tokio::test]
     async fn the_file_budget_stops_a_runaway_tree() {
-        let mut http = MockHttpProvider::new();
-        // Every file references two more, so the tree never terminates on its own.
-        http.expect_get_bounded_text().returning(|url, _, _| {
-            let id = url.len();
-            Ok(format!(
-                "3 16 0 0 0 1 0 0 0 1 0\n\
-                 1 16 0 0 0 1 0 0 0 1 0 0 0 1 a{id}.dat\n\
-                 1 16 0 0 0 1 0 0 0 1 0 0 0 1 b{id}.dat\n"
-            ))
-        });
+        let dir = TempLibrary::new("budget");
+        // Each file references two more, so the tree never terminates on its
+        // own.
+        for i in 0..40 {
+            dir.write(
+                &format!("p/a{i}.dat"),
+                &format!(
+                    "3 16 0 0 0 1 0 0 0 1 0\n\
+                     1 16 0 0 0 1 0 0 0 1 0 0 0 1 a{}.dat\n\
+                     1 16 0 0 0 1 0 0 0 1 0 0 0 1 a{}.dat\n",
+                    i + 1,
+                    i + 2
+                ),
+            );
+        }
+        dir.write(
+            "parts/3001.dat",
+            "3 16 0 0 0 1 0 0 0 1 0\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 a0.dat\n",
+        );
 
         let limits = ResolveLimits {
             max_files: 6,
             ..ResolveLimits::default()
         };
-        let lib = LdrawLibrary::new("https://example.org/ldraw", limits);
         // It must terminate and still return the geometry it did resolve.
-        let mesh = lib.mesh(&http, "3001", LIMIT).await.unwrap();
+        let mesh = dir.library(limits).mesh("3001").await.unwrap();
         assert!(!mesh.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_cyclic_reference_terminates() {
+        let dir = TempLibrary::new("cycle");
+        dir.write(
+            "parts/3001.dat",
+            "3 16 0 0 0 1 0 0 0 1 0\n1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n",
+        )
+        .write("p/a.dat", "1 16 0 0 0 1 0 0 0 1 0 0 0 1 b.dat\n")
+        .write("p/b.dat", "1 16 0 0 0 1 0 0 0 1 0 0 0 1 a.dat\n");
+
+        let mesh = dir
+            .library(ResolveLimits::default())
+            .mesh("3001")
+            .await
+            .unwrap();
+        assert_eq!(mesh.len(), 1);
     }
 }

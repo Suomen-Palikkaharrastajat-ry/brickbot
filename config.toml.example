@@ -25,6 +25,14 @@
 # url = "https://data.palikkaharrastajat.fi"
 # collection = "events"
 
+# LDraw part library, used to render /build models.
+# Install it once with `make fetch-ldraw`; until then /build renders simple
+# boxes instead of real part geometry.
+# [ldraw]
+# data_dir = "data/ldraw"
+# library_url = "https://library.ldraw.org/library/updates/complete.zip"
+# max_files = 200
+
 # [interactions]
 # set = true
 # part = true

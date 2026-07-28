@@ -1,4 +1,4 @@
-.PHONY: help build run watch trainer-review trainer-export test lint format check coverage
+.PHONY: help build run watch fetch-ldraw trainer-review trainer-export test lint format check coverage
 
 help:     ## Show this help.
 	@sed -ne '/@sed/!s/## //p' $(MAKEFILE_LIST)
@@ -13,6 +13,10 @@ run:      ## Run the bot locally
 watch:    ## Watch for changes and run the bot locally
 	mkdir -p data
 	cargo watch -x 'run --bin brickbot'
+
+fetch-ldraw: ## Download the LDraw part library into the configured data directory
+	mkdir -p data
+	cargo run --bin brickbot -- --fetch-ldraw
 
 trainer-review: ## Run the trainer CLI in review mode
 	mkdir -p data

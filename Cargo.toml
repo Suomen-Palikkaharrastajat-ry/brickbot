@@ -53,9 +53,10 @@ chrono-tz = "0.10.4"
 # working.
 png = "0.17"
 
+# Reads the LDraw library archive during `--fetch-ldraw`, and reads back our
+# own .io exports in tests. It can decrypt ZipCrypto but cannot write it, which
+# is why src/build/export hand-rolls the writer.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [dev-dependencies]
 mockall = "0.15.0"
-# Reads back the .io archives written by src/build/export: the crate can
-# decrypt ZipCrypto even though it cannot write it, which makes the export
-# round-trip testable against an independent implementation.
-zip = { version = "2", default-features = false, features = ["deflate"] }
