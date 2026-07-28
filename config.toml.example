@@ -46,6 +46,19 @@
 # [commands.set]
 # enabled = true
 
+# Collaborative LEGO building in a thread. Off by default: it opens threads and
+# listens to the conversation in them, so switch it on deliberately.
+# Install the LDraw library with `make fetch-ldraw` for real part shapes;
+# without it /build renders simple boxes.
+# [commands.build]
+# enabled = true
+# session_ttl_hours = 24
+# render_width = 800
+# render_height = 600
+# supersample = 2
+# render_debounce_ms = 1200
+# enable_io_export = true
+
 # [[guilds]]
 # guild_id = 1424873309325234220
 # locale = "fi-FI"
@@ -59,6 +72,8 @@
 # [guilds.commands.events]
 # enabled = false
 # [guilds.commands.set]
+# enabled = false
+# [guilds.commands.build]
 # enabled = false
 #
 # [[guilds]]

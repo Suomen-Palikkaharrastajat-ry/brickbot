@@ -1,3 +1,4 @@
+pub mod build;
 pub mod diagnostics;
 pub mod events;
 pub mod part;

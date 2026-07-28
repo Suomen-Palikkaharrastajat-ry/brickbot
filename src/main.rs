@@ -75,6 +75,14 @@ impl TypeMapKey for SyncMutexData {
     type Value = std::sync::Arc<tokio::sync::Mutex<()>>;
 }
 
+/// The shared `LDraw` part library. Held once so its parsed-file and
+/// flattened-mesh caches are reused across every build session rather than
+/// rebuilt per render.
+pub struct LdrawData;
+impl TypeMapKey for LdrawData {
+    type Value = std::sync::Arc<crate::ldraw::resolve::LdrawLibrary>;
+}
+
 #[must_use]
 pub fn is_guild_allowed(config: &crate::config::Config, guild_id: u64) -> bool {
     config.guilds.iter().any(|g| g.guild_id == guild_id)
@@ -115,6 +123,11 @@ impl EventHandler for Handler {
                 ));
             }
 
+            if self.config.commands_for(guild.guild_id).build.enabled {
+                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
+                commands.push(crate::commands::build::build_build_command(locale));
+            }
+
             match GuildId::new(guild.guild_id)
                 .set_commands(&ctx.http, commands)
                 .await
@@ -151,6 +164,34 @@ impl EventHandler for Handler {
     async fn message(&self, ctx: Context, msg: Message) {
         if msg.author.bot || msg.webhook_id.is_some() {
             return;
+        }
+
+        // Build sessions live in threads, and a thread has its own channel id,
+        // so it is never in `ambient_channel_ids`. This lookup must therefore
+        // come *before* that gate below, or every build command would be
+        // silently dropped. Returning early also keeps build traffic out of the
+        // ambient assistant, whose two-hour per-user cooldown would otherwise
+        // throttle a builder to one response every two hours.
+        if let Some(guild_id) = msg.guild_id {
+            if is_guild_allowed(&self.config, guild_id.get())
+                && self.config.commands_for(guild_id.get()).build.enabled
+            {
+                match crate::build::session::handle_thread_message(
+                    &ctx,
+                    &self.pool,
+                    &self.config,
+                    &msg,
+                )
+                .await
+                {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::error!("build session error: {e}");
+                        return;
+                    }
+                }
+            }
         }
 
         if let Some(guild_id) = msg.guild_id {
@@ -589,6 +630,22 @@ impl EventHandler for Handler {
                     tracing::error!("Error handling diagnostics command: {}", e);
                 }
             }
+            Interaction::Command(command)
+                if (command.data.name.as_str() == "build"
+                    || command.data.name.as_str() == "rakenna")
+                    && self
+                        .config
+                        .commands_for(command.guild_id.unwrap_or_default().get())
+                        .build
+                        .enabled =>
+            {
+                let app_ctx = crate::workflows::AppContext::from_serenity_ctx(&ctx).await;
+                if let Err(e) =
+                    crate::build::session::handle_build_command(&ctx, &app_ctx, &command).await
+                {
+                    tracing::error!("Error handling build command: {}", e);
+                }
+            }
             _ => {}
         }
     }
@@ -780,6 +837,17 @@ async fn main() -> anyhow::Result<()> {
         data.insert::<DbData>(pool.clone());
         data.insert::<HttpData>(http_client.clone());
         data.insert::<SyncMutexData>(sync_mutex.clone());
+        // One library for the whole process, so its parsed-file and mesh
+        // caches are shared rather than rebuilt per render.
+        data.insert::<LdrawData>(std::sync::Arc::new(
+            crate::ldraw::resolve::LdrawLibrary::new(
+                &config.ldraw.data_dir,
+                crate::ldraw::resolve::ResolveLimits {
+                    max_files: config.ldraw.max_files,
+                    ..crate::ldraw::resolve::ResolveLimits::default()
+                },
+            ),
+        ));
     }
 
     let http = client.http.clone();
