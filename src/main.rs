@@ -3,6 +3,7 @@ rust_i18n::i18n!("locales", fallback = "en-US");
 
 mod ambient;
 mod brick;
+pub mod build;
 mod commands;
 pub mod config;
 pub mod db;
