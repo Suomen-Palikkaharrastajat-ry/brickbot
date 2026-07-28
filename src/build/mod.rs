@@ -5,6 +5,7 @@
 //! `session` is pure and unit-testable, with no serenity, reqwest or sqlx
 //! types crossing into it.
 
+pub mod dsl;
 pub mod model;
 pub mod ops;
 pub mod units;
