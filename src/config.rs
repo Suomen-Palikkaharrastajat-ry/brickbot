@@ -22,6 +22,57 @@ pub struct Config {
     pub feeds: Vec<RssFeedConfig>,
     #[serde(default)]
     pub resource_limits: ResourceLimitsConfig,
+    #[serde(default)]
+    pub ldraw: LdrawConfig,
+}
+
+/// Where the `LDraw` part library lives and where to fetch it from.
+///
+/// The library is never embedded in the binary and never downloaded during a
+/// render: an operator installs it once with `brickbot --fetch-ldraw`, and
+/// renders read it from disk. Until then the bot renders in box mode.
+#[derive(Deserialize, Debug, Clone)]
+pub struct LdrawConfig {
+    /// Directory holding the installed library.
+    #[serde(default = "default_ldraw_data_dir")]
+    pub data_dir: String,
+    /// Archive `--fetch-ldraw` downloads.
+    #[serde(default = "default_ldraw_library_url")]
+    pub library_url: String,
+    /// Cap on the number of files read while resolving a single part.
+    #[serde(default = "default_ldraw_max_files")]
+    pub max_files: usize,
+    /// Size limit for the library download. Far larger than an ordinary API
+    /// response, so it is separate from `resource_limits`.
+    #[serde(default = "default_ldraw_max_download_bytes")]
+    pub max_download_bytes: u64,
+}
+
+impl Default for LdrawConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: default_ldraw_data_dir(),
+            library_url: default_ldraw_library_url(),
+            max_files: default_ldraw_max_files(),
+            max_download_bytes: default_ldraw_max_download_bytes(),
+        }
+    }
+}
+
+fn default_ldraw_data_dir() -> String {
+    "data/ldraw".to_string()
+}
+
+fn default_ldraw_library_url() -> String {
+    "https://library.ldraw.org/library/updates/complete.zip".to_string()
+}
+
+const fn default_ldraw_max_files() -> usize {
+    200
+}
+
+const fn default_ldraw_max_download_bytes() -> u64 {
+    256 * 1024 * 1024 // 256 MB; the official archive is well under this.
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -279,6 +330,18 @@ impl Config {
             }
         }
 
+        if !self.ldraw.library_url.starts_with("http://")
+            && !self.ldraw.library_url.starts_with("https://")
+        {
+            errors.push(format!(
+                "LDraw library URL must start with http:// or https://: {}",
+                self.ldraw.library_url
+            ));
+        }
+        if self.ldraw.data_dir.trim().is_empty() {
+            errors.push("LDraw data_dir must not be empty".to_string());
+        }
+
         if let Some(z) = &self.zulip {
             if !z.url.starts_with("http://") && !z.url.starts_with("https://") {
                 errors.push(format!(
@@ -377,6 +440,60 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ldraw_config_defaults_are_sane() {
+        // An empty config still yields a usable LDraw section, so an operator
+        // only has to set what they want to change.
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.ldraw.data_dir, "data/ldraw");
+        assert!(config.ldraw.library_url.starts_with("https://"));
+        assert!(config.ldraw.max_files > 0);
+        assert!(config.ldraw.max_download_bytes > 1024 * 1024);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn ldraw_config_can_be_overridden() {
+        let toml_str = r#"
+        [ldraw]
+        data_dir = "/srv/ldraw"
+        library_url = "https://mirror.example.org/complete.zip"
+        max_files = 50
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.ldraw.data_dir, "/srv/ldraw");
+        assert_eq!(config.ldraw.max_files, 50);
+        // Unset keys still take their defaults.
+        assert!(config.ldraw.max_download_bytes > 0);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn ldraw_config_rejects_a_non_http_library_url() {
+        let config: Config = toml::from_str(
+            r#"
+        [ldraw]
+        library_url = "file:///etc/passwd"
+        "#,
+        )
+        .unwrap();
+        let errors = config.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("LDraw library URL")));
+    }
+
+    #[test]
+    fn ldraw_config_rejects_an_empty_data_dir() {
+        let config: Config = toml::from_str(
+            r#"
+        [ldraw]
+        data_dir = "  "
+        "#,
+        )
+        .unwrap();
+        let errors = config.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("data_dir")));
+    }
 
     #[test]
     fn test_config_parsing() {

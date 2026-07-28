@@ -11,6 +11,7 @@ pub mod lower;
 pub mod model;
 pub mod ops;
 pub mod parts;
+pub mod scene;
 pub mod units;
 
 pub use lower::{lower_command, LowerError};

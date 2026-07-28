@@ -42,6 +42,12 @@ struct Cli {
 
     #[arg(long, help = "Validate configuration and exit")]
     check_config: bool,
+
+    #[arg(
+        long,
+        help = "Download the LDraw part library into the configured data directory and exit"
+    )]
+    fetch_ldraw: bool,
 }
 
 struct Handler {
@@ -714,6 +720,28 @@ async fn main() -> anyhow::Result<()> {
     if cli.check_config {
         tracing::info!("Configuration in {} is valid.", cli.config);
         std::process::exit(0);
+    }
+
+    // Installing the part library needs neither a database nor a Discord
+    // token, so it runs before either is set up.
+    if cli.fetch_ldraw {
+        let http_client = crate::http::HttpClient::new();
+        match crate::ldraw::library::sync(&http_client, &config.ldraw).await {
+            Ok(report) => {
+                tracing::info!(
+                    "Installed {} LDraw files ({} bytes) into {}; skipped {} non-redistributable file(s).",
+                    report.files_written,
+                    report.bytes_written,
+                    config.ldraw.data_dir,
+                    report.skipped_non_redistributable
+                );
+                std::process::exit(0);
+            }
+            Err(e) => {
+                tracing::error!("Failed to install the LDraw library: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     let database_url =

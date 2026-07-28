@@ -232,39 +232,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod visual_check {
-    use super::*;
-
-    /// Builds an axis-aligned box as 12 triangles.
-    fn cuboid(min: Vec3, max: Vec3, color: Rgb) -> Vec<SceneTriangle> {
-        let c = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
-        let (a, b) = (min, max);
-        let v = [
-            c(a.x, a.y, a.z), c(b.x, a.y, a.z), c(b.x, b.y, a.z), c(a.x, b.y, a.z),
-            c(a.x, a.y, b.z), c(b.x, a.y, b.z), c(b.x, b.y, b.z), c(a.x, b.y, b.z),
-        ];
-        let faces = [
-            [0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7],
-            [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0],
-        ];
-        let mut out = Vec::new();
-        for f in faces {
-            out.push(SceneTriangle { a: v[f[0]], b: v[f[1]], c: v[f[2]], color });
-            out.push(SceneTriangle { a: v[f[0]], b: v[f[2]], c: v[f[3]], color });
-        }
-        out
-    }
-
-    #[test]
-    #[ignore = "writes a PNG for manual inspection"]
-    fn render_sample_model() {
-        let mut tris = Vec::new();
-        // A 4x2 red brick with a yellow 2x2 brick stacked on top.
-        tris.extend(cuboid(Vec3::new(0.0, 0.0, 0.0), Vec3::new(80.0, 24.0, 40.0), Rgb::new(0xC9, 0x1A, 0x09)));
-        tris.extend(cuboid(Vec3::new(20.0, 24.0, 0.0), Vec3::new(60.0, 48.0, 40.0), Rgb::new(0xF2, 0xCD, 0x37)));
-        tris.extend(cuboid(Vec3::new(0.0, 48.0, 0.0), Vec3::new(40.0, 72.0, 40.0), Rgb::new(0x00, 0x55, 0xBF)));
-        let bytes = render_png(&tris, &RenderOptions::default()).unwrap();
-        std::fs::write("/tmp/claude-0/-home-user-brickbot/b15c9e9b-1bb0-5784-ab81-0c22d466c008/scratchpad/render_check.png", bytes).unwrap();
-    }
-}
