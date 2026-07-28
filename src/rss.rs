@@ -6,7 +6,7 @@ use serenity::all::{ChannelId, Framework, FutureExt, Http};
 use sqlx::SqlitePool;
 
 use std::sync::Arc;
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 
 use crate::db::insert_feed_item;
 

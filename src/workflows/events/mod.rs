@@ -11,7 +11,7 @@ pub use outbox::*;
 pub use validation::*;
 pub use visibility::*;
 
-use crate::workflows::{AppContext, extract_locale_and_bot_name};
+use crate::workflows::{extract_locale_and_bot_name, AppContext};
 use serenity::all::{
     ButtonStyle, CommandInteraction, ComponentInteraction, Context, CreateActionRow, CreateButton,
     CreateInteractionResponse, CreateInteractionResponseMessage,

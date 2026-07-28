@@ -61,9 +61,9 @@ impl Default for RenderOptions {
 /// The bounding box of a triangle soup.
 #[must_use]
 pub fn bounds_of(triangles: &[SceneTriangle]) -> Aabb {
-    triangles.iter().fold(Aabb::EMPTY, |b, t| {
-        b.expand(t.a).expand(t.b).expand(t.c)
-    })
+    triangles
+        .iter()
+        .fold(Aabb::EMPTY, |b, t| b.expand(t.a).expand(t.b).expand(t.c))
 }
 
 /// Rasterizes a triangle soup into a framebuffer at the requested size.
@@ -114,7 +114,12 @@ mod tests {
         );
         vec![
             SceneTriangle { a, b, c, color },
-            SceneTriangle { a, b: c, c: d, color },
+            SceneTriangle {
+                a,
+                b: c,
+                c: d,
+                color,
+            },
         ]
     }
 
@@ -231,4 +236,3 @@ mod tests {
         assert_eq!((fb.width, fb.height), (1, 1));
     }
 }
-

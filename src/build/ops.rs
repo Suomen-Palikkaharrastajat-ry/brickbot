@@ -604,7 +604,10 @@ mod tests {
         );
         assert_eq!(history.materialize().len(), 5);
         history.undo();
-        assert!(history.materialize().is_empty(), "one undo removes them all");
+        assert!(
+            history.materialize().is_empty(),
+            "one undo removes them all"
+        );
     }
 
     #[test]

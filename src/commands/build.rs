@@ -37,8 +37,8 @@ pub fn build_build_command(locale: &str) -> CreateCommand {
     let arg_name = t!("command.build.name_arg_name", locale = locale).to_string();
     let arg_desc = t!("command.build.name_desc", locale = locale).to_string();
 
-    let option = CreateCommandOption::new(CommandOptionType::String, &arg_name, &arg_desc)
-        .required(true);
+    let option =
+        CreateCommandOption::new(CommandOptionType::String, &arg_name, &arg_desc).required(true);
 
     CreateCommand::new(&cmd_name)
         .description(&cmd_desc)
@@ -69,7 +69,11 @@ pub fn build_intro_embed(model_name: &str, locale: &str) -> CreateEmbed {
 }
 
 /// The buttons attached to every render.
-pub fn build_session_buttons(session_id: &str, locale: &str, enable_export: bool) -> CreateActionRow {
+pub fn build_session_buttons(
+    session_id: &str,
+    locale: &str,
+    enable_export: bool,
+) -> CreateActionRow {
     let label = |key: &str| truncate(&t!(key, locale = locale), MAX_BUTTON_LABEL);
 
     let mut buttons = Vec::new();
@@ -183,8 +187,8 @@ mod tests {
 
     #[test]
     fn the_buttons_carry_the_session_id() {
-        let json = serde_json::to_value(build_session_buttons("abc123def456", "en-US", true))
-            .unwrap();
+        let json =
+            serde_json::to_value(build_session_buttons("abc123def456", "en-US", true)).unwrap();
         let ids: Vec<&str> = json["components"]
             .as_array()
             .unwrap()
@@ -203,8 +207,8 @@ mod tests {
         // Session ids are 12 characters, so this has plenty of headroom, but
         // the limit is worth asserting because a long id would break the
         // component silently.
-        let json = serde_json::to_value(build_session_buttons("abc123def456", "en-US", true))
-            .unwrap();
+        let json =
+            serde_json::to_value(build_session_buttons("abc123def456", "en-US", true)).unwrap();
         for component in json["components"].as_array().unwrap() {
             let id = component["custom_id"].as_str().unwrap();
             assert!(id.len() <= 100, "custom_id too long: {id}");
@@ -227,8 +231,7 @@ mod tests {
     #[test]
     fn button_labels_are_localized_and_within_limits() {
         for locale in ["en-US", "fi-FI"] {
-            let json =
-                serde_json::to_value(build_session_buttons("abc", locale, true)).unwrap();
+            let json = serde_json::to_value(build_session_buttons("abc", locale, true)).unwrap();
             for component in json["components"].as_array().unwrap() {
                 let label = component["label"].as_str().unwrap();
                 assert!(!label.is_empty());

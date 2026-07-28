@@ -337,10 +337,8 @@ pub async fn build_part_response_data(
                 .add_embed(*embed)
                 .ephemeral(preview_mode);
 
-            let mut options = vec![
-                CreateSelectMenuOption::new("BrickLink", "bricklink")
-                    .default_selection(default_services.contains(&"bricklink".to_string())),
-            ];
+            let mut options = vec![CreateSelectMenuOption::new("BrickLink", "bricklink")
+                .default_selection(default_services.contains(&"bricklink".to_string()))];
             if in_production {
                 options.push(
                     CreateSelectMenuOption::new("LEGO Pick a Brick", "lego")

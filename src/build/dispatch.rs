@@ -184,19 +184,16 @@ pub fn process_message(history: &History, text: &str, locale: &str) -> Outcome {
 }
 
 /// Applies a session-level command. Returns false when processing should stop.
-fn apply_meta(
-    outcome: &mut Outcome,
-    working: &mut History,
-    meta: &Meta,
-    locale: &str,
-) -> bool {
+fn apply_meta(outcome: &mut Outcome, working: &mut History, meta: &Meta, locale: &str) -> bool {
     use rust_i18n::t;
 
     match meta {
         Meta::Undo => {
             if working.undo() {
                 outcome.cursor = Some(working.revision());
-                outcome.replies.push(t!("command.build.undone", locale = locale).to_string());
+                outcome
+                    .replies
+                    .push(t!("command.build.undone", locale = locale).to_string());
                 outcome.needs_render = true;
                 outcome.applied();
             } else {
@@ -207,7 +204,9 @@ fn apply_meta(
         Meta::UndoBy(author) => {
             if working.undo_last_by(author) {
                 outcome.skip_last_by = Some(author.clone());
-                outcome.replies.push(t!("command.build.undone", locale = locale).to_string());
+                outcome
+                    .replies
+                    .push(t!("command.build.undone", locale = locale).to_string());
                 outcome.needs_render = true;
                 outcome.applied();
             } else {
@@ -218,7 +217,9 @@ fn apply_meta(
         Meta::Redo => {
             if working.redo() {
                 outcome.cursor = Some(working.revision());
-                outcome.replies.push(t!("command.build.redone", locale = locale).to_string());
+                outcome
+                    .replies
+                    .push(t!("command.build.redone", locale = locale).to_string());
                 outcome.needs_render = true;
                 outcome.applied();
             } else {
@@ -256,7 +257,9 @@ fn apply_meta(
             let op = Op::Rename { name: name.clone() };
             working.push(op.clone(), "");
             outcome.ops.push(op);
-            outcome.replies.push(t!("command.build.renamed", locale = locale).to_string());
+            outcome
+                .replies
+                .push(t!("command.build.renamed", locale = locale).to_string());
             outcome.applied();
         }
         Meta::Export => {
@@ -372,10 +375,7 @@ mod tests {
         assert_eq!(outcome.ops.len(), 1);
         // ... the second reported ...
         assert!(outcome.reactions.contains(&reactions::PROBLEM));
-        assert!(outcome
-            .replies
-            .iter()
-            .any(|r| r.contains("gatehouse")));
+        assert!(outcome.replies.iter().any(|r| r.contains("gatehouse")));
         // ... and the third never ran.
         assert!(!outcome.replies.iter().any(|r| r.contains("blue")));
     }
@@ -415,7 +415,10 @@ mod tests {
         let pending = outcome.pending_lookup.expect("expected a pending lookup");
         assert_eq!(pending.kind, PartKind::Brick);
         assert!(pending.sentence.contains("3x12"));
-        assert!(outcome.ops.is_empty(), "nothing is applied until it resolves");
+        assert!(
+            outcome.ops.is_empty(),
+            "nothing is applied until it resolves"
+        );
     }
 
     #[test]
@@ -494,16 +497,17 @@ mod tests {
 
     #[test]
     fn a_query_answers_without_changing_anything() {
-        let history = run(&[
-            "Add a red 2x4 brick at origin.",
-            "Add a blue 2x4 brick.",
-        ]);
+        let history = run(&["Add a red 2x4 brick at origin.", "Add a blue 2x4 brick."]);
         let outcome = process_message(&history, "How tall is it?", "en-US");
 
         assert!(outcome.ops.is_empty());
         assert!(!outcome.needs_render);
         assert_eq!(outcome.replies.len(), 1);
-        assert!(outcome.replies[0].contains('2'), "got: {}", outcome.replies[0]);
+        assert!(
+            outcome.replies[0].contains('2'),
+            "got: {}",
+            outcome.replies[0]
+        );
     }
 
     #[test]
@@ -529,7 +533,11 @@ mod tests {
             "Paint the highest brick red.",
         ]);
         let model = history.materialize();
-        assert!(model.len() > 10, "expected a real model, got {}", model.len());
+        assert!(
+            model.len() > 10,
+            "expected a real model, got {}",
+            model.len()
+        );
         assert!(model.height_in_bricks() > 4);
         // The painted brick is the top one.
         assert_eq!(model.highest().unwrap().color, 4);

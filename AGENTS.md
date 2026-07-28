@@ -36,7 +36,7 @@ The project has been structured to handle multiple asynchronous background tasks
 - `src/main.rs`: Application entry point. Handles setup of dependencies, DB pools, custom event/message handler routing, and spawning polling loops.
 - `src/config.rs`: Multi-guild TOML configuration structures mapping `config.toml`. Includes flexible command alias configurations.
 - `src/http.rs`: Centralized `HttpClient` wrapper. Consolidates outgoing `reqwest` calls, implements structured `tracing` logging, and provides a global `moka` in-memory cache for API responses.
-- `src/commands/`: "One command per module" directory containing `set.rs`, `part.rs`, and `events.rs`. **Agents MUST keep the corresponding documentation files in `docs/interactions/*.md` and `docs/commands/*.md` up-to-date when altering command logic or adding new commands.**
+- `src/commands/`: "One command per module" directory containing `set.rs`, `part.rs`, `events.rs`, and `build.rs`. **Agents MUST keep the corresponding documentation files in `docs/interactions/*.md` and `docs/commands/*.md` up-to-date when altering command logic or adding new commands.**
 - `src/rss.rs`: Polling logic and parsing for feeds.
 - `flake.nix` & `devenv.nix`: Nix environment files configuring the `devShell`.
 - `default.nix`: Nix build configuration decoupled from `flake.nix` to prevent "dirty tree" rebuilds.
@@ -48,6 +48,7 @@ Agents and developers should consult the following living documents when modifyi
 - **Network & Caching**: [`docs/architecture/network_and_caching.md`](docs/architecture/network_and_caching.md)
 - **Events Sync & Workflow**: [`docs/events.md`](docs/events.md)
 - **Ambient Assistant**: [`docs/interactions/README.md`](docs/interactions/README.md)
+- **LDraw Rendering & Studio Export**: [`docs/ADR-003-LDraw-Rendering-And-Studio-Export.md`](docs/ADR-003-LDraw-Rendering-And-Studio-Export.md)
 
 
 ## Build and Environment (Nix)

@@ -101,7 +101,12 @@ pub struct PartRef {
 
 impl PartRef {
     #[must_use]
-    pub fn new(ldraw_id: impl Into<String>, name: impl Into<String>, footprint: (u8, u8), kind: PartKind) -> Self {
+    pub fn new(
+        ldraw_id: impl Into<String>,
+        name: impl Into<String>,
+        footprint: (u8, u8),
+        kind: PartKind,
+    ) -> Self {
         Self {
             ldraw_id: ldraw_id.into(),
             rebrickable_id: None,
@@ -157,14 +162,19 @@ impl Placement {
         if !self.part.has_footprint() {
             return None;
         }
-        let (w, d) = self
-            .orientation
-            .apply_footprint(i32::from(self.part.footprint.0), i32::from(self.part.footprint.1));
+        let (w, d) = self.orientation.apply_footprint(
+            i32::from(self.part.footprint.0),
+            i32::from(self.part.footprint.1),
+        );
         let half_w = w * LDU_STUD / 2;
         let half_d = d * LDU_STUD / 2;
         let height = self.part.kind.height_ldu();
         Some((
-            IVec3::new(self.pos.x - half_w, self.pos.y - height, self.pos.z - half_d),
+            IVec3::new(
+                self.pos.x - half_w,
+                self.pos.y - height,
+                self.pos.z - half_d,
+            ),
             IVec3::new(self.pos.x + half_w, self.pos.y, self.pos.z + half_d),
         ))
     }
@@ -379,9 +389,12 @@ impl Model {
     /// first and then landmarks.
     #[must_use]
     pub fn resolve_group(&self, name: &str) -> Option<Vec<PlacementId>> {
-        self.groups
-            .get(&name.to_lowercase())
-            .map(|ids| ids.iter().copied().filter(|id| self.contains(*id)).collect())
+        self.groups.get(&name.to_lowercase()).map(|ids| {
+            ids.iter()
+                .copied()
+                .filter(|id| self.contains(*id))
+                .collect()
+        })
     }
 
     /// Records what the next `that`/`it` should refer to.
@@ -484,7 +497,12 @@ mod tests {
         let base = place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO);
         assert_eq!(base.stack_position(), IVec3::new(0, -24, 0));
 
-        let on_top = place(PlacementId::new(1, 0), plate_2x4(), 14, base.stack_position());
+        let on_top = place(
+            PlacementId::new(1, 0),
+            plate_2x4(),
+            14,
+            base.stack_position(),
+        );
         assert_eq!(on_top.top_y(), -32);
         // Stacked parts touch but must not collide.
         let mut model = Model::new("t");
@@ -497,11 +515,19 @@ mod tests {
         let mut model = Model::new("t");
         model.placements = vec![
             place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO),
-            place(PlacementId::new(1, 0), brick_2x4(), 14, IVec3::new(20, 0, 0)),
+            place(
+                PlacementId::new(1, 0),
+                brick_2x4(),
+                14,
+                IVec3::new(20, 0, 0),
+            ),
         ];
         let collisions = model.collisions();
         assert_eq!(collisions.len(), 1);
-        assert_eq!(collisions[0], (PlacementId::new(0, 0), PlacementId::new(1, 0)));
+        assert_eq!(
+            collisions[0],
+            (PlacementId::new(0, 0), PlacementId::new(1, 0))
+        );
     }
 
     #[test]
@@ -510,7 +536,12 @@ mod tests {
         model.placements = vec![
             place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO),
             // Exactly two studs east: shares a face, no overlap.
-            place(PlacementId::new(1, 0), brick_2x4(), 14, IVec3::new(40, 0, 0)),
+            place(
+                PlacementId::new(1, 0),
+                brick_2x4(),
+                14,
+                IVec3::new(40, 0, 0),
+            ),
         ];
         assert!(model.collisions().is_empty());
     }
@@ -520,7 +551,12 @@ mod tests {
         let mut model = Model::new("t");
         model.placements = vec![
             place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO),
-            place(PlacementId::new(1, 0), brick_2x4(), 4, IVec3::new(0, -24, 0)),
+            place(
+                PlacementId::new(1, 0),
+                brick_2x4(),
+                4,
+                IVec3::new(0, -24, 0),
+            ),
         ];
         let (min, max) = model.bounds().unwrap();
         assert_eq!(max.y, 0);
@@ -544,7 +580,12 @@ mod tests {
         let mut model = Model::new("t");
         model.placements = vec![
             place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO),
-            place(PlacementId::new(1, 0), brick_2x4(), 4, IVec3::new(0, -48, 0)),
+            place(
+                PlacementId::new(1, 0),
+                brick_2x4(),
+                4,
+                IVec3::new(0, -48, 0),
+            ),
         ];
         assert_eq!(model.highest().unwrap().id, PlacementId::new(1, 0));
     }
@@ -556,7 +597,12 @@ mod tests {
             // On the ground.
             place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO),
             // Floating two bricks up with nothing beneath.
-            place(PlacementId::new(1, 0), brick_2x4(), 4, IVec3::new(0, -72, 0)),
+            place(
+                PlacementId::new(1, 0),
+                brick_2x4(),
+                4,
+                IVec3::new(0, -72, 0),
+            ),
         ];
         assert_eq!(model.unsupported(), vec![PlacementId::new(1, 0)]);
     }
@@ -566,7 +612,12 @@ mod tests {
         let mut model = Model::new("t");
         model.placements = vec![
             place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO),
-            place(PlacementId::new(1, 0), brick_2x4(), 4, IVec3::new(0, -24, 0)),
+            place(
+                PlacementId::new(1, 0),
+                brick_2x4(),
+                4,
+                IVec3::new(0, -24, 0),
+            ),
         ];
         assert!(model.unsupported().is_empty());
     }
@@ -576,8 +627,18 @@ mod tests {
         let mut model = Model::new("t");
         model.placements = vec![
             place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO),
-            place(PlacementId::new(1, 0), plate_2x4(), 4, IVec3::new(100, 0, 0)),
-            place(PlacementId::new(2, 0), brick_2x4(), 14, IVec3::new(200, 0, 0)),
+            place(
+                PlacementId::new(1, 0),
+                plate_2x4(),
+                4,
+                IVec3::new(100, 0, 0),
+            ),
+            place(
+                PlacementId::new(2, 0),
+                brick_2x4(),
+                14,
+                IVec3::new(200, 0, 0),
+            ),
         ];
 
         let last_brick = model
@@ -616,7 +677,9 @@ mod tests {
     fn a_model_round_trips_through_json() {
         let mut model = Model::new("Castle");
         model.placements = vec![place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO)];
-        model.landmarks.insert("gate".to_string(), IVec3::new(20, 0, 0));
+        model
+            .landmarks
+            .insert("gate".to_string(), IVec3::new(20, 0, 0));
         model.touch(vec![PlacementId::new(0, 0)]);
 
         let json = serde_json::to_string(&model).unwrap();

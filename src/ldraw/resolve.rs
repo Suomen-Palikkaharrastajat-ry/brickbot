@@ -324,7 +324,10 @@ mod tests {
             candidate_paths("48/4-4cyli.dat"),
             vec!["p/48/4-4cyli.dat".to_string()]
         );
-        assert_eq!(candidate_paths("8/1-4cyli.dat"), vec!["p/8/1-4cyli.dat".to_string()]);
+        assert_eq!(
+            candidate_paths("8/1-4cyli.dat"),
+            vec!["p/8/1-4cyli.dat".to_string()]
+        );
     }
 
     #[test]
@@ -398,7 +401,10 @@ mod tests {
         assert!(library.is_available());
 
         let error = library.mesh("9999").await.unwrap_err().to_string();
-        assert!(error.contains("not in the installed library"), "got: {error}");
+        assert!(
+            error.contains("not in the installed library"),
+            "got: {error}"
+        );
     }
 
     #[tokio::test]

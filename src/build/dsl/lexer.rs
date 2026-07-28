@@ -583,7 +583,10 @@ mod tests {
             split_sentences("Add a brick. Move it east.\nUndo."),
             vec!["Add a brick", "Move it east", "Undo"]
         );
-        assert_eq!(split_sentences("How tall is tower?"), vec!["How tall is tower?"]);
+        assert_eq!(
+            split_sentences("How tall is tower?"),
+            vec!["How tall is tower?"]
+        );
     }
 
     #[test]

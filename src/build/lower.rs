@@ -217,9 +217,7 @@ fn span_along(footprint: (u8, u8), orientation: Orientation, direction: Directio
 fn resolve_part(spec: &PartSpec) -> Result<PartRef, LowerError> {
     match parts::resolve(spec) {
         Resolution::Known(part) => Ok(part),
-        Resolution::NeedsLookup { query, kind } => {
-            Err(LowerError::NeedsPartLookup { query, kind })
-        }
+        Resolution::NeedsLookup { query, kind } => Err(LowerError::NeedsPartLookup { query, kind }),
     }
 }
 
@@ -289,7 +287,9 @@ pub fn lower_command(model: &Model, command: &Command) -> Result<Vec<Op>, LowerE
             let targets = targets_of(model, command)?;
             let offset = offset_of(command);
             if offset == IVec3::ZERO {
-                return Err(LowerError::Unsupported("a move with no direction".to_string()));
+                return Err(LowerError::Unsupported(
+                    "a move with no direction".to_string(),
+                ));
             }
             Ok(vec![Op::Move { targets, offset }])
         }
@@ -386,9 +386,7 @@ pub fn lower_command(model: &Model, command: &Command) -> Result<Vec<Op>, LowerE
             super::expand::expand(model, command, structure)
         }
 
-        Verb::Duplicate | Verb::Mirror | Verb::Repeat => {
-            super::expand::expand_copy(model, command)
-        }
+        Verb::Duplicate | Verb::Mirror | Verb::Repeat => super::expand::expand_copy(model, command),
 
         other => Err(LowerError::Unsupported(format!("{other:?}").to_lowercase())),
     }
@@ -409,15 +407,17 @@ fn targets_of(model: &Model, command: &Command) -> Result<Vec<PlacementId>, Lowe
 
 /// The part a structure command should be built from.
 pub fn structure_part(command: &Command) -> Result<PartRef, LowerError> {
-    command.using().map_or_else(|| Ok(parts::default_part()), resolve_part)
+    command
+        .using()
+        .map_or_else(|| Ok(parts::default_part()), resolve_part)
 }
 
 /// Reads an extent in whole units, e.g. `10 studs long` -> 10.
 #[must_use]
 pub fn extent_count(command: &Command, axis: ExtentAxis, default: u32) -> u32 {
-    command
-        .extent(axis)
-        .map_or(default, |(count, _)| count.clamp(1, MAX_PLACEMENTS_PER_COMMAND))
+    command.extent(axis).map_or(default, |(count, _)| {
+        count.clamp(1, MAX_PLACEMENTS_PER_COMMAND)
+    })
 }
 
 /// The unit an extent was expressed in.
@@ -523,10 +523,7 @@ mod tests {
 
     #[test]
     fn moving_uses_the_conversational_reference() {
-        let model = run(&[
-            "Add a red 2x4 brick at origin",
-            "Move it one stud east",
-        ]);
+        let model = run(&["Add a red 2x4 brick at origin", "Move it one stud east"]);
         assert_eq!(model.placements[0].pos, IVec3::new(20, 0, 0));
     }
 
@@ -592,10 +589,7 @@ mod tests {
 
     #[test]
     fn naming_a_point_creates_a_landmark() {
-        let model = run(&[
-            "Add a red 2x4 brick at 20 0 40",
-            "Name this point gate",
-        ]);
+        let model = run(&["Add a red 2x4 brick at 20 0 40", "Name this point gate"]);
         assert_eq!(model.landmarks.get("gate"), Some(&IVec3::new(20, 0, 40)));
     }
 

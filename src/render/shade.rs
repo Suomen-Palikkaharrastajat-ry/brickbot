@@ -155,7 +155,12 @@ mod tests {
             rim: 4.0,
             ..Light::default()
         };
-        let hot = shade(Rgb::new(255, 255, 255), Vec3::new(0.0, 1.0, 0.0), VIEW, &light);
+        let hot = shade(
+            Rgb::new(255, 255, 255),
+            Vec3::new(0.0, 1.0, 0.0),
+            VIEW,
+            &light,
+        );
         assert_eq!(hot, Rgb::new(255, 255, 255));
     }
 

@@ -19,8 +19,19 @@ pub const LDU_PLATE: i32 = 8;
 pub const LDU_BRICK: i32 = 24;
 
 /// An integer point in LDraw units.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct IVec3 {
     pub x: i32,
     pub y: i32,
@@ -58,8 +69,7 @@ impl IVec3 {
 }
 
 /// The measurement units the build language understands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Unit {
     Stud,
     Plate,
@@ -89,8 +99,7 @@ impl Unit {
 }
 
 /// A compass or vertical direction, as used by the build language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Direction {
     North,
     South,
@@ -181,8 +190,9 @@ impl Direction {
 /// offers (`Rotate 90 degrees.`, `Face north.`, `Turn upside down.`) lands on
 /// one of these, they serialise to exact LDraw matrices with no floating-point
 /// drift, and they keep collision detection a pure integer box test.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Orientation {
     /// Quarter turns clockwise when viewed from above, 0-3.
     pub quarter_turns: u8,
@@ -256,17 +266,7 @@ impl Orientation {
             _ => (0, -1),
         };
         let flip = if self.upside_down { -1 } else { 1 };
-        [
-            cos,
-            0,
-            -sin,
-            0,
-            flip,
-            0,
-            sin,
-            0,
-            cos * flip,
-        ]
+        [cos, 0, -sin, 0, flip, 0, sin, 0, cos * flip]
     }
 
     /// Applies this orientation to a footprint measured in studs, swapping the
@@ -331,20 +331,11 @@ mod tests {
     #[test]
     fn explicit_units_override_the_default() {
         // "Raise by one plate."
-        assert_eq!(
-            Direction::Up.offset(1, Unit::Plate),
-            IVec3::new(0, -8, 0)
-        );
+        assert_eq!(Direction::Up.offset(1, Unit::Plate), IVec3::new(0, -8, 0));
         // "Lower by two bricks."
-        assert_eq!(
-            Direction::Down.offset(2, Unit::Brick),
-            IVec3::new(0, 48, 0)
-        );
+        assert_eq!(Direction::Down.offset(2, Unit::Brick), IVec3::new(0, 48, 0));
         // "Move east 3 studs."
-        assert_eq!(
-            Direction::East.offset(3, Unit::Stud),
-            IVec3::new(60, 0, 0)
-        );
+        assert_eq!(Direction::East.offset(3, Unit::Stud), IVec3::new(60, 0, 0));
     }
 
     #[test]

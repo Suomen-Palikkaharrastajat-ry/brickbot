@@ -5,7 +5,11 @@
 //! `clippy::pedantic`/`clippy::nursery` lints can be scoped precisely instead of
 //! being fought across a foreign generic API.
 
-#![allow(clippy::suboptimal_flops, clippy::doc_markdown, clippy::many_single_char_names)]
+#![allow(
+    clippy::suboptimal_flops,
+    clippy::doc_markdown,
+    clippy::many_single_char_names
+)]
 
 /// A point or direction in 3D space.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -53,7 +57,8 @@ impl Vec3 {
 
     #[must_use]
     pub fn dot(self, other: Self) -> f32 {
-        self.x.mul_add(other.x, self.y.mul_add(other.y, self.z * other.z))
+        self.x
+            .mul_add(other.x, self.y.mul_add(other.y, self.z * other.z))
     }
 
     #[must_use]
@@ -355,9 +360,7 @@ mod tests {
     fn mul_applies_rhs_first() {
         // Rotate 90 degrees about Y, then translate: the translation must not
         // be rotated.
-        let rot = Mat4::from_ldraw(
-            0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0,
-        );
+        let rot = Mat4::from_ldraw(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0);
         let trans = Mat4::translation(5.0, 0.0, 0.0);
         let combined = trans.mul(&rot);
         // (1,0,0) rotates to (0,0,-1), then shifts by +5 in x.
@@ -379,9 +382,7 @@ mod tests {
     #[test]
     fn det3_detects_mirroring() {
         assert!(Mat4::IDENTITY.det3() > 0.0);
-        let mirror = Mat4::from_ldraw(
-            0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
-        );
+        let mirror = Mat4::from_ldraw(0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
         assert!(mirror.det3() < 0.0);
     }
 

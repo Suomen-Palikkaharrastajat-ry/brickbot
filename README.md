@@ -157,6 +157,10 @@ The bot continuously syncs events from PocketBase into Discord's native Schedule
 - **`/events` Command:** A multi-step wizard to list upcoming events, submit new ones (sent to Zulip for moderation), or trigger a manual sync.
 
 
+### Collaborative Building
+- **`/build` Command:** Opens a thread and turns it into a shared LEGO workspace. Members describe the model in plain sentences — `Add a red 2x4 brick at origin.`, `Build a wall 10 studs long 6 bricks high.`, `Undo.` — and the bot re-renders it after every accepted command and can export it as a BrickLink Studio `.io` file. Ordinary conversation in the thread is ignored, so the thread stays usable for talking. See [`docs/commands/build.md`](docs/commands/build.md).
+- Real part shapes require the LDraw library: run `make fetch-ldraw` once. Until then the bot draws simple boxes.
+
 ### Ambient Assistant
 The bot monitors chat passively using an Ambient Assistant:
 - **LEGO Sets & Parts:** If the bot detects discussion about LEGO sets or parts, it offers a button to fetch details and images from Rebrickable/Brickset.

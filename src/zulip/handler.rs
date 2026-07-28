@@ -1,4 +1,4 @@
-use crate::zulip::{AppState, ZulipMessage, post_topic_to_stream, resolve_zulip_topic};
+use crate::zulip::{post_topic_to_stream, resolve_zulip_topic, AppState, ZulipMessage};
 use serde_json::Value;
 use serenity::all::ChannelId;
 use tracing::{error, info};

@@ -153,10 +153,8 @@ pub fn resolve(spec: &PartSpec) -> Resolution {
                 PartKind::Tile => (2u8, 2u8),
                 PartKind::Brick | PartKind::Plate | PartKind::Slope | PartKind::Other => (2, 4),
             };
-            lookup(kind, default_size.0, default_size.1).map_or_else(
-                || Resolution::Known(default_part()),
-                Resolution::Known,
-            )
+            lookup(kind, default_size.0, default_size.1)
+                .map_or_else(|| Resolution::Known(default_part()), Resolution::Known)
         }
     }
 }
