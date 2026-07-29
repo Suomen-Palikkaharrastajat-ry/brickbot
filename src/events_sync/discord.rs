@@ -1,5 +1,5 @@
 use crate::config::PocketBaseConfig;
-use crate::events_sync::{parse_pb_date, Event, PbRecord};
+use crate::events_sync::{Event, PbRecord, parse_pb_date};
 use chrono::Utc;
 
 use serenity::all::{GuildId, Http, ScheduledEvent, ScheduledEventStatus, ScheduledEventType};

@@ -17,7 +17,7 @@ use crate::ldraw::colors::Rgb;
 use crate::math::{Aabb, Vec3};
 use camera::Camera;
 use raster::Framebuffer;
-use shade::{face_normal, shade, Light};
+use shade::{Light, face_normal, shade};
 
 /// One world-space triangle with its final (unlit) colour.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -8,7 +8,7 @@
     clippy::case_sensitive_file_extension_comparisons
 )]
 
-use super::units::{IVec3, Orientation, LDU_BRICK, LDU_PLATE, LDU_STUD};
+use super::units::{IVec3, LDU_BRICK, LDU_PLATE, LDU_STUD, Orientation};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -294,6 +294,31 @@ impl Model {
         result
     }
 
+    /// The bounding box of a subset of placements, ignoring ids that no longer
+    /// exist.
+    ///
+    /// Distinct from [`Self::bounds`]: "how wide is this group" and "how wide
+    /// is the model" are different questions, and answering the first with the
+    /// second throws a duplicated group clear across a large build.
+    #[must_use]
+    pub fn subset_bounds(&self, ids: &[PlacementId]) -> Option<(IVec3, IVec3)> {
+        let mut result: Option<(IVec3, IVec3)> = None;
+        for placement in ids.iter().filter_map(|id| self.get(*id)) {
+            // A part with no footprint still contributes its origin.
+            let (min, max) = placement
+                .occupied_box()
+                .unwrap_or((placement.pos, placement.pos));
+            result = Some(match result {
+                None => (min, max),
+                Some((lo, hi)) => (
+                    IVec3::new(lo.x.min(min.x), lo.y.min(min.y), lo.z.min(min.z)),
+                    IVec3::new(hi.x.max(max.x), hi.y.max(max.y), hi.z.max(max.z)),
+                ),
+            });
+        }
+        result
+    }
+
     /// The model's height in LDraw units, measured from its lowest to its
     /// highest surface.
     #[must_use]
@@ -487,9 +512,11 @@ mod tests {
     fn a_part_with_no_footprint_has_no_box() {
         let unknown = PartRef::new("99999", "Mystery", (0, 0), PartKind::Other);
         assert!(!unknown.has_footprint());
-        assert!(place(PlacementId::new(0, 0), unknown, 4, IVec3::ZERO)
-            .occupied_box()
-            .is_none());
+        assert!(
+            place(PlacementId::new(0, 0), unknown, 4, IVec3::ZERO)
+                .occupied_box()
+                .is_none()
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@
 #![allow(clippy::doc_markdown)]
 
 use super::dsl::ast::Query;
-use super::lower::{predicate_of, resolve_ref, LowerError};
+use super::lower::{LowerError, predicate_of, resolve_ref};
 use super::model::{Model, PartRef, PlacementId};
 use super::ops::History;
 use super::units::IVec3;
@@ -29,24 +29,6 @@ pub enum QueryAnswer {
     /// Part, colour code and quantity, sorted for stable output.
     Inventory(Vec<(PartRef, u16, usize)>),
     NothingToReport,
-}
-
-/// The bounding box of a subset of placements, if any of them exist.
-fn subset_bounds(model: &Model, ids: &[PlacementId]) -> Option<(IVec3, IVec3)> {
-    let mut result: Option<(IVec3, IVec3)> = None;
-    for placement in ids.iter().filter_map(|id| model.get(*id)) {
-        let (min, max) = placement
-            .occupied_box()
-            .unwrap_or((placement.pos, placement.pos));
-        result = Some(match result {
-            None => (min, max),
-            Some((lo, hi)) => (
-                IVec3::new(lo.x.min(min.x), lo.y.min(min.y), lo.z.min(min.z)),
-                IVec3::new(hi.x.max(max.x), hi.y.max(max.y), hi.z.max(max.z)),
-            ),
-        });
-    }
-    result
 }
 
 const fn height_answer(ldu: i32) -> QueryAnswer {
@@ -84,7 +66,9 @@ pub fn answer(model: &Model, history: &History, query: &Query) -> Result<QueryAn
             None => Ok(height_answer(model.height_ldu())),
             Some(reference) => {
                 let ids = resolve_ref(model, reference)?;
-                let ldu = subset_bounds(model, &ids).map_or(0, |(min, max)| max.y - min.y);
+                let ldu = model
+                    .subset_bounds(&ids)
+                    .map_or(0, |(min, max)| max.y - min.y);
                 Ok(height_answer(ldu))
             }
         },
@@ -114,7 +98,9 @@ pub fn answer(model: &Model, history: &History, query: &Query) -> Result<QueryAn
 
         Query::WhereIs(reference) => {
             let ids = resolve_ref(model, reference)?;
-            let (min, max) = subset_bounds(model, &ids).ok_or(LowerError::NothingToActOn)?;
+            let (min, max) = model
+                .subset_bounds(&ids)
+                .ok_or(LowerError::NothingToActOn)?;
             // The centre of whatever was named, in LDraw units.
             Ok(QueryAnswer::Position(IVec3::new(
                 min.x.midpoint(max.x),
@@ -181,7 +167,7 @@ mod tests {
     use super::*;
     use crate::build::dsl::ast::{PartSpec, Ref};
     use crate::build::model::{PartKind, Placement};
-    use crate::build::ops::{apply, Op};
+    use crate::build::ops::{Op, apply};
     use crate::build::units::Orientation;
 
     fn brick() -> PartRef {
@@ -452,8 +438,12 @@ mod tests {
     fn subset_bounds_ignores_placements_that_are_gone() {
         let (model, _) = stacked();
         let ghost = PlacementId::new(99, 0);
-        assert!(subset_bounds(&model, &[ghost]).is_none());
-        assert!(subset_bounds(&model, &[PlacementId::new(0, 0), ghost]).is_some());
+        assert!(model.subset_bounds(&[ghost]).is_none());
+        assert!(
+            model
+                .subset_bounds(&[PlacementId::new(0, 0), ghost])
+                .is_some()
+        );
     }
 
     #[test]
@@ -467,7 +457,7 @@ mod tests {
             orientation: Orientation::DEFAULT,
             group: None,
         });
-        let bounds = subset_bounds(&model, &[PlacementId::new(0, 0)]).unwrap();
+        let bounds = model.subset_bounds(&[PlacementId::new(0, 0)]).unwrap();
         assert_eq!(bounds.0, IVec3::new(60, 0, 0));
     }
 }

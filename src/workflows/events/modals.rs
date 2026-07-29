@@ -1,5 +1,5 @@
 use crate::workflows::events::{
-    format_zulip_topic, validate_event_dates, InteractionVisibility, WizardInteraction,
+    InteractionVisibility, WizardInteraction, format_zulip_topic, validate_event_dates,
 };
 use crate::workflows::validation::{validate_text_field, validate_url};
 use crate::workflows::{AppContext, extract_locale_and_bot_name};
@@ -548,14 +548,14 @@ pub async fn handle_modal_submit_event(
         );
         let resp = CreateInteractionResponseMessage::new()
             .content(msg)
-            .components(vec![CreateActionRow::Buttons(vec![CreateButton::new(
-                format!("wizard_retry_submit:{retry_session_id}"),
-            )
-            .label(rust_i18n::t!(
-                "command.events.edit_and_retry",
-                locale = locale.as_str()
-            ))
-            .style(ButtonStyle::Primary)])])
+            .components(vec![CreateActionRow::Buttons(vec![
+                CreateButton::new(format!("wizard_retry_submit:{retry_session_id}"))
+                    .label(rust_i18n::t!(
+                        "command.events.edit_and_retry",
+                        locale = locale.as_str()
+                    ))
+                    .style(ButtonStyle::Primary),
+            ])])
             .ephemeral(true);
         let _ = interaction
             .create_response(&ctx.http, CreateInteractionResponse::Message(resp))
@@ -1000,14 +1000,14 @@ pub async fn handle_modal_edit_event(
             );
             let resp = CreateInteractionResponseMessage::new()
                 .content(msg)
-                .components(vec![CreateActionRow::Buttons(vec![CreateButton::new(
-                    format!("wizard_retry_submit:{draft_id}"),
-                )
-                .label(rust_i18n::t!(
-                    "command.events.edit_and_retry",
-                    locale = locale.as_str()
-                ))
-                .style(ButtonStyle::Primary)])])
+                .components(vec![CreateActionRow::Buttons(vec![
+                    CreateButton::new(format!("wizard_retry_submit:{draft_id}"))
+                        .label(rust_i18n::t!(
+                            "command.events.edit_and_retry",
+                            locale = locale.as_str()
+                        ))
+                        .style(ButtonStyle::Primary),
+                ])])
                 .ephemeral(true);
             let _ = interaction
                 .create_response(&ctx.http, CreateInteractionResponse::Message(resp))

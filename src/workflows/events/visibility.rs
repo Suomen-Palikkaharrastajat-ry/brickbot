@@ -1,5 +1,5 @@
 use crate::workflows::events::{InteractionVisibility, WizardInteraction};
-use crate::workflows::{extract_locale_and_bot_name, AppContext};
+use crate::workflows::{AppContext, extract_locale_and_bot_name};
 use serenity::all::{
     ComponentInteraction, Context, CreateActionRow, CreateInteractionResponseMessage,
 };

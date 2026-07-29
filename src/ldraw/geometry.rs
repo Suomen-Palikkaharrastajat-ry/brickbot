@@ -13,7 +13,7 @@
 #![allow(clippy::doc_markdown, clippy::many_single_char_names)]
 
 use super::colors::resolve_inherited;
-use super::types::{LdrawLine, Mesh, MeshTriangle, PartCache, COLOR_INHERIT};
+use super::types::{COLOR_INHERIT, LdrawLine, Mesh, MeshTriangle, PartCache};
 use crate::math::{Mat4, Vec3};
 use std::collections::HashSet;
 

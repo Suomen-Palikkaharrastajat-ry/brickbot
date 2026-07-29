@@ -82,6 +82,18 @@ fn relative_path(raw: &str) -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(path.to_path_buf()))
 }
 
+/// The most the library may expand to on disk.
+///
+/// `max_download_bytes` bounds the *compressed* archive, which says nothing
+/// about what it expands to — a deflate stream of zeroes is around a thousand
+/// to one. The official library is a few hundred megabytes unpacked, so this
+/// is generous and still stops a malformed or hostile archive filling the
+/// disk.
+pub const MAX_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// The most entries the archive may contain, for the same reason.
+pub const MAX_ENTRIES: usize = 200_000;
+
 /// Extracts an LDraw library archive into `data_dir`.
 ///
 /// Separate from [`sync`] so it can be tested against an in-memory archive
@@ -90,6 +102,13 @@ pub fn extract_archive(archive: &[u8], data_dir: &Path) -> anyhow::Result<SyncRe
     let reader = std::io::Cursor::new(archive);
     let mut zip = zip::ZipArchive::new(reader)?;
     let mut report = SyncReport::default();
+
+    if zip.len() > MAX_ENTRIES {
+        anyhow::bail!(
+            "refusing an archive with {} entries; the limit is {MAX_ENTRIES}",
+            zip.len()
+        );
+    }
 
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
@@ -115,13 +134,20 @@ pub fn extract_archive(archive: &[u8], data_dir: &Path) -> anyhow::Result<SyncRe
             continue;
         }
 
+        report.bytes_written += text.len() as u64;
+        if report.bytes_written > MAX_EXTRACTED_BYTES {
+            anyhow::bail!(
+                "refusing to extract more than {MAX_EXTRACTED_BYTES} bytes; \
+                 the archive is not the LDraw library"
+            );
+        }
+
         let destination = data_dir.join(&relative);
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&destination, text.as_bytes())?;
         report.files_written += 1;
-        report.bytes_written += text.len() as u64;
     }
 
     Ok(report)
@@ -258,8 +284,7 @@ mod tests {
     #[test]
     fn skips_files_marked_not_redistributable() {
         let dir = TempDir::new("licence");
-        let forbidden =
-            "0 Secret Part\n0 !LICENSE Not redistributable : see NonCAreadme.txt\n3 16 0 0 0 1 0 0 0 1 0\n";
+        let forbidden = "0 Secret Part\n0 !LICENSE Not redistributable : see NonCAreadme.txt\n3 16 0 0 0 1 0 0 0 1 0\n";
         let archive = make_archive(&[("parts/3001.dat", BRICK), ("parts/9999.dat", forbidden)]);
 
         let report = extract_archive(&archive, dir.path()).unwrap();

@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use crate::brick::{fetch_set, BricksetSet};
+use crate::brick::{BricksetSet, fetch_set};
 use rust_i18n::t;
 use serenity::all::{Context, CreateEmbed, Framework};
 
@@ -242,7 +242,9 @@ mod tests {
             ],
             &[],
         );
-        assert!(content.contains("https://www.bricklink.com/v2/catalog/catalogitem.page?S=42083-1"));
+        assert!(
+            content.contains("https://www.bricklink.com/v2/catalog/catalogitem.page?S=42083-1")
+        );
         assert!(content.contains("https://www.lego.com/fi-fi/search?q=42083"));
 
         let embed_json = serde_json::to_value(embed.unwrap()).unwrap();

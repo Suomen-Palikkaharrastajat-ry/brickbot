@@ -13,4 +13,4 @@ pub mod parser;
 pub mod resolve;
 pub mod types;
 
-pub use types::{LdrawLine, Mesh, MeshTriangle, SubfileRef, COLOR_EDGE, COLOR_INHERIT};
+pub use types::{COLOR_EDGE, COLOR_INHERIT, LdrawLine, Mesh, MeshTriangle, SubfileRef};

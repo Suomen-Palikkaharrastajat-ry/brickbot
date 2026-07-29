@@ -263,6 +263,8 @@ command:
     answer_nothing: "Ei raportoitavaa."
     error_unresolved: "En ole varma mihin '%{what}' viittaa."
     error_unknown_name: "En tunne mitään nimeltä '%{name}'."
+    pick_expired: "Tämä valinta ei enää odota mitään — malli on ehtinyt muuttua. Sano lause uudelleen."
+    error_unknown_builder: "En tiedä kuka '%{name}' on — kukaan sen niminen ei ole rakentanut täällä."
     error_nothing: "Mallissa ei ole vielä mitään."
     error_unknown_structure: "En osaa rakentaa kohdetta %{name}."
     error_needs_lookup: "En tunnista osaa '%{query}'. Kokeile osanumeroa tai yleistä kokoa kuten 2x4."

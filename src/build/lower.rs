@@ -17,7 +17,7 @@ use super::dsl::lexer::Verb;
 use super::model::{Model, PartKind, PartRef, PlacementId};
 use super::ops::{Op, Repeat, SelectPredicate};
 use super::parts::{self, Resolution};
-use super::units::{Direction, IVec3, Orientation, Unit, LDU_STUD};
+use super::units::{Direction, IVec3, LDU_STUD, Orientation, Unit};
 
 /// Why a well-formed sentence could not be carried out.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,10 +214,17 @@ fn span_along(footprint: (u8, u8), orientation: Orientation, direction: Directio
 }
 
 /// Resolves a described part into a real element.
-fn resolve_part(spec: &PartSpec) -> Result<PartRef, LowerError> {
+///
+/// `chosen` is the part a builder has just picked out of the `/part` dropdown,
+/// supplied when a paused sentence is retried. It answers any lookup this
+/// sentence would otherwise have to ask about — a sentence needing two unknown
+/// parts simply pauses again on the second.
+fn resolve_part(spec: &PartSpec, chosen: Option<&PartRef>) -> Result<PartRef, LowerError> {
     match parts::resolve(spec) {
         Resolution::Known(part) => Ok(part),
-        Resolution::NeedsLookup { query, kind } => Err(LowerError::NeedsPartLookup { query, kind }),
+        Resolution::NeedsLookup { query, kind } => chosen
+            .cloned()
+            .ok_or(LowerError::NeedsPartLookup { query, kind }),
     }
 }
 
@@ -253,12 +260,26 @@ fn offset_of(command: &Command) -> IVec3 {
 /// Lowers one command into the operations that carry it out.
 #[allow(clippy::too_many_lines)]
 pub fn lower_command(model: &Model, command: &Command) -> Result<Vec<Op>, LowerError> {
+    lower_command_with(model, command, None)
+}
+
+/// Lowers a command, optionally supplying the part a builder has just chosen
+/// from the `/part` dropdown.
+///
+/// The retry after a disambiguation goes back through the ordinary path rather
+/// than around it, so a resolved part behaves exactly as a catalogue hit would.
+#[allow(clippy::too_many_lines)]
+pub fn lower_command_with(
+    model: &Model,
+    command: &Command,
+    chosen: Option<&PartRef>,
+) -> Result<Vec<Op>, LowerError> {
     match command.verb {
         Verb::Add | Verb::Attach => {
             let ObjectExpr::Part(spec) = &command.object else {
                 return Err(LowerError::Unsupported("that".to_string()));
             };
-            let part = resolve_part(spec)?;
+            let part = resolve_part(spec, chosen)?;
             let pos = resolve_location(model, command.location.as_ref(), &part)?;
             let quantity = spec.quantity.clamp(1, MAX_PLACEMENTS_PER_COMMAND);
 
@@ -334,7 +355,7 @@ pub fn lower_command(model: &Model, command: &Command) -> Result<Vec<Op>, LowerE
                 .target_part
                 .as_ref()
                 .ok_or_else(|| LowerError::Unsupported("a replacement".to_string()))?;
-            let part = resolve_part(spec)?;
+            let part = resolve_part(spec, chosen)?;
             Ok(vec![Op::Replace { targets, part }])
         }
 
@@ -383,7 +404,7 @@ pub fn lower_command(model: &Model, command: &Command) -> Result<Vec<Op>, LowerE
             let ObjectExpr::Structure(structure) = &command.object else {
                 return Err(LowerError::Unsupported("that".to_string()));
             };
-            super::expand::expand(model, command, structure)
+            super::expand::expand(model, command, structure, chosen)
         }
 
         Verb::Duplicate | Verb::Mirror | Verb::Repeat => super::expand::expand_copy(model, command),
@@ -406,10 +427,11 @@ fn targets_of(model: &Model, command: &Command) -> Result<Vec<PlacementId>, Lowe
 }
 
 /// The part a structure command should be built from.
-pub fn structure_part(command: &Command) -> Result<PartRef, LowerError> {
-    command
-        .using()
-        .map_or_else(|| Ok(parts::default_part()), resolve_part)
+pub fn structure_part(command: &Command, chosen: Option<&PartRef>) -> Result<PartRef, LowerError> {
+    command.using().map_or_else(
+        || Ok(parts::default_part()),
+        |spec| resolve_part(spec, chosen),
+    )
 }
 
 /// Reads an extent in whole units, e.g. `10 studs long` -> 10.
@@ -435,9 +457,9 @@ pub fn structure_group(structure: &Structure) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::dsl::lexer::tokenize_sentence;
-    use crate::build::dsl::parser::{parse_sentence, SentenceOutcome};
     use crate::build::dsl::Statement;
+    use crate::build::dsl::lexer::tokenize_sentence;
+    use crate::build::dsl::parser::{SentenceOutcome, parse_sentence};
     use crate::build::ops::apply;
 
     fn command_of(text: &str) -> Command {

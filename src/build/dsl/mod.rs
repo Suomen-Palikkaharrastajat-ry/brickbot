@@ -20,5 +20,5 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::{Command, Meta, ObjectExpr, PartSpec, Query, Ref, Statement, Structure};
-pub use lexer::{tokenize, Sentence, Token, Verb};
-pub use parser::{parse_message, parse_sentence, ParseError, SentenceOutcome};
+pub use lexer::{Sentence, Token, Verb, tokenize};
+pub use parser::{ParseError, SentenceOutcome, parse_message, parse_sentence};

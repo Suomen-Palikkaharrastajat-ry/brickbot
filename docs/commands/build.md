@@ -21,10 +21,13 @@ The language it understands is a controlled natural language — English-like, q
    - A message is only treated as a command when it opens with a verb the language knows, or with a question word.
    - Anything else — "nice!", "I think the roof needs work", "brb" — produces **no reply, no reaction and no render**. The thread stays usable for ordinary conversation.
    - A sentence that *does* open with a known verb but fails to parse is reported, because the builder clearly meant something.
+   - A sentence opening with a *question* word is different: "what do you think?" and "where is everyone?" look exactly like "what changed?" and "where is tower?", so a question the language cannot answer — or one naming something nobody has built — is answered with silence rather than an error. A question changes nothing either way.
 
 3. **Collaborative Editing**:
    - Every accepted command becomes a revision in an append-only log, attributed to whoever sent it.
    - `Undo.`, `Redo.`, `Revert to revision 12.` and `Undo alice's last edit.` all work, the last of these leaving everyone else's edits in place.
+   - Names are matched against the people who have actually edited this model, by display name or nickname; an unambiguous abbreviation (`Undo al's last edit.`) is enough, and `Undo my last edit.` needs no name at all. A name nobody in the thread answers to is reported rather than silently doing nothing.
+   - Undo and redo survive a restart: where the session has been rewound to is stored alongside it, not baked into the log.
    - Because history is a log of operations rather than snapshots, `Who added roof?` and `What changed?` are answerable.
 
 4. **Conversational References**:
@@ -34,6 +37,8 @@ The language it understands is a controlled natural language — English-like, q
 5. **High-Level Structures**:
    - `Build a wall 10 studs long 6 bricks high.` expands server-side into individual bricks, laid in a running bond.
    - Walls, rows, towers, floors, boxes and stairs are supported, along with `Mirror` and `Duplicate`.
+   - `Mirror the wall across north.` picks the axis to reflect in; `across the centre` names the pivot and keeps the default east-west axis. Mirroring turns each part to face the other way, which is a rotation rather than a true reflection — right for bricks and plates, approximate for slopes.
+   - `Duplicate` steps the copy clear by the width of *what was copied*, not of the whole model, so duplicating one brick inside a large build puts it alongside.
    - Expansions are **not** black boxes: every brick they create is individually addressable afterwards, so `Paint all red bricks dark tan.` works on them normally. A whole structure is a single undo step.
 
 6. **Rendering**:
@@ -43,7 +48,7 @@ The language it understands is a controlled natural language — English-like, q
 
 7. **Part Resolution**:
    - Everyday elements (`a red 2x4 brick`) resolve instantly from a built-in catalogue, with no lookup.
-   - Anything unusual falls through to the same Rebrickable search that backs [`/part`](part.md), and the builder picks from a dropdown.
+   - Anything unusual falls through to the same Rebrickable search that backs [`/part`](part.md), and the builder picks from a dropdown. The sentence that was waiting is then carried out with the chosen element, exactly as if the catalogue had known it. Anything else that changes the model in the meantime cancels the pending choice, since the sentence would no longer mean what its author meant.
 
 8. **Export**:
    - The `[Export .io]` button, or the sentence `Export.`, produces a BrickLink Studio `.io` file.
@@ -90,9 +95,11 @@ Everything except the last item is pure and unit-tested, with no serenity, sqlx 
 - `src/build/export/` — LDraw text and the `.io` container.
 - `src/ldraw/` and `src/render/` — part geometry and the software rasterizer.
 - `src/build/dispatch.rs` — `process_message`, the single pure entry point the Discord layer calls.
-- `src/build/session.rs` — the only part that touches Discord: thread creation, persistence and the render loop.
+- `src/build/session.rs` — the only part that touches Discord: thread creation, persistence, the render loop and the part-choice dropdown.
 
-Storage is `build_sessions` and `build_revisions` (`migrations/0002_build_sessions.sql`), accessed through `src/db/build.rs`. Only the operation log is stored; the model is a fold over it.
+Storage is `build_sessions` and `build_revisions` (`migrations/0002_build_sessions.sql`, `migrations/0003_build_session_state.sql`), accessed through `src/db/build.rs`. Only the operation log is stored; the model is a fold over it. Where undo and redo have left the session is session state (`build_sessions.cursor`), separate from the per-revision `skipped` flag that `Undo alice's last edit.` sets — conflating the two makes redo impossible to express.
+
+Each session's read-interpret-write cycle is serialised by a per-session lock and committed in one transaction, because two people building in the same second is the expected case rather than a rare one.
 
 ## Appendix: The BrickTalk language
 
@@ -105,7 +112,7 @@ Sentences end with a full stop (or a newline). Several may appear in one message
 | `add` / `put` / `place` | `Add a red 2x4 brick at origin.` |
 | `move` / `shift` | `Move it one stud east.` |
 | `raise` / `lower` | `Raise by one plate.` |
-| `rotate` / `turn` | `Rotate 90 degrees.` `Turn it upside down.` |
+| `rotate` / `turn` | `Rotate 90 degrees.` `Turn it upside down.` Angles must be whole quarter turns; `Rotate 45 degrees.` is rejected rather than rounded. |
 | `remove` / `delete` | `Remove the last brick.` |
 | `replace` / `swap` | `Replace all red bricks with dark red.` |
 | `paint` / `colour` | `Paint the selection dark tan.` |

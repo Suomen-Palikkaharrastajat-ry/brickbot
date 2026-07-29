@@ -10,7 +10,7 @@
 #![allow(clippy::doc_markdown)]
 
 use crate::build::Model;
-use crate::discord_limits::{truncate, MAX_BUTTON_LABEL};
+use crate::discord_limits::{MAX_BUTTON_LABEL, truncate};
 use rust_i18n::t;
 use serenity::all::{
     ButtonStyle, CommandOptionType, CreateActionRow, CreateButton, CreateCommand,

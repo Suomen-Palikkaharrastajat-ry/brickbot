@@ -122,9 +122,11 @@ mod tests {
             file: "3001.dat".to_string(),
         });
         assert_eq!(sub.subfile().map(|r| r.file.as_str()), Some("3001.dat"));
-        assert!(LdrawLine::Meta("BFC CERTIFY CCW".to_string())
-            .subfile()
-            .is_none());
+        assert!(
+            LdrawLine::Meta("BFC CERTIFY CCW".to_string())
+                .subfile()
+                .is_none()
+        );
     }
 
     #[test]

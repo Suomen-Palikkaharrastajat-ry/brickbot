@@ -263,6 +263,8 @@ command:
     answer_nothing: "Nothing to report."
     error_unresolved: "I'm not sure what '%{what}' refers to."
     error_unknown_name: "I don't know anything called '%{name}'."
+    pick_expired: "That choice is no longer waiting on anything — the model has moved on since. Say the sentence again."
+    error_unknown_builder: "I don't know who '%{name}' is — nobody by that name has built anything here."
     error_nothing: "There's nothing in the model yet."
     error_unknown_structure: "I don't know how to build a %{name}."
     error_needs_lookup: "I don't recognise '%{query}'. Try a part number, or a common size like 2x4."

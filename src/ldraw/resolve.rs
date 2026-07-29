@@ -24,9 +24,9 @@
     clippy::case_sensitive_file_extension_comparisons
 )]
 
-use super::geometry::{flatten, pending_parts, FlattenLimits};
+use super::geometry::{FlattenLimits, flatten, pending_parts};
 use super::parser::{normalize_name, parse_file};
-use super::types::{LdrawLine, Mesh, PartCache, COLOR_INHERIT};
+use super::types::{COLOR_INHERIT, LdrawLine, Mesh, PartCache};
 use moka::future::Cache;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -104,6 +104,8 @@ pub struct LdrawLibrary {
     limits: ResolveLimits,
     files: Cache<String, Option<Arc<Vec<LdrawLine>>>>,
     meshes: Cache<String, Arc<Mesh>>,
+    /// Memoised answer to "is the library installed", see [`Self::is_available`].
+    available: Arc<std::sync::OnceLock<bool>>,
 }
 
 impl LdrawLibrary {
@@ -124,6 +126,7 @@ impl LdrawLibrary {
                 .max_capacity(2_000)
                 .time_to_live(Duration::from_secs(Self::FILE_TTL_SECS))
                 .build(),
+            available: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -134,9 +137,16 @@ impl LdrawLibrary {
 
     /// True when the library has been installed. When it is false the caller
     /// should render in box mode rather than failing.
+    ///
+    /// Answered once and then remembered: this is asked per render and per
+    /// `/build`, and it is two blocking `is_dir` calls on an async thread. A
+    /// library that appears while the bot is running is picked up on restart,
+    /// which is when `--fetch-ldraw` is run anyway.
     #[must_use]
     pub fn is_available(&self) -> bool {
-        super::library::is_installed(&self.data_dir)
+        *self
+            .available
+            .get_or_init(|| super::library::is_installed(&self.data_dir))
     }
 
     /// Reads and parses one file, trying each candidate path in turn.
@@ -411,11 +421,12 @@ mod tests {
     async fn a_part_with_no_geometry_is_an_error() {
         let dir = TempLibrary::new("nogeometry");
         dir.write("parts/3001.dat", "0 Just a comment\n");
-        assert!(dir
-            .library(ResolveLimits::default())
-            .mesh("3001")
-            .await
-            .is_err());
+        assert!(
+            dir.library(ResolveLimits::default())
+                .mesh("3001")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -9,10 +9,10 @@
 #![allow(clippy::doc_markdown)]
 
 use super::dsl::ast::{Meta, Statement};
-use super::dsl::parser::{parse_message, SentenceOutcome};
-use super::lower::{lower_command, LowerError};
-use super::model::PartKind;
-use super::ops::{apply, History, Op};
+use super::dsl::parser::{SentenceOutcome, parse_message};
+use super::lower::{LowerError, lower_command_with};
+use super::model::{PartKind, PartRef};
+use super::ops::{History, Op, apply};
 use super::{queries, report};
 
 /// A part the bot could not resolve, which the `/part` picker will answer.
@@ -22,6 +22,65 @@ pub struct PendingLookup {
     pub kind: PartKind,
     /// The sentence to retry once a part has been chosen.
     pub sentence: String,
+}
+
+/// The people building in a session, so a sentence can name one of them.
+///
+/// `Undo alice's last edit.` names a person the way chat does, but the
+/// operation log stores Discord user ids. Without a directory the two are
+/// compared directly and never match, which is why that sentence used to
+/// always answer "there is nothing to undo".
+///
+/// Kept as a plain list of pairs rather than anything serenity-shaped, so
+/// [`process_message`] stays a pure function that tests can drive by hand.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Builders {
+    /// `(lowercased display name, user id)`, in no particular order.
+    entries: Vec<(String, String)>,
+}
+
+impl Builders {
+    #[must_use]
+    pub fn new(entries: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(name, id)| (name.to_lowercase(), id))
+                .collect(),
+        }
+    }
+
+    /// Resolves a name typed in chat to a Discord user id.
+    ///
+    /// Tries an exact name, then a user id given verbatim, then an unambiguous
+    /// prefix — `Undo al's last edit.` should work when Alice is the only
+    /// `al…` in the thread, but must not guess between Alice and Alan.
+    #[must_use]
+    pub fn resolve(&self, name: &str) -> Option<&str> {
+        let needle = name.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        if let Some((_, id)) = self.entries.iter().find(|(n, _)| *n == needle) {
+            return Some(id);
+        }
+        if let Some((_, id)) = self.entries.iter().find(|(_, id)| *id == needle) {
+            return Some(id);
+        }
+        let mut matches = self
+            .entries
+            .iter()
+            .filter(|(n, _)| n.starts_with(&needle))
+            .map(|(_, id)| id.as_str());
+        let first = matches.next()?;
+        // Ambiguous prefixes resolve to nobody rather than to the wrong person.
+        matches.next().is_none().then_some(first)
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// Reactions the bot adds to the triggering message.
@@ -49,7 +108,15 @@ pub struct Outcome {
     pub finished: bool,
     /// Set when a part must be looked up before the sentence can be finished.
     pub pending_lookup: Option<PendingLookup>,
-    /// How the history cursor moved, when `Undo`/`Redo`/`Revert` was used.
+    /// The revision index `ops[0]` must be written at, and from which any redo
+    /// tail must be discarded.
+    ///
+    /// Not simply the loaded history's cursor: `Undo. Add a brick.` rewinds
+    /// first, so the new operation belongs at the revision the undo freed. The
+    /// caller must not derive this itself.
+    pub ops_start: Option<usize>,
+    /// Where the history cursor ends up, when anything moved it — an
+    /// `Undo`/`Redo`/`Revert`, or new operations being appended.
     pub cursor: Option<usize>,
     /// The author whose last edit should be marked skipped.
     pub skip_last_by: Option<String>,
@@ -70,6 +137,7 @@ impl Outcome {
             && !self.needs_export
             && !self.finished
             && self.pending_lookup.is_none()
+            && self.ops_start.is_none()
             && self.cursor.is_none()
             && self.skip_last_by.is_none()
     }
@@ -95,18 +163,60 @@ impl Outcome {
 /// steps did not happen.
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn process_message(history: &History, text: &str, locale: &str) -> Outcome {
+pub fn process_message(
+    history: &History,
+    text: &str,
+    locale: &str,
+    builders: &Builders,
+    author: &str,
+) -> Outcome {
+    run_sentences(history, text, locale, builders, author, None)
+}
+
+/// Interprets a message with a part the builder has just chosen.
+///
+/// Used to finish a sentence that paused on an unknown part: the sentence is
+/// replayed exactly as typed, with `chosen` answering the lookup it stopped
+/// on. Going back through the ordinary path — rather than patching an
+/// operation together by hand — is what keeps a resolved part behaving like a
+/// catalogue hit, modifiers, location and all.
+#[must_use]
+pub fn process_message_with_part(
+    history: &History,
+    text: &str,
+    locale: &str,
+    builders: &Builders,
+    author: &str,
+    chosen: &PartRef,
+) -> Outcome {
+    run_sentences(history, text, locale, builders, author, Some(chosen))
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_sentences(
+    history: &History,
+    text: &str,
+    locale: &str,
+    builders: &Builders,
+    // Whoever sent the message, so operations simulated within it are
+    // attributed correctly to later sentences of the same message.
+    author: &str,
+    chosen: Option<&PartRef>,
+) -> Outcome {
     let mut outcome = Outcome::default();
     // A working copy, so each sentence sees the effect of the previous one.
     let mut working = history.clone();
+    // Set when a sentence failed, so the rest of the message is abandoned.
+    let mut stopped = false;
 
-    for (index, sentence) in parse_message(text).into_iter().enumerate() {
+    'sentences: for (index, sentence) in parse_message(text).into_iter().enumerate() {
         let statement = match sentence {
             // Ordinary chat: contribute nothing whatsoever.
             SentenceOutcome::Ignored => continue,
             SentenceOutcome::Error(error) => {
                 outcome.problem(report::describe_parse_error(&error, locale));
-                return outcome;
+                stopped = true;
+                break 'sentences;
             }
             SentenceOutcome::Statement(statement) => statement,
         };
@@ -119,8 +229,9 @@ pub fn process_message(history: &History, text: &str, locale: &str) -> Outcome {
             }
 
             Statement::Meta(meta) => {
-                if !apply_meta(&mut outcome, &mut working, &meta, locale) {
-                    return outcome;
+                if !apply_meta(&mut outcome, &mut working, &meta, locale, builders) {
+                    stopped = true;
+                    break 'sentences;
                 }
             }
 
@@ -130,24 +241,42 @@ pub fn process_message(history: &History, text: &str, locale: &str) -> Outcome {
                     Ok(answer) => outcome
                         .replies
                         .push(report::describe_answer(&answer, &model, locale)),
+                    // A question naming something we have never heard of is
+                    // far more likely to be chat — "where is everyone?" — than
+                    // a real query, and it changes nothing either way, so the
+                    // silence policy wins. Questions that fail for any other
+                    // reason are still worth answering.
+                    Err(
+                        LowerError::UnknownName(_)
+                        | LowerError::UnresolvedReference(_)
+                        | LowerError::NothingToActOn,
+                    ) => {}
                     Err(error) => {
                         outcome.problem(report::describe_error(&error, locale));
-                        return outcome;
+                        stopped = true;
+                        break 'sentences;
                     }
                 }
             }
 
             Statement::Command(command) => {
                 let model = working.materialize();
-                match lower_command(&model, &command) {
+                match lower_command_with(&model, &command, chosen) {
                     Ok(ops) => {
                         for op in ops {
                             let mut next = working.materialize();
-                            let effect = apply(&mut next, working.next_rev(), &op);
+                            let rev = working.next_rev();
+                            let effect = apply(&mut next, rev, &op);
                             outcome
                                 .replies
                                 .push(report::describe_effect(&op, &effect, locale));
-                            working.push(op.clone(), "");
+                            // The first operation fixes where the whole batch
+                            // is written, which is not the loaded cursor when
+                            // an undo came earlier in the same message.
+                            if outcome.ops_start.is_none() {
+                                outcome.ops_start = Some(rev as usize);
+                            }
+                            working.push(op.clone(), author);
                             outcome.ops.push(op);
                         }
                         outcome.applied();
@@ -161,11 +290,13 @@ pub fn process_message(history: &History, text: &str, locale: &str) -> Outcome {
                             kind,
                             sentence: nth_sentence(text, index),
                         });
-                        return outcome;
+                        stopped = true;
+                        break 'sentences;
                     }
                     Err(error) => {
                         outcome.problem(report::describe_error(&error, locale));
-                        return outcome;
+                        stopped = true;
+                        break 'sentences;
                     }
                 }
             }
@@ -173,24 +304,38 @@ pub fn process_message(history: &History, text: &str, locale: &str) -> Outcome {
     }
 
     // Only the last reply is worth posting when several commands succeeded;
-    // a running commentary on every brick would drown the thread.
-    if outcome.ops.len() > 1 && outcome.replies.len() > 1 {
+    // a running commentary on every brick would drown the thread. A message
+    // that stopped early keeps every reply, because the last of them is the
+    // problem and the ones before it say what did happen.
+    if !stopped && outcome.ops.len() > 1 && outcome.replies.len() > 1 {
         let last = outcome.replies.pop().unwrap_or_default();
         outcome.replies.clear();
         outcome.replies.push(last);
+    }
+
+    // The cursor is reported once, from the simulation, rather than by each
+    // meta command in turn: `Undo. Add a brick.` moves it twice and only the
+    // final position is meaningful to the caller.
+    if working.revision() != history.revision() || !outcome.ops.is_empty() {
+        outcome.cursor = Some(working.revision());
     }
 
     outcome
 }
 
 /// Applies a session-level command. Returns false when processing should stop.
-fn apply_meta(outcome: &mut Outcome, working: &mut History, meta: &Meta, locale: &str) -> bool {
+fn apply_meta(
+    outcome: &mut Outcome,
+    working: &mut History,
+    meta: &Meta,
+    locale: &str,
+    builders: &Builders,
+) -> bool {
     use rust_i18n::t;
 
     match meta {
         Meta::Undo => {
             if working.undo() {
-                outcome.cursor = Some(working.revision());
                 outcome
                     .replies
                     .push(t!("command.build.undone", locale = locale).to_string());
@@ -201,9 +346,22 @@ fn apply_meta(outcome: &mut Outcome, working: &mut History, meta: &Meta, locale:
                 return false;
             }
         }
-        Meta::UndoBy(author) => {
-            if working.undo_last_by(author) {
-                outcome.skip_last_by = Some(author.clone());
+        Meta::UndoBy(name) => {
+            // The sentence names a person; the log records user ids. Resolving
+            // here is what makes the two comparable at all.
+            let Some(user_id) = builders.resolve(name).map(ToString::to_string) else {
+                outcome.problem(
+                    t!(
+                        "command.build.error_unknown_builder",
+                        locale = locale,
+                        name = name
+                    )
+                    .to_string(),
+                );
+                return false;
+            };
+            if working.undo_last_by(&user_id) {
+                outcome.skip_last_by = Some(user_id);
                 outcome
                     .replies
                     .push(t!("command.build.undone", locale = locale).to_string());
@@ -216,7 +374,6 @@ fn apply_meta(outcome: &mut Outcome, working: &mut History, meta: &Meta, locale:
         }
         Meta::Redo => {
             if working.redo() {
-                outcome.cursor = Some(working.revision());
                 outcome
                     .replies
                     .push(t!("command.build.redone", locale = locale).to_string());
@@ -230,7 +387,6 @@ fn apply_meta(outcome: &mut Outcome, working: &mut History, meta: &Meta, locale:
         Meta::RevertTo(revision) => {
             let target = *revision as usize;
             if working.revert_to(target) {
-                outcome.cursor = Some(working.revision());
                 outcome.replies.push(
                     t!(
                         "command.build.reverted",
@@ -252,15 +408,6 @@ fn apply_meta(outcome: &mut Outcome, working: &mut History, meta: &Meta, locale:
                 );
                 return false;
             }
-        }
-        Meta::Rename(name) => {
-            let op = Op::Rename { name: name.clone() };
-            working.push(op.clone(), "");
-            outcome.ops.push(op);
-            outcome
-                .replies
-                .push(t!("command.build.renamed", locale = locale).to_string());
-            outcome.applied();
         }
         Meta::Export => {
             outcome.needs_export = true;
@@ -295,13 +442,37 @@ mod tests {
         History::new("Castle")
     }
 
+    /// The people in the fixture thread, as the session layer would supply
+    /// them: chat names on the left, Discord user ids on the right.
+    fn builders() -> Builders {
+        Builders::new([
+            ("Alice".to_string(), "111".to_string()),
+            ("Bob".to_string(), "222".to_string()),
+        ])
+    }
+
+    fn interpret(history: &History, text: &str, locale: &str) -> Outcome {
+        process_message(history, text, locale, &builders(), "111")
+    }
+
+    fn add_brick(color: u16) -> Op {
+        Op::Add {
+            part: crate::build::PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick),
+            color,
+            pos: crate::build::IVec3::ZERO,
+            orientation: crate::build::Orientation::DEFAULT,
+            repeat: None,
+            group: None,
+        }
+    }
+
     /// Runs a script, returning the resulting history.
     fn run(script: &[&str]) -> History {
         let mut history = empty();
         for text in script {
-            let outcome = process_message(&history, text, "en-US");
+            let outcome = interpret(&history, text, "en-US");
             for op in outcome.ops {
-                history.push(op, "alice");
+                history.push(op, "111");
             }
             if let Some(cursor) = outcome.cursor {
                 history.cursor = cursor;
@@ -323,7 +494,7 @@ mod tests {
             "",
             "   ",
         ] {
-            let outcome = process_message(&empty(), chat, "en-US");
+            let outcome = interpret(&empty(), chat, "en-US");
             assert!(
                 outcome.is_silent(),
                 "{chat:?} should have been silent, got {outcome:?}"
@@ -333,7 +504,7 @@ mod tests {
 
     #[test]
     fn a_command_produces_an_operation_a_reply_and_a_render() {
-        let outcome = process_message(&empty(), "Add a red 2x4 brick at origin.", "en-US");
+        let outcome = interpret(&empty(), "Add a red 2x4 brick at origin.", "en-US");
         assert_eq!(outcome.ops.len(), 1);
         assert_eq!(outcome.replies.len(), 1);
         assert!(outcome.reactions.contains(&reactions::APPLIED));
@@ -354,8 +525,20 @@ mod tests {
     }
 
     #[test]
+    fn a_message_typed_as_several_lines_applies_every_line() {
+        // Regression: newlines were collapsed before the message was split
+        // into sentences, so only the first line ran and the rest vanished
+        // without a word.
+        let history = run(&["Add a red 2x4 brick at origin\nAdd a blue 2x4 brick"]);
+        let model = history.materialize();
+        assert_eq!(model.len(), 2, "both lines ran");
+        assert_eq!(model.placements[0].color, 4);
+        assert_eq!(model.placements[1].color, 1);
+    }
+
+    #[test]
     fn several_commands_produce_one_summary_not_a_running_commentary() {
-        let outcome = process_message(
+        let outcome = interpret(
             &empty(),
             "Add a red brick. Add a blue brick. Add a yellow brick.",
             "en-US",
@@ -366,7 +549,7 @@ mod tests {
 
     #[test]
     fn a_failure_midway_stops_the_rest() {
-        let outcome = process_message(
+        let outcome = interpret(
             &empty(),
             "Add a red 2x4 brick at origin. Move the gatehouse east. Add a blue brick.",
             "en-US",
@@ -382,7 +565,7 @@ mod tests {
 
     #[test]
     fn chat_mixed_with_a_command_acts_only_on_the_command() {
-        let outcome = process_message(
+        let outcome = interpret(
             &empty(),
             "ooh nice idea! Add a red 2x4 brick at origin. love it",
             "en-US",
@@ -393,7 +576,7 @@ mod tests {
 
     #[test]
     fn a_comment_is_acknowledged_but_changes_nothing() {
-        let outcome = process_message(&empty(), "Note: this is temporary support.", "en-US");
+        let outcome = interpret(&empty(), "Note: this is temporary support.", "en-US");
         assert!(outcome.ops.is_empty());
         assert!(outcome.replies.is_empty());
         assert_eq!(outcome.reactions, vec![reactions::COMMENT]);
@@ -403,7 +586,7 @@ mod tests {
 
     #[test]
     fn a_malformed_command_is_reported_not_ignored() {
-        let outcome = process_message(&empty(), "Add the", "en-US");
+        let outcome = interpret(&empty(), "Add the", "en-US");
         assert!(outcome.ops.is_empty());
         assert!(outcome.reactions.contains(&reactions::PROBLEM));
         assert_eq!(outcome.replies.len(), 1);
@@ -411,7 +594,7 @@ mod tests {
 
     #[test]
     fn an_unknown_part_asks_for_a_lookup() {
-        let outcome = process_message(&empty(), "Add a red 3x12 brick at origin.", "en-US");
+        let outcome = interpret(&empty(), "Add a red 3x12 brick at origin.", "en-US");
         let pending = outcome.pending_lookup.expect("expected a pending lookup");
         assert_eq!(pending.kind, PartKind::Brick);
         assert!(pending.sentence.contains("3x12"));
@@ -423,7 +606,7 @@ mod tests {
 
     #[test]
     fn a_lookup_pauses_the_rest_of_the_message() {
-        let outcome = process_message(
+        let outcome = interpret(
             &empty(),
             "Add a red 2x4 brick at origin. Add a 3x12 brick. Add a blue brick.",
             "en-US",
@@ -432,26 +615,158 @@ mod tests {
         assert!(outcome.pending_lookup.is_some());
     }
 
+    // --- Part disambiguation ----------------------------------------------
+
+    fn chosen_part() -> crate::build::PartRef {
+        crate::build::PartRef::new("3009", "Brick 1 x 6", (1, 6), PartKind::Brick)
+    }
+
+    #[test]
+    fn a_chosen_part_finishes_the_sentence_that_was_waiting() {
+        let history = empty();
+        let paused = interpret(&history, "Add a red 3x12 brick at origin.", "en-US");
+        let pending = paused.pending_lookup.expect("expected a pending lookup");
+        assert!(paused.ops.is_empty());
+
+        let outcome = process_message_with_part(
+            &history,
+            &pending.sentence,
+            "en-US",
+            &builders(),
+            "111",
+            &chosen_part(),
+        );
+        assert_eq!(outcome.ops.len(), 1);
+        assert!(outcome.needs_render);
+
+        let mut applied = history;
+        for op in &outcome.ops {
+            applied.push(op.clone(), "111");
+        }
+        let model = applied.materialize();
+        assert_eq!(model.len(), 1);
+        assert_eq!(model.placements[0].part.ldraw_id, "3009");
+        assert_eq!(model.placements[0].color, 4, "the sentence's colour won");
+    }
+
+    #[test]
+    fn a_chosen_part_also_serves_a_structure() {
+        let history = empty();
+        let outcome = process_message_with_part(
+            &history,
+            "Build a wall 4 studs long 2 bricks high using 3x12 bricks.",
+            "en-US",
+            &builders(),
+            "111",
+            &chosen_part(),
+        );
+        assert_eq!(outcome.ops.len(), 1);
+        let mut applied = history;
+        for op in &outcome.ops {
+            applied.push(op.clone(), "111");
+        }
+        let model = applied.materialize();
+        assert!(!model.is_empty());
+        assert!(
+            model.placements.iter().all(|p| p.part.ldraw_id == "3009"),
+            "the whole wall is built from the chosen part"
+        );
+    }
+
+    #[test]
+    fn a_chosen_part_does_not_disturb_a_sentence_that_never_needed_one() {
+        let history = empty();
+        let outcome = process_message_with_part(
+            &history,
+            "Add a red 2x4 brick at origin.",
+            "en-US",
+            &builders(),
+            "111",
+            &chosen_part(),
+        );
+        let mut applied = history;
+        for op in &outcome.ops {
+            applied.push(op.clone(), "111");
+        }
+        assert_eq!(
+            applied.materialize().placements[0].part.ldraw_id,
+            "3001",
+            "the catalogue still answers what it can"
+        );
+    }
+
     #[test]
     fn undo_and_redo_move_the_history() {
         let mut history = run(&["Add a red 2x4 brick at origin."]);
         assert_eq!(history.materialize().len(), 1);
 
-        let outcome = process_message(&history, "Undo.", "en-US");
+        let outcome = interpret(&history, "Undo.", "en-US");
         assert_eq!(outcome.cursor, Some(0));
         assert!(outcome.needs_render);
         history.cursor = outcome.cursor.unwrap();
         assert!(history.materialize().is_empty());
 
-        let outcome = process_message(&history, "Redo.", "en-US");
+        let outcome = interpret(&history, "Redo.", "en-US");
         assert_eq!(outcome.cursor, Some(1));
         history.cursor = outcome.cursor.unwrap();
         assert_eq!(history.materialize().len(), 1);
     }
 
     #[test]
+    fn an_undo_followed_by_a_command_writes_at_the_freed_revision() {
+        // Regression: the outcome reported only the *final* cursor, so the
+        // Discord layer appended the new operation at the pre-undo index and
+        // then set the cursor below it, losing the new brick.
+        let history = run(&["Add a red 2x4 brick at origin.", "Add a blue 2x4 brick."]);
+        assert_eq!(history.ops.len(), 2);
+
+        let outcome = interpret(&history, "Undo. Add a yellow 2x4 brick.", "en-US");
+
+        assert_eq!(outcome.ops.len(), 1);
+        assert_eq!(
+            outcome.ops_start,
+            Some(1),
+            "the new operation replaces the undone one"
+        );
+        assert_eq!(
+            outcome.cursor,
+            Some(2),
+            "the cursor ends past the new operation"
+        );
+
+        // Applying the outcome the way the session layer does must leave the
+        // yellow brick in the model.
+        let mut applied = history;
+        applied.cursor = outcome.ops_start.unwrap();
+        for op in &outcome.ops {
+            applied.push(op.clone(), "alice");
+        }
+        applied.cursor = outcome.cursor.unwrap();
+
+        let model = applied.materialize();
+        assert_eq!(model.len(), 2);
+        assert_eq!(model.placements[1].color, 14, "the yellow brick survived");
+    }
+
+    #[test]
+    fn a_plain_command_reports_where_its_operations_start() {
+        let history = run(&["Add a red 2x4 brick at origin."]);
+        let outcome = interpret(&history, "Add a blue 2x4 brick.", "en-US");
+        assert_eq!(outcome.ops_start, Some(1));
+        assert_eq!(outcome.cursor, Some(2));
+    }
+
+    #[test]
+    fn a_message_that_changes_nothing_reports_no_revision_movement() {
+        let history = run(&["Add a red 2x4 brick at origin."]);
+        let outcome = interpret(&history, "How tall is it?", "en-US");
+        assert!(outcome.ops_start.is_none());
+        assert!(outcome.cursor.is_none());
+    }
+
+    #[test]
     fn undo_with_nothing_to_undo_says_so() {
-        let outcome = process_message(&empty(), "Undo.", "en-US");
+        let outcome = interpret(&empty(), "Undo.", "en-US");
         assert!(outcome.cursor.is_none());
         assert!(outcome.reactions.contains(&reactions::PROBLEM));
         assert!(!outcome.needs_render);
@@ -460,45 +775,123 @@ mod tests {
     #[test]
     fn reverting_to_an_impossible_revision_is_reported() {
         let history = run(&["Add a red 2x4 brick at origin."]);
-        let outcome = process_message(&history, "Revert to revision 99.", "en-US");
+        let outcome = interpret(&history, "Revert to revision 99.", "en-US");
         assert!(outcome.cursor.is_none());
         assert!(outcome.reactions.contains(&reactions::PROBLEM));
     }
 
     #[test]
     fn undoing_one_persons_edit_is_recorded_separately() {
+        // Regression: the sentence names a person, but the log records Discord
+        // user ids. Comparing the two directly — which is what this used to do
+        // — never matched, so this always answered "nothing to undo".
         let mut history = empty();
         history.push(
             Op::Rename {
                 name: "Castle".to_string(),
             },
-            "alice",
+            "111",
         );
-        let outcome = process_message(&history, "Undo alice's last edit.", "en-US");
-        assert_eq!(outcome.skip_last_by.as_deref(), Some("alice"));
+        let outcome = interpret(&history, "Undo alice's last edit.", "en-US");
+        assert_eq!(
+            outcome.skip_last_by.as_deref(),
+            Some("111"),
+            "the name resolved to a user id"
+        );
         assert!(outcome.needs_render);
+        assert!(outcome.reactions.contains(&reactions::APPLIED));
+    }
+
+    #[test]
+    fn undoing_someone_elses_edit_leaves_yours_alone() {
+        let mut history = empty();
+        history.push(add_brick(4), "111");
+        history.push(add_brick(1), "222");
+
+        let outcome = interpret(&history, "Undo bob's last edit.", "en-US");
+        assert_eq!(outcome.skip_last_by.as_deref(), Some("222"));
+
+        // Marking bob's revision skipped leaves alice's brick standing.
+        let mut applied = history;
+        applied.ops[1].skipped = true;
+        let model = applied.materialize();
+        assert_eq!(model.len(), 1);
+        assert_eq!(model.placements[0].color, 4);
+    }
+
+    #[test]
+    fn undoing_a_stranger_says_who_it_does_not_know() {
+        let mut history = empty();
+        history.push(add_brick(4), "111");
+        let outcome = interpret(&history, "Undo mallory's last edit.", "en-US");
+
+        assert!(outcome.skip_last_by.is_none());
+        assert!(outcome.reactions.contains(&reactions::PROBLEM));
+        assert!(
+            outcome.replies[0].contains("mallory"),
+            "got: {}",
+            outcome.replies[0]
+        );
+    }
+
+    #[test]
+    fn a_name_can_be_abbreviated_but_never_guessed_between_two_people() {
+        let unique = Builders::new([
+            ("Alice".to_string(), "111".to_string()),
+            ("Bob".to_string(), "222".to_string()),
+        ]);
+        assert_eq!(unique.resolve("al"), Some("111"));
+        assert_eq!(unique.resolve("ALICE"), Some("111"));
+        // A user id always resolves, so an uncached member is still nameable.
+        assert_eq!(unique.resolve("222"), Some("222"));
+        assert_eq!(unique.resolve("nobody"), None);
+        assert_eq!(unique.resolve(""), None);
+
+        let ambiguous = Builders::new([
+            ("Alice".to_string(), "111".to_string()),
+            ("Alan".to_string(), "333".to_string()),
+        ]);
+        assert_eq!(
+            ambiguous.resolve("al"),
+            None,
+            "an ambiguous prefix must not pick a person"
+        );
+        assert_eq!(ambiguous.resolve("alice"), Some("111"));
+    }
+
+    #[test]
+    fn who_added_something_answers_with_a_mention() {
+        let mut history = empty();
+        history.push(add_brick(4), "111");
+        let outcome = interpret(&history, "Who added that?", "en-US");
+        assert_eq!(outcome.replies.len(), 1);
+        assert!(
+            outcome.replies[0].contains("<@111>"),
+            "got: {}",
+            outcome.replies[0]
+        );
     }
 
     #[test]
     fn export_render_help_and_finish_set_their_flags() {
-        let outcome = process_message(&empty(), "Export.", "en-US");
+        let outcome = interpret(&empty(), "Export.", "en-US");
         assert!(outcome.needs_export);
 
-        let outcome = process_message(&empty(), "Render.", "en-US");
+        let outcome = interpret(&empty(), "Render.", "en-US");
         assert!(outcome.needs_render);
 
-        let outcome = process_message(&empty(), "Help.", "en-US");
+        let outcome = interpret(&empty(), "Help.", "en-US");
         assert_eq!(outcome.replies.len(), 1);
         assert!(outcome.replies[0].contains("Add a red 2x4 brick"));
 
-        let outcome = process_message(&empty(), "Finish.", "en-US");
+        let outcome = interpret(&empty(), "Finish.", "en-US");
         assert!(outcome.finished);
     }
 
     #[test]
     fn a_query_answers_without_changing_anything() {
         let history = run(&["Add a red 2x4 brick at origin.", "Add a blue 2x4 brick."]);
-        let outcome = process_message(&history, "How tall is it?", "en-US");
+        let outcome = interpret(&history, "How tall is it?", "en-US");
 
         assert!(outcome.ops.is_empty());
         assert!(!outcome.needs_render);
@@ -511,15 +904,45 @@ mod tests {
     }
 
     #[test]
-    fn a_query_about_nothing_is_reported() {
-        let outcome = process_message(&empty(), "Where is the roof?", "en-US");
+    fn a_question_about_something_we_have_never_heard_of_is_silent() {
+        // This used to answer "I don't know anything called 'roof'". In a
+        // thread that is also a conversation, "where is everyone?" has the
+        // very same shape, so the bot barked at ordinary chat. A question
+        // changes nothing, so saying nothing is the safe reading.
+        for chat in [
+            "Where is the roof?",
+            "Where is everyone?",
+            "How tall is the gatehouse?",
+            "Who added the thing?",
+        ] {
+            let outcome = interpret(&empty(), chat, "en-US");
+            assert!(
+                outcome.is_silent(),
+                "{chat:?} should have been silent, got {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_question_about_something_real_is_still_answered() {
+        let history = run(&["Add a red 2x4 brick at origin.", "Call this tower."]);
+        let outcome = interpret(&history, "Where is tower?", "en-US");
+        assert_eq!(outcome.replies.len(), 1, "got: {outcome:?}");
+        assert!(!outcome.is_silent());
+    }
+
+    #[test]
+    fn a_verb_led_query_that_cannot_run_is_still_reported() {
+        // Only the question-word forms are ambiguous with chat. `Find` and
+        // `Show` open with a verb, so a builder who gets one wrong is told.
+        let outcome = interpret(&empty(), "Find nothing at all.", "en-US");
         assert!(outcome.reactions.contains(&reactions::PROBLEM));
     }
 
     #[test]
     fn replies_are_localised() {
-        let english = process_message(&empty(), "Add a red 2x4 brick at origin.", "en-US");
-        let finnish = process_message(&empty(), "Add a red 2x4 brick at origin.", "fi-FI");
+        let english = interpret(&empty(), "Add a red 2x4 brick at origin.", "en-US");
+        let finnish = interpret(&empty(), "Add a red 2x4 brick at origin.", "fi-FI");
         assert_ne!(english.replies, finnish.replies);
         assert_eq!(english.ops, finnish.ops, "the model is language-neutral");
     }

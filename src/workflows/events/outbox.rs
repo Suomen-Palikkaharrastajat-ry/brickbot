@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use crate::config::Config;
 use crate::http::HttpProvider;

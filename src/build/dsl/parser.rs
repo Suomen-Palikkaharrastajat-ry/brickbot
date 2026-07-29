@@ -62,6 +62,9 @@ struct Parser<'a> {
     /// description would swallow the colour.
     end: usize,
     sentence: &'a str,
+    /// An angle that is not a whole number of quarter turns, so the sentence
+    /// can be rejected rather than silently rounded.
+    bad_angle: Option<i64>,
 }
 
 impl<'a> Parser<'a> {
@@ -71,6 +74,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             end: sentence.tokens.len(),
             sentence: &sentence.text,
+            bad_angle: None,
         }
     }
 
@@ -472,6 +476,14 @@ impl<'a> Parser<'a> {
                 let value = *n;
                 if matches!(self.peek_at(1), Some(Token::Keyword(Keyword::Degrees))) {
                     self.pos += 2;
+                    // Parts only sit on quarter turns, so anything else was a
+                    // misunderstanding. Rounding it to zero used to fall
+                    // through to the bare-`Rotate` branch and quietly turn the
+                    // part 90 degrees instead.
+                    if value % 90 != 0 {
+                        self.bad_angle = Some(value);
+                        continue;
+                    }
                     #[allow(clippy::cast_possible_truncation)]
                     modifiers.push(Modifier::Turn((value / 90) as i32));
                     continue;
@@ -496,6 +508,29 @@ impl<'a> Parser<'a> {
             }
             if self.eat_word("anticlockwise") || self.eat_word("counterclockwise") {
                 modifiers.push(Modifier::Turn(-1));
+                continue;
+            }
+
+            // "across the centre", "about the north-south axis" — the axis a
+            // mirror reflects in. Without this the direction is swallowed by
+            // the skip below and every mirror silently used the default.
+            if self.eat_any_keyword(&[Keyword::Across]).is_some() {
+                self.skip_filler();
+                // "across the centre" names the pivot, not an axis, and the
+                // default axis is already the model's centre line.
+                if self.eat_keyword(Keyword::Origin) {
+                    continue;
+                }
+                if let Some(Token::Direction(direction)) = self.peek() {
+                    let direction = *direction;
+                    self.pos += 1;
+                    let _ = self.eat_word("axis");
+                    modifiers.push(Modifier::Distance {
+                        direction,
+                        count: 1,
+                        unit: direction.default_unit(),
+                    });
+                }
                 continue;
             }
 
@@ -639,7 +674,13 @@ pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
     }
 
     let Some(Token::Verb(verb)) = parser.peek().copied_verb() else {
-        return SentenceOutcome::Error(parser.error("a command"));
+        // Nothing but a question word got this sentence past the gate, and it
+        // is not a question we understand — so it is ordinary curiosity
+        // ("what do you think?"), not a mistyped command. Reporting it would
+        // break the silence policy the whole feature rests on. A sentence that
+        // opened with a *verb* still falls through to an error below, because
+        // there the builder clearly meant something.
+        return SentenceOutcome::Ignored;
     };
     parser.pos += 1;
 
@@ -731,16 +772,35 @@ fn parse_query(parser: &mut Parser<'_>) -> Option<Query> {
         return None;
     }
 
+    // "where" and "who" need the rest of their shape before they count as a
+    // question about the model. Without that, "who wants to help?" parses as
+    // "who added <a thing called 'wants'>" and the thread gets an error about
+    // a group nobody named.
     if parser.eat_word("where") {
-        parser.eat_word("is");
-        let reference = parser.reference()?;
+        if !(parser.eat_word("is") || parser.eat_word("are")) {
+            parser.pos = start;
+            return None;
+        }
+        let Some(reference) = parser.reference() else {
+            parser.pos = start;
+            return None;
+        };
         return Some(Query::WhereIs(reference));
     }
 
     if parser.eat_word("who") {
-        parser.eat_word("added");
-        parser.eat_word("built");
-        let reference = parser.reference()?;
+        if !(parser.eat_word("added")
+            || parser.eat_word("built")
+            || parser.eat_word("made")
+            || parser.eat_word("placed"))
+        {
+            parser.pos = start;
+            return None;
+        }
+        let Some(reference) = parser.reference() else {
+            parser.pos = start;
+            return None;
+        };
         return Some(Query::WhoAdded(reference));
     }
 
@@ -914,6 +974,14 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
     let mut modifiers = extra_modifiers;
     modifiers.extend(parser.modifiers());
 
+    if let Some(angle) = parser.bad_angle {
+        return SentenceOutcome::Error(ParseError {
+            expected: "a multiple of 90 degrees".to_string(),
+            found: Some(format!("{angle} degrees")),
+            sentence: parser.sentence.to_string(),
+        });
+    }
+
     // "Raise by one plate." and "Lower by two bricks." carry their direction
     // in the verb, so rewrite the bare distance the parser produced.
     match verb {
@@ -1031,6 +1099,86 @@ mod tests {
                 "{chat:?} should be ignored"
             );
         }
+    }
+
+    #[test]
+    fn a_question_that_is_not_about_the_model_is_ignored() {
+        // Regression: `looks_like_command` lets anything opening with a
+        // question word through so real queries can be parsed, but a sentence
+        // that then fails to parse as a query used to be *reported*. Ordinary
+        // curiosity in the thread got a ❓ and a reply.
+        // "where is everyone?" is deliberately absent: it has exactly the
+        // shape of "where is tower?", so the parser cannot tell them apart and
+        // must not try. It is silenced a stage later, when the name fails to
+        // resolve — see `dispatch`.
+        for chat in [
+            "what do you think?",
+            "who wants to help with the roof?",
+            "how is it going?",
+            "which one looks better?",
+            "what about a bigger gate?",
+            "who is building the tower?",
+        ] {
+            assert_eq!(
+                parse(chat),
+                SentenceOutcome::Ignored,
+                "{chat:?} should be ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_question_is_still_answered() {
+        // The silence above must not swallow the queries the language does
+        // know, which open with the same words.
+        for question in [
+            "How tall is it?",
+            "How many red bricks?",
+            "What changed?",
+            "Who added roof?",
+            "Where is tower?",
+        ] {
+            assert!(
+                matches!(
+                    parse(question),
+                    SentenceOutcome::Statement(Statement::Query(_))
+                ),
+                "{question:?} should be a query, got {:?}",
+                parse(question)
+            );
+        }
+    }
+
+    #[test]
+    fn an_angle_that_is_not_a_quarter_turn_is_rejected() {
+        // Regression: 45/90 truncated to zero turns, which then fell into the
+        // "a bare Rotate means one quarter turn" branch — so asking for 45
+        // degrees silently turned the part 90.
+        for sentence in ["Rotate 45 degrees", "Rotate it 30 degrees"] {
+            let SentenceOutcome::Error(error) = parse(sentence) else {
+                panic!("{sentence:?} should be rejected, got {:?}", parse(sentence));
+            };
+            assert!(error.expected.contains("90"));
+        }
+        // The ones that do land on a quarter turn still work.
+        assert!(
+            command("Rotate 90 degrees")
+                .modifiers
+                .contains(&Modifier::Turn(1))
+        );
+        assert!(
+            command("Rotate 270 degrees")
+                .modifiers
+                .contains(&Modifier::Turn(3))
+        );
+    }
+
+    #[test]
+    fn a_sentence_opening_with_a_verb_is_still_reported_when_it_fails() {
+        // The other half of the policy: a builder who clearly meant something
+        // must be told, rather than ignored.
+        assert!(matches!(parse("Add the"), SentenceOutcome::Error(_)));
+        assert!(matches!(parse("Find"), SentenceOutcome::Error(_)));
     }
 
     #[test]
@@ -1160,18 +1308,26 @@ mod tests {
 
     #[test]
     fn parses_rotations() {
-        assert!(command("Rotate 90 degrees")
-            .modifiers
-            .contains(&Modifier::Turn(1)));
-        assert!(command("Rotate 180 degrees")
-            .modifiers
-            .contains(&Modifier::Turn(2)));
-        assert!(command("Rotate clockwise")
-            .modifiers
-            .contains(&Modifier::Turn(1)));
-        assert!(command("Turn it upside down")
-            .modifiers
-            .contains(&Modifier::Flip));
+        assert!(
+            command("Rotate 90 degrees")
+                .modifiers
+                .contains(&Modifier::Turn(1))
+        );
+        assert!(
+            command("Rotate 180 degrees")
+                .modifiers
+                .contains(&Modifier::Turn(2))
+        );
+        assert!(
+            command("Rotate clockwise")
+                .modifiers
+                .contains(&Modifier::Turn(1))
+        );
+        assert!(
+            command("Turn it upside down")
+                .modifiers
+                .contains(&Modifier::Flip)
+        );
     }
 
     // --- References --------------------------------------------------------

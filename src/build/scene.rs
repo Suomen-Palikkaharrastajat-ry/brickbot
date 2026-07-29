@@ -12,9 +12,9 @@
 #![allow(clippy::doc_markdown)]
 
 use super::model::{Model, Placement};
+use crate::ldraw::COLOR_INHERIT;
 use crate::ldraw::colors::{self, Rgb};
 use crate::ldraw::resolve::LdrawLibrary;
-use crate::ldraw::COLOR_INHERIT;
 use crate::math::Vec3;
 use crate::render::SceneTriangle;
 
@@ -311,9 +311,9 @@ mod tests {
 #[cfg(test)]
 mod visual_check {
     use super::*;
-    use crate::build::dsl::lexer::tokenize_sentence;
-    use crate::build::dsl::parser::{parse_sentence, SentenceOutcome};
     use crate::build::dsl::Statement;
+    use crate::build::dsl::lexer::tokenize_sentence;
+    use crate::build::dsl::parser::{SentenceOutcome, parse_sentence};
     use crate::build::ops::History;
 
     /// Renders the design document's example session to a PNG for manual

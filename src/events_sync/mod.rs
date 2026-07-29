@@ -4,7 +4,7 @@ use futures_util::stream::StreamExt;
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serenity::all::{GuildId, Http};
 use sqlx::SqlitePool;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 pub mod discord;
 pub mod pocketbase;

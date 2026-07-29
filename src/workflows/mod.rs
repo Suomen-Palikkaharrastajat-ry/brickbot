@@ -180,6 +180,16 @@ pub async fn handle_component_interaction(
             )
             .await
         }
+        // The part-disambiguation dropdown carries it the same way.
+        "build_part_pick" => {
+            crate::build::session::handle_part_choice(
+                ctx,
+                &app_ctx,
+                interaction,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
         "wizard_events_toggle_visibility" => {
             events::handle_wizard_events_toggle_visibility(
                 ctx,

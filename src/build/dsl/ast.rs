@@ -254,7 +254,6 @@ pub enum Meta {
     UndoBy(String),
     Redo,
     RevertTo(u32),
-    Rename(String),
     Export,
     Render,
     Help,
@@ -278,11 +277,13 @@ mod tests {
     #[test]
     fn an_empty_part_spec_is_recognised() {
         assert!(PartSpec::default().is_empty());
-        assert!(!PartSpec {
-            color: Some(4),
-            ..PartSpec::default()
-        }
-        .is_empty());
+        assert!(
+            !PartSpec {
+                color: Some(4),
+                ..PartSpec::default()
+            }
+            .is_empty()
+        );
     }
 
     #[test]

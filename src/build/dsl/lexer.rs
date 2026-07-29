@@ -300,11 +300,20 @@ pub fn strip_discord_noise(text: &str) -> String {
         }
     }
 
-    // Drop anything that looks like a URL.
-    out.split_whitespace()
-        .filter(|w| !w.starts_with("http://") && !w.starts_with("https://"))
+    // Drop anything that looks like a URL, line by line. Filtering the whole
+    // string at once would rejoin it with spaces and lose every newline —
+    // which are sentence terminators, so a message typed as several lines
+    // would collapse into one and everything after the first line would be
+    // silently swallowed by the modifier parser.
+    out.split('\n')
+        .map(|line| {
+            line.split_whitespace()
+                .filter(|w| !w.starts_with("http://") && !w.starts_with("https://"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("\n")
 }
 
 /// Splits text into sentences on terminators and newlines.
@@ -694,6 +703,29 @@ mod tests {
         assert_eq!(sentences.len(), 2);
         assert_eq!(sentences[0].tokens[0], Token::Verb(Verb::Add));
         assert_eq!(sentences[1].tokens[0], Token::Verb(Verb::Move));
+    }
+
+    #[test]
+    fn a_multi_line_message_is_one_sentence_per_line() {
+        // Regression: `tokenize` strips Discord noise before it splits, and
+        // the noise stripper used to rejoin every word with a single space.
+        // Newlines vanished, so a message typed as several lines became one
+        // sentence and every line after the first was silently swallowed by
+        // the modifier parser.
+        let sentences = tokenize("Add a red brick\nAdd a blue brick");
+        assert_eq!(sentences.len(), 2, "got: {sentences:?}");
+        assert_eq!(sentences[0].tokens[0], Token::Verb(Verb::Add));
+        assert_eq!(sentences[1].tokens[0], Token::Verb(Verb::Add));
+        // "a" lexes as the number one, so the colour is the token after it.
+        assert_eq!(sentences[1].tokens[2], Token::Color(1));
+    }
+
+    #[test]
+    fn urls_are_stripped_without_collapsing_the_lines_around_them() {
+        assert_eq!(
+            strip_discord_noise("see https://example.org/x\nAdd a brick"),
+            "see\nAdd a brick"
+        );
     }
 
     #[test]

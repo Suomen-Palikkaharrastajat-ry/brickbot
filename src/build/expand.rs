@@ -12,12 +12,12 @@
 use super::dsl::ast::{Command, ExtentAxis, ObjectExpr, Ref, Structure};
 use super::dsl::lexer::Verb;
 use super::lower::{
-    extent_count, resolve_ref, structure_group, structure_part, LowerError,
-    MAX_PLACEMENTS_PER_COMMAND,
+    LowerError, MAX_PLACEMENTS_PER_COMMAND, extent_count, resolve_ref, structure_group,
+    structure_part,
 };
 use super::model::{Model, PartRef, Placement};
 use super::ops::{Op, Placed};
-use super::units::{Direction, IVec3, Orientation, Unit, LDU_STUD};
+use super::units::{Direction, IVec3, LDU_STUD, Orientation, Unit};
 
 /// Where a structure starts from: on top of whatever was last touched, or at
 /// the origin if nothing has been built.
@@ -64,12 +64,13 @@ pub fn expand(
     model: &Model,
     command: &Command,
     structure: &Structure,
+    chosen: Option<&PartRef>,
 ) -> Result<Vec<Op>, LowerError> {
     if let Structure::Unknown(name) = structure {
         return Err(LowerError::UnknownStructure(name.clone()));
     }
 
-    let part = structure_part(command)?;
+    let part = structure_part(command, chosen)?;
     let color = command
         .using()
         .and_then(|spec| spec.color)
@@ -315,11 +316,15 @@ pub fn expand_copy(model: &Model, command: &Command) -> Result<Vec<Op>, LowerErr
             let total = (sources.len() as u32).saturating_mul(copies);
             checked_total(total)?;
 
-            // Offset by the group's own width, so copies sit alongside rather
-            // than on top of the original.
+            // Offset by the copied group's own width, so copies sit alongside
+            // rather than on top of the original. Measuring the whole model
+            // instead — which is what this used to do — flings a small group
+            // clear across a large build.
             let offset = command.distance().map_or_else(
                 || {
-                    let (min, max) = model.bounds().unwrap_or((IVec3::ZERO, IVec3::ZERO));
+                    let (min, max) = model
+                        .subset_bounds(&targets)
+                        .unwrap_or((IVec3::ZERO, IVec3::ZERO));
                     IVec3::new((max.x - min.x).max(LDU_STUD), 0, 0)
                 },
                 |(direction, count, unit)| direction.offset(count.max(1), unit),
@@ -360,9 +365,9 @@ pub const fn default_extent_unit(axis: ExtentAxis) -> Unit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::dsl::lexer::tokenize_sentence;
-    use crate::build::dsl::parser::{parse_sentence, SentenceOutcome};
     use crate::build::dsl::Statement;
+    use crate::build::dsl::lexer::tokenize_sentence;
+    use crate::build::dsl::parser::{SentenceOutcome, parse_sentence};
     use crate::build::lower::lower_command;
     use crate::build::ops::apply;
 
@@ -419,10 +424,12 @@ mod tests {
     #[test]
     fn every_wall_brick_belongs_to_the_wall_group() {
         let model = run(&["Build a wall 4 studs long 1 brick high"]);
-        assert!(model
-            .placements
-            .iter()
-            .all(|p| p.group.as_deref() == Some("wall")));
+        assert!(
+            model
+                .placements
+                .iter()
+                .all(|p| p.group.as_deref() == Some("wall"))
+        );
         assert_eq!(
             model.resolve_group("wall").map(|ids| ids.len()),
             Some(model.len())
@@ -482,10 +489,12 @@ mod tests {
     #[test]
     fn builds_a_floor_across_two_axes() {
         let model = run(&["Build a floor 8 wide 8 deep using tan plates"]);
-        assert!(model
-            .placements
-            .iter()
-            .all(|p| p.part.kind == crate::build::model::PartKind::Plate));
+        assert!(
+            model
+                .placements
+                .iter()
+                .all(|p| p.part.kind == crate::build::model::PartKind::Plate)
+        );
         assert!(model.collisions().is_empty());
 
         // Assert the coverage, not a piece count: how many parts it takes
@@ -565,6 +574,66 @@ mod tests {
         assert_eq!(model.len(), 2);
         assert_eq!(model.placements[1].pos, IVec3::new(80, 0, 0));
         assert!(model.collisions().is_empty());
+    }
+
+    #[test]
+    fn mirroring_takes_its_axis_from_the_sentence() {
+        // Regression: "across the centre" was swallowed by the modifier
+        // parser's skip-the-token fallback, so every mirror used the default
+        // east-west axis whatever the sentence said.
+        let across_z = run(&[
+            "Add a red 2x4 brick at origin",
+            "Add a red 2x4 brick at 0 0 200",
+            "Mirror everything across north",
+        ]);
+        // Reflecting north-south moves parts along Z and leaves X alone.
+        assert_eq!(across_z.len(), 4);
+        assert!(
+            across_z.placements[2..].iter().all(|p| p.pos.x == 0),
+            "a north-south mirror must not move anything east or west"
+        );
+
+        // "across the centre" names the pivot, not an axis, and still works.
+        let default_axis = run(&[
+            "Add a red 2x4 brick at origin",
+            "Add a red 2x4 brick at 200 0 0",
+            "Mirror everything across the centre",
+        ]);
+        assert_eq!(default_axis.len(), 4);
+    }
+
+    #[test]
+    fn duplicating_a_group_steps_by_the_group_not_the_whole_model() {
+        // Regression: the default offset came from the *model's* bounds, so
+        // duplicating a single brick inside a large build flung the copy right
+        // across it instead of setting it alongside.
+        let model = run(&[
+            "Add a red 2x4 brick at origin",
+            "Call this tower",
+            // A wide, unrelated structure that must not affect the step.
+            "Add a blue 2x4 brick at 2000 0 0",
+            "Duplicate tower",
+        ]);
+
+        let original = model.resolve_group("tower").unwrap()[0];
+        let original = model.get(original).unwrap().pos;
+        let copy = model.placements.last().unwrap().pos;
+        assert_eq!(
+            copy.x - original.x,
+            40,
+            "one 2x4 brick's width east, not the model's 2000 LDU span"
+        );
+        assert!(model.collisions().is_empty());
+    }
+
+    #[test]
+    fn duplicating_a_single_brick_with_no_footprint_still_moves_it_clear() {
+        let model = run(&["Add a red 2x4 brick at origin", "Duplicate that"]);
+        assert_eq!(model.len(), 2);
+        assert!(
+            model.collisions().is_empty(),
+            "a copy on top of the original would be useless"
+        );
     }
 
     #[test]

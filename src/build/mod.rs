@@ -19,7 +19,7 @@ pub mod scene;
 pub mod session;
 pub mod units;
 
-pub use lower::{lower_command, LowerError};
+pub use lower::{LowerError, lower_command};
 pub use model::{Model, PartKind, PartRef, Placement, PlacementId};
 pub use ops::{History, Op, SelectPredicate};
-pub use units::{Direction, IVec3, Orientation, Unit, LDU_BRICK, LDU_PLATE, LDU_STUD};
+pub use units::{Direction, IVec3, LDU_BRICK, LDU_PLATE, LDU_STUD, Orientation, Unit};

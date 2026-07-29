@@ -95,12 +95,14 @@ mod tests {
 
     #[test]
     fn a_degenerate_triangle_has_no_normal() {
-        assert!(face_normal(
-            Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(2.0, 2.0, 2.0)
-        )
-        .is_none());
+        assert!(
+            face_normal(
+                Vec3::ZERO,
+                Vec3::new(1.0, 1.0, 1.0),
+                Vec3::new(2.0, 2.0, 2.0)
+            )
+            .is_none()
+        );
     }
 
     /// A light shining from the left, i.e. perpendicular to the view axis.

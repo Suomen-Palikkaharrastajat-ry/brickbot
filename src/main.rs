@@ -25,12 +25,12 @@ mod zulip;
 use clap::Parser;
 use config::Config;
 use serenity::all::{
-    async_trait, Client, Command, Context, CreateMessage, EventHandler, GatewayIntents, GuildId,
-    Interaction, Message, Ready,
+    Client, Command, Context, CreateMessage, EventHandler, GatewayIntents, GuildId, Interaction,
+    Message, Ready, async_trait,
 };
 use serenity::prelude::*;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::env;
 use std::str::FromStr;
 
@@ -834,7 +834,7 @@ async fn main() -> anyhow::Result<()> {
                     tracing::debug!("Successfully cleaned up expired rows.");
                 }
                 // Once a day.
-                tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
+                tokio::time::sleep(std::time::Duration::from_hours(24)).await;
             }
         });
     }

@@ -151,10 +151,13 @@ pub fn describe_answer(answer: &QueryAnswer, model: &Model, locale: &str) -> Str
         )
         .to_string(),
 
+        // The log stores user ids, so render one as a mention: Discord turns
+        // it into the person's name. The caller suppresses allowed_mentions,
+        // so it reads as a name without pinging anyone.
         QueryAnswer::Author(author) => t!(
             "command.build.answer_author",
             locale = locale,
-            author = author
+            author = format!("<@{author}>")
         )
         .to_string(),
 

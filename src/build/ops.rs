@@ -265,12 +265,15 @@ pub fn apply(model: &mut Model, rev: u32, op: &Op) -> Effect {
 
         Op::Remove { targets } => {
             let before = model.placements.len();
-            model.placements.retain(|p| !targets.contains(&p.id));
+            // Work out what was actually there *before* removing it: asking
+            // afterwards which targets are absent also counts the ones that
+            // never existed, so a no-op could report placements as affected.
             let removed: Vec<PlacementId> = targets
                 .iter()
                 .copied()
-                .filter(|id| !model.contains(*id))
+                .filter(|id| model.contains(*id))
                 .collect();
+            model.placements.retain(|p| !targets.contains(&p.id));
             // Drop the removed placements from groups and the selection so
             // nothing dangles.
             for ids in model.groups.values_mut() {
@@ -626,6 +629,41 @@ mod tests {
         );
         assert_eq!(model.get(PlacementId::new(0, 0)).unwrap().pos.x, 20);
         assert_eq!(model.get(PlacementId::new(1, 0)).unwrap().pos.x, 100);
+    }
+
+    #[test]
+    fn removing_something_that_was_never_there_affects_nothing() {
+        // Regression: `affected` was worked out by asking which targets are
+        // absent *after* the removal, which also counts ids that never
+        // existed. A no-op could then claim to have touched a placement.
+        let mut model = Model::new("t");
+        apply(&mut model, 0, &add_at(4, IVec3::ZERO));
+
+        let ghost = PlacementId::new(99, 0);
+        let effect = apply(
+            &mut model,
+            1,
+            &Op::Remove {
+                targets: vec![ghost],
+            },
+        );
+        assert!(effect.no_op);
+        assert!(
+            effect.affected.is_empty(),
+            "a placement that never existed was not affected"
+        );
+        assert_eq!(model.len(), 1, "the real brick is untouched");
+
+        // A mixed batch reports only the one that was really removed.
+        let effect = apply(
+            &mut model,
+            2,
+            &Op::Remove {
+                targets: vec![PlacementId::new(0, 0), ghost],
+            },
+        );
+        assert!(!effect.no_op);
+        assert_eq!(effect.affected, vec![PlacementId::new(0, 0)]);
     }
 
     #[test]
