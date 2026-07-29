@@ -87,6 +87,23 @@ CREATE TABLE inputs (
 
 ---
 
+## Implementation Status
+
+Both content types anticipated in the Context section are now bridged. The kind of a submission
+is carried by the Zulip topic's emoji prefix, and `ModerationKind` (`src/zulip/moderation.rs`)
+resolves everything that differs between them — target PocketBase collection, localization
+keys, and public URL:
+
+| Content | New | Edit | Collection | Command | Published to |
+| --- | --- | --- | --- | --- | --- |
+| Events | `🆕` | `📝` | `events` | [`/events`](commands/events.md) | Palikkakalenteri |
+| Map locations | `📍` | `📌` | `locations` | [`/locations`](commands/locations.md) | Palikkakartta |
+
+Locations additionally require a `point` (geoPoint) that submitters do not provide; moderators
+set it from the Zulip YAML block, and approval of a new location is refused until they do.
+
+---
+
 ## Consequences
 
 ### Positive

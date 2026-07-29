@@ -1,6 +1,7 @@
 pub mod api;
 pub mod handler;
 pub mod listener;
+pub mod moderation;
 
 use serde::Deserialize;
 use serde_json::Value;

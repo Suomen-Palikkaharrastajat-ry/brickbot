@@ -156,6 +156,9 @@ The bot automatically fetches the defined `feed_urls` and `opml_urls` at the spe
 The bot continuously syncs events from PocketBase into Discord's native Scheduled Events system. 
 - **`/events` Command:** A multi-step wizard to list upcoming events, submit new ones (sent to Zulip for moderation), or trigger a manual sync.
 
+### Map Locations
+- **`/locations` Command:** A wizard to propose new map locations (exhibitions, stores, flea markets, museums) or changes to existing ones. Proposals go to Zulip for moderation and, once approved, are published to the PocketBase `locations` collection behind [Palikkakartta](https://kartta.palikkaharrastajat.fi). Coordinates are set by moderators in the Zulip topic. See [docs/commands/locations.md](docs/commands/locations.md).
+
 
 ### Ambient Assistant
 The bot monitors chat passively using an Ambient Assistant:

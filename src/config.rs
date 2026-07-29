@@ -57,6 +57,8 @@ pub struct CommandsConfig {
     #[serde(default)]
     pub events: EventsCommandConfig,
     #[serde(default)]
+    pub locations: LocationsCommandConfig,
+    #[serde(default)]
     pub set: SetCommandConfig,
     #[serde(default)]
     pub part: PartCommandConfig,
@@ -67,6 +69,7 @@ pub struct CommandsConfig {
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct GuildCommandsConfig {
     pub events: Option<EventsCommandConfig>,
+    pub locations: Option<LocationsCommandConfig>,
     pub set: Option<SetCommandConfig>,
     pub part: Option<PartCommandConfig>,
     pub diagnostics: Option<DiagnosticsCommandConfig>,
@@ -75,6 +78,19 @@ pub struct GuildCommandsConfig {
 #[derive(Deserialize, Debug, Clone, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct EventsCommandConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub enable_edit: bool,
+    #[serde(default)]
+    pub enable_propose: bool,
+    #[serde(default = "default_true")]
+    pub enable_fallback_mention: bool,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct LocationsCommandConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -162,7 +178,22 @@ pub struct ZulipConfig {
 pub struct PocketBaseConfig {
     pub url: String,
     pub collection: String,
+    /// Collection holding map locations. Defaults to `locations` when unset.
+    #[serde(default)]
+    pub locations_collection: Option<String>,
 }
+
+impl PocketBaseConfig {
+    /// Name of the collection holding map locations.
+    #[must_use]
+    pub fn locations_collection(&self) -> &str {
+        self.locations_collection
+            .as_deref()
+            .unwrap_or(DEFAULT_LOCATIONS_COLLECTION)
+    }
+}
+
+const DEFAULT_LOCATIONS_COLLECTION: &str = "locations";
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ResourceLimitsConfig {
@@ -239,6 +270,13 @@ impl Config {
             if pb.collection.is_empty() {
                 errors.push("PocketBase collection must not be empty".to_string());
             }
+            if pb
+                .locations_collection
+                .as_ref()
+                .is_some_and(String::is_empty)
+            {
+                errors.push("PocketBase locations_collection must not be empty".to_string());
+            }
         }
 
         if let Some(z) = &self.zulip {
@@ -313,6 +351,9 @@ impl Config {
             events: g
                 .and_then(|c| c.events.clone())
                 .unwrap_or_else(|| self.commands.events.clone()),
+            locations: g
+                .and_then(|c| c.locations.clone())
+                .unwrap_or_else(|| self.commands.locations.clone()),
             set: g
                 .and_then(|c| c.set.clone())
                 .unwrap_or_else(|| self.commands.set.clone()),
@@ -356,6 +397,9 @@ mod tests {
         [guilds.commands.events]
         enabled = false
 
+        [guilds.commands.locations]
+        enabled = false
+
         [[feeds]]
         feed_urls = ["http://example.com/rss"]
 
@@ -368,11 +412,20 @@ mod tests {
         enable_edit = true
         enable_propose = false
 
+        [commands.locations]
+        enabled = true
+        enable_edit = true
+        enable_propose = true
+
         [commands.set]
         enabled = false
 
         [commands.diagnostics]
         enabled = true
+
+        [pocketbase]
+        url = "https://pb.example.com"
+        collection = "events"
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -396,11 +449,22 @@ mod tests {
         assert!(config.commands.events.enable_fallback_mention);
         assert!(!config.commands.set.enabled);
         assert!(config.commands.diagnostics.enabled);
+        assert!(config.commands.locations.enabled);
+        assert!(config.commands.locations.enable_edit);
+        assert!(config.commands.locations.enable_propose);
+        assert!(config.commands.locations.enable_fallback_mention);
 
         assert!(!config.interactions_for(123).set);
         assert!(!config.commands_for(123).events.enabled);
+        assert!(!config.commands_for(123).locations.enabled);
         assert!(config.interactions_for(999).set);
         assert!(config.commands_for(999).events.enabled);
+        assert!(config.commands_for(999).locations.enabled);
+
+        // `locations_collection` is optional and falls back to the default name.
+        let pb = config.pocketbase.as_ref().unwrap();
+        assert_eq!(pb.collection, "events");
+        assert_eq!(pb.locations_collection(), "locations");
 
         assert_eq!(config.resource_limits.max_http_body_bytes, 10 * 1024 * 1024);
         assert_eq!(
@@ -409,5 +473,40 @@ mod tests {
         );
         assert_eq!(config.resource_limits.max_feed_items_per_sync, 1000);
         assert_eq!(config.resource_limits.max_worker_concurrency, 4);
+    }
+
+    #[test]
+    fn test_locations_collection_override() {
+        let toml_str = r#"
+        [pocketbase]
+        url = "https://pb.example.com"
+        collection = "events"
+        locations_collection = "map_places"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.pocketbase.as_ref().unwrap().locations_collection(),
+            "map_places"
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_empty_locations_collection_is_invalid() {
+        let toml_str = r#"
+        [pocketbase]
+        url = "https://pb.example.com"
+        collection = "events"
+        locations_collection = ""
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let errors = config.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("locations_collection must not be empty"))
+        );
     }
 }

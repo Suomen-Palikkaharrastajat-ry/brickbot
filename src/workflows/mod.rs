@@ -9,9 +9,83 @@
 )]
 pub mod ambient;
 pub mod events;
+pub mod locations;
 pub mod search;
 
-use serenity::all::{CommandInteraction, ComponentInteraction, Context, ModalInteraction};
+use serenity::all::{
+    CommandInteraction, ComponentInteraction, Context, CreateInteractionResponse,
+    CreateInteractionResponseMessage, ModalInteraction,
+};
+
+#[allow(dead_code)]
+pub enum InteractionVisibility {
+    Ephemeral,
+    Public,
+}
+
+/// A wizard step can be reached either from the initial slash command or from a component
+/// (button / select) on the message it produced. Both are driven through the same handlers.
+#[allow(dead_code)]
+pub enum WizardInteraction<'a> {
+    Command(&'a CommandInteraction),
+    Component(&'a ComponentInteraction),
+}
+
+#[allow(dead_code)]
+impl WizardInteraction<'_> {
+    #[allow(dead_code)]
+    pub async fn edit_response(
+        &self,
+        ctx: &Context,
+        resp: serenity::builder::EditInteractionResponse,
+    ) -> serenity::Result<serenity::all::Message> {
+        match self {
+            Self::Command(c) => c.edit_response(&ctx.http, resp).await,
+            Self::Component(c) => c.edit_response(&ctx.http, resp).await,
+        }
+    }
+
+    pub async fn create_or_update_response(
+        &self,
+        ctx: &Context,
+        mut resp: CreateInteractionResponseMessage,
+        visibility: InteractionVisibility,
+    ) -> serenity::Result<()> {
+        let ephemeral = matches!(visibility, InteractionVisibility::Ephemeral);
+        resp = resp.ephemeral(ephemeral);
+        match self {
+            Self::Command(c) => {
+                c.create_response(&ctx.http, CreateInteractionResponse::Message(resp))
+                    .await
+            }
+            Self::Component(c) => {
+                c.create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(resp))
+                    .await
+            }
+        }
+    }
+
+    pub const fn guild_id(&self) -> Option<serenity::all::GuildId> {
+        match self {
+            Self::Command(c) => c.guild_id,
+            Self::Component(c) => c.guild_id,
+        }
+    }
+
+    pub const fn user_id(&self) -> serenity::all::UserId {
+        match self {
+            Self::Command(c) => c.user.id,
+            Self::Component(c) => c.user.id,
+        }
+    }
+
+    pub const fn channel_id(&self) -> serenity::all::ChannelId {
+        match self {
+            Self::Command(c) => c.channel_id,
+            Self::Component(c) => c.channel_id,
+        }
+    }
+}
 
 pub struct AppContext {
     pub db: sqlx::SqlitePool,
@@ -130,6 +204,33 @@ pub async fn handle_component_interaction(
         "wizard_retry_submit" => {
             events::handle_wizard_retry_submit(ctx, &app_ctx, interaction, arg).await
         }
+        "wizard_locations_edit" => {
+            locations::handle_wizard_locations_edit(ctx, &app_ctx, interaction, arg).await
+        }
+        "wizard_edit_location_select_change" => {
+            locations::handle_wizard_edit_location_select_change(
+                ctx,
+                &app_ctx,
+                interaction,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
+        "wizard_location_tag_select_change" => {
+            locations::handle_wizard_location_tag_select_change(
+                ctx,
+                &app_ctx,
+                interaction,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
+        "wizard_location_submit_continue" => {
+            locations::handle_wizard_location_submit_continue(ctx, &app_ctx, interaction, arg).await
+        }
+        "wizard_retry_location_submit" => {
+            locations::handle_wizard_retry_location_submit(ctx, &app_ctx, interaction, arg).await
+        }
         "update_services_part" => {
             search::handle_update_services_part(ctx, &app_ctx, interaction, arg, &locale).await
         }
@@ -169,6 +270,10 @@ pub async fn handle_modal_submit(
         events::handle_modal_submit_event(ctx, &app_ctx, interaction).await?;
     } else if let Some(uid) = custom_id.strip_prefix("modal_edit_event_") {
         events::handle_modal_edit_event(ctx, &app_ctx, interaction, uid).await?;
+    } else if custom_id.starts_with("modal_submit_location") {
+        locations::handle_modal_submit_location(ctx, &app_ctx, interaction).await?;
+    } else if let Some(sid) = custom_id.strip_prefix("modal_edit_location_") {
+        locations::handle_modal_edit_location(ctx, &app_ctx, interaction, sid).await?;
     }
 
     Ok(())
@@ -184,6 +289,22 @@ pub async fn handle_events_wizard_command(
         ctx,
         &app_ctx,
         events::WizardInteraction::Command(interaction),
+        None,
+        true,
+    )
+    .await
+}
+
+pub async fn handle_locations_wizard_command(
+    ctx: &Context,
+    interaction: &CommandInteraction,
+) -> anyhow::Result<()> {
+    let _ = interaction.defer_ephemeral(&ctx.http).await;
+    let app_ctx = AppContext::from_serenity_ctx(ctx).await;
+    locations::handle_locations_wizard_command(
+        ctx,
+        &app_ctx,
+        WizardInteraction::Command(interaction),
         None,
         true,
     )

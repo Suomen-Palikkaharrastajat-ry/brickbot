@@ -36,7 +36,9 @@ The project has been structured to handle multiple asynchronous background tasks
 - `src/main.rs`: Application entry point. Handles setup of dependencies, DB pools, custom event/message handler routing, and spawning polling loops.
 - `src/config.rs`: Multi-guild TOML configuration structures mapping `config.toml`. Includes flexible command alias configurations.
 - `src/http.rs`: Centralized `HttpClient` wrapper. Consolidates outgoing `reqwest` calls, implements structured `tracing` logging, and provides a global `moka` in-memory cache for API responses.
-- `src/commands/`: "One command per module" directory containing `set.rs`, `part.rs`, and `events.rs`. **Agents MUST keep the corresponding documentation files in `docs/interactions/*.md` and `docs/commands/*.md` up-to-date when altering command logic or adding new commands.**
+- `src/commands/`: "One command per module" directory containing `set.rs`, `part.rs`, `events.rs`, and `locations.rs`. **Agents MUST keep the corresponding documentation files in `docs/interactions/*.md` and `docs/commands/*.md` up-to-date when altering command logic or adding new commands.**
+- `src/workflows/`: Multi-step wizard logic backing the interactive commands (`events/`, `locations/`, `search.rs`, `ambient.rs`). `WizardInteraction` in `src/workflows/mod.rs` is shared by every wizard.
+- `src/zulip/moderation.rs`: `ModerationKind` resolves everything that differs between the events and locations moderation flows (target collection, localization keys, public URL) from the Zulip topic prefix, keeping `process_zulip_message` single-pathed.
 - `src/rss.rs`: Polling logic and parsing for feeds.
 - `flake.nix` & `devenv.nix`: Nix environment files configuring the `devShell`.
 - `default.nix`: Nix build configuration decoupled from `flake.nix` to prevent "dirty tree" rebuilds.

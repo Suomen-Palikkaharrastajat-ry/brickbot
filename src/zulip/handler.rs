@@ -1,3 +1,4 @@
+use crate::zulip::moderation::ModerationKind;
 use crate::zulip::{AppState, ZulipMessage, post_topic_to_stream, resolve_zulip_topic};
 use serde_json::Value;
 use serenity::all::ChannelId;
@@ -36,7 +37,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
     }
     let rest_lower = rest_lower_str.as_str();
 
-    if msg.subject.starts_with("🆕") || msg.subject.starts_with("📝") {
+    if let Some((kind, topic_is_edit)) = ModerationKind::from_topic(&msg.subject) {
         let pending_input =
             crate::db::get_pending_input_by_zulip_topic(&state.db, &msg.subject, Some(stream_name))
                 .await
@@ -113,7 +114,28 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                 let mut pb_payload: Value =
                     serde_json::from_str(&payload_str).unwrap_or_else(|_| serde_json::json!({}));
 
-                let is_edit = msg.subject.starts_with("📝");
+                let is_edit = topic_is_edit;
+
+                // A location without coordinates cannot be published: `point` is required by
+                // the collection. Tell the moderator how to fill it in and leave the
+                // submission pending rather than failing with an opaque PocketBase error.
+                if kind == ModerationKind::Location
+                    && !is_edit
+                    && crate::workflows::locations::extract_point(&pb_payload).is_none()
+                {
+                    let err_msg =
+                        rust_i18n::t!("command.zulip.missing_point", locale = locale.as_str());
+                    let _ = post_topic_to_stream(
+                        state.http.as_ref(),
+                        zulip_cfg,
+                        stream_name,
+                        &msg.subject,
+                        &err_msg,
+                        limit,
+                    )
+                    .await;
+                    return;
+                }
 
                 if let Some(obj) = pb_payload.as_object_mut() {
                     if is_edit {
@@ -174,9 +196,10 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                         }
                     }
 
-                    match crate::pocketbase::push_event_data(
+                    match crate::pocketbase::push_record_data(
                         state.http.as_ref(),
                         pb_cfg,
+                        kind.collection(pb_cfg),
                         &pb_payload,
                         limit,
                     )
@@ -198,11 +221,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                             }
 
                             notify_discord = true;
-                            if is_edit {
-                                reply_msg_key = Some("command.events.edit_approved");
-                            } else {
-                                reply_msg_key = Some("command.events.submission_approved");
-                            }
+                            reply_msg_key = Some(kind.approved_key(is_edit));
 
                             if let Some(zulip_cfg) = &state.config.zulip {
                                 if let Some(stream) = msg.display_recipient.as_str() {
@@ -213,11 +232,9 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                         )
                                         .to_string()
                                     } else {
-                                        let url = format!(
-                                            "https://kalenteri.palikkaharrastajat.fi/#/events/{new_pb_id}"
-                                        );
+                                        let url = kind.public_url(&new_pb_id);
                                         rust_i18n::t!(
-                                            "command.zulip.publish_success_with_url",
+                                            kind.publish_success_key(),
                                             locale = locale.as_str(),
                                             url = url
                                         )
@@ -275,7 +292,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                 }
 
                 notify_discord = true;
-                reply_msg_key = Some("command.events.submission_rejected");
+                reply_msg_key = Some(kind.rejected_key());
 
                 if let Some(zulip_cfg) = &state.config.zulip {
                     if let Some(stream) = msg.display_recipient.as_str() {
@@ -357,17 +374,8 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
-                        let topic_prefix = if msg.subject.starts_with("🆕") {
-                            "🆕"
-                        } else {
-                            "📝"
-                        };
-                        let expected_topic = crate::workflows::events::format_zulip_topic(
-                            topic_prefix,
-                            p_start_date,
-                            p_title,
-                            p_uid,
-                        );
+                        let expected_topic =
+                            kind.format_topic(topic_is_edit, p_title, p_start_date, p_uid);
 
                         if expected_topic != msg.subject {
                             let api_key = std::env::var("ZULIP_API_KEY").unwrap_or_default();
@@ -477,20 +485,29 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                         .or_else(|| existing_payload.get("id"))
                                                         .and_then(|v| v.as_str())
                                                         .unwrap_or("");
+                                                    let p_opening_hours = existing_payload
+                                                        .get("opening_hours")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("");
                                                     let p_image_url = existing_payload
                                                         .get("image_url")
                                                         .and_then(|v| v.as_str());
 
                                                     let display_payload =
-                                                        crate::workflows::events::modals::generate_display_yaml(&existing_payload);
+                                                        kind.display_yaml(&existing_payload);
 
-                                                    let diff_payload = crate::workflows::events::modals::generate_diff_str(
-                                                        state.config.pocketbase.as_ref(),
-                                                        state.http.as_ref(),
-                                                        state.config.resource_limits.max_http_body_bytes,
-                                                        p_uid,
-                                                        &display_payload
-                                                    ).await;
+                                                    let diff_payload = kind
+                                                        .diff_str(
+                                                            state.config.pocketbase.as_ref(),
+                                                            state.http.as_ref(),
+                                                            state
+                                                                .config
+                                                                .resource_limits
+                                                                .max_http_body_bytes,
+                                                            p_uid,
+                                                            &display_payload,
+                                                        )
+                                                        .await;
 
                                                     let cmd_approve = rust_i18n::t!(
                                                         "command.zulip.cmd_approve",
@@ -505,51 +522,19 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                         locale = locale.as_str()
                                                     );
 
-                                                    let new_content = if current_subject
-                                                        .starts_with("🆕")
-                                                    {
-                                                        p_image_url.map_or_else(
-                                                            || {
-                                                                rust_i18n::t!(
-                                                                    "command.zulip.new_event_no_image",
-                                                                    locale = locale.as_str(),
-                                                                    title = p_title,
-                                                                    start_date = p_start_date,
-                                                                    end_date = p_end_date,
-                                                                    location = p_location,
-                                                                    description = p_description,
-                                                                    payload_str = diff_payload,
-                                                                    cmd_approve = cmd_approve,
-                                                                    cmd_approve_published = cmd_approve_published,
-                                                                    cmd_reject = cmd_reject
-                                                                ).to_string()
-                                                            },
-                                                            |url| {
-                                                                rust_i18n::t!(
-                                                                    "command.zulip.new_event",
-                                                                    locale = locale.as_str(),
-                                                                    title = p_title,
-                                                                    start_date = p_start_date,
-                                                                    end_date = p_end_date,
-                                                                    location = p_location,
-                                                                    description = p_description,
-                                                                    url = url,
-                                                                    payload_str = diff_payload,
-                                                                    cmd_approve = cmd_approve,
-                                                                    cmd_approve_published = cmd_approve_published,
-                                                                    cmd_reject = cmd_reject
-                                                                ).to_string()
-                                                            }
-                                                        )
-                                                    } else {
+                                                    // Events and locations use different
+                                                    // placeholders; unused arguments are
+                                                    // simply ignored by the template.
+                                                    let new_content = if topic_is_edit {
                                                         rust_i18n::t!(
-                                                            "command.zulip.edit_event",
+                                                            kind.edit_template_key(),
                                                             locale = locale.as_str(),
                                                             uid = p_uid,
                                                             title = p_title,
                                                             start_date = p_start_date,
                                                             end_date = p_end_date,
                                                             location = p_location,
+                                                            opening_hours = p_opening_hours,
                                                             description = p_description,
                                                             payload_str = diff_payload,
                                                             yaml_str = display_payload,
@@ -557,6 +542,46 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                             cmd_reject = cmd_reject
                                                         )
                                                         .to_string()
+                                                    } else {
+                                                        p_image_url.map_or_else(
+                                                            || {
+                                                                rust_i18n::t!(
+                                                                    kind.new_template_key(false),
+                                                                    locale = locale.as_str(),
+                                                                    title = p_title,
+                                                                    start_date = p_start_date,
+                                                                    end_date = p_end_date,
+                                                                    location = p_location,
+                                                                    opening_hours = p_opening_hours,
+                                                                    description = p_description,
+                                                                    payload_str = diff_payload,
+                                                                    cmd_approve = cmd_approve,
+                                                                    cmd_approve_published =
+                                                                        cmd_approve_published,
+                                                                    cmd_reject = cmd_reject
+                                                                )
+                                                                .to_string()
+                                                            },
+                                                            |url| {
+                                                                rust_i18n::t!(
+                                                                    kind.new_template_key(true),
+                                                                    locale = locale.as_str(),
+                                                                    title = p_title,
+                                                                    start_date = p_start_date,
+                                                                    end_date = p_end_date,
+                                                                    location = p_location,
+                                                                    opening_hours = p_opening_hours,
+                                                                    description = p_description,
+                                                                    url = url,
+                                                                    payload_str = diff_payload,
+                                                                    cmd_approve = cmd_approve,
+                                                                    cmd_approve_published =
+                                                                        cmd_approve_published,
+                                                                    cmd_reject = cmd_reject
+                                                                )
+                                                                .to_string()
+                                                            },
+                                                        )
                                                     };
 
                                                     let patch_msg_url = format!(
@@ -648,7 +673,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                     }
 
                     let msg_moderator = rust_i18n::t!(
-                        "command.zulip.moderator_asked",
+                        kind.moderator_asked_key(),
                         locale = locale.as_str(),
                         title = event_title,
                         msg = actual_msg
@@ -676,32 +701,29 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                 );
 
                 if !reply_msg.is_empty() {
-                    let kind = if reply_msg_key == Some("command.events.submission_approved") {
+                    let notification_kind = if reply_msg_key == Some(kind.approved_key(false)) {
                         "approved"
-                    } else if reply_msg_key == Some("command.events.submission_rejected") {
+                    } else if reply_msg_key == Some(kind.rejected_key()) {
                         "rejected"
                     } else {
                         "question"
                     };
 
+                    let guild_commands =
+                        resolved_guild_id.map(|g_id| state.config.commands_for(g_id));
+                    let fallback_mention = kind.enable_fallback_mention(
+                        guild_commands.as_ref().unwrap_or(&state.config.commands),
+                    );
+
                     let _ = crate::notifications::queue_and_send_notification(
                         &state.db,
                         &state.discord,
                         &id,
-                        kind,
+                        notification_kind,
                         &reply_msg,
                         &user_id,
                         &channel_id,
-                        resolved_guild_id.map_or(
-                            state.config.commands.events.enable_fallback_mention,
-                            |g_id| {
-                                state
-                                    .config
-                                    .commands_for(g_id)
-                                    .events
-                                    .enable_fallback_mention
-                            },
-                        ),
+                        fallback_mention,
                     )
                     .await;
                 }

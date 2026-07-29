@@ -12,64 +12,10 @@ pub use validation::*;
 pub use visibility::*;
 
 use crate::workflows::{AppContext, extract_locale_and_bot_name};
+pub use crate::workflows::{InteractionVisibility, WizardInteraction};
 use serenity::all::{
-    ButtonStyle, CommandInteraction, ComponentInteraction, Context, CreateActionRow, CreateButton,
-    CreateInteractionResponse, CreateInteractionResponseMessage,
+    ButtonStyle, Context, CreateActionRow, CreateButton, CreateInteractionResponseMessage,
 };
-
-#[allow(dead_code)]
-pub enum InteractionVisibility {
-    Ephemeral,
-    Public,
-}
-
-#[allow(dead_code)]
-pub enum WizardInteraction<'a> {
-    Command(&'a CommandInteraction),
-    Component(&'a ComponentInteraction),
-}
-
-#[allow(dead_code)]
-impl WizardInteraction<'_> {
-    #[allow(dead_code)]
-    pub async fn edit_response(
-        &self,
-        ctx: &Context,
-        resp: serenity::builder::EditInteractionResponse,
-    ) -> serenity::Result<serenity::all::Message> {
-        match self {
-            WizardInteraction::Command(c) => c.edit_response(&ctx.http, resp).await,
-            WizardInteraction::Component(c) => c.edit_response(&ctx.http, resp).await,
-        }
-    }
-
-    pub async fn create_or_update_response(
-        &self,
-        ctx: &Context,
-        mut resp: CreateInteractionResponseMessage,
-        visibility: InteractionVisibility,
-    ) -> serenity::Result<()> {
-        let ephemeral = matches!(visibility, InteractionVisibility::Ephemeral);
-        resp = resp.ephemeral(ephemeral);
-        match self {
-            WizardInteraction::Command(c) => {
-                c.create_response(&ctx.http, CreateInteractionResponse::Message(resp))
-                    .await
-            }
-            WizardInteraction::Component(c) => {
-                c.create_response(&ctx.http, CreateInteractionResponse::UpdateMessage(resp))
-                    .await
-            }
-        }
-    }
-
-    pub const fn guild_id(&self) -> Option<serenity::all::GuildId> {
-        match self {
-            WizardInteraction::Command(c) => c.guild_id,
-            WizardInteraction::Component(c) => c.guild_id,
-        }
-    }
-}
 
 pub async fn handle_events_wizard_command(
     ctx: &Context,

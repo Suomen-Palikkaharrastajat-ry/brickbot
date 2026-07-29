@@ -88,6 +88,11 @@ impl EventHandler for Handler {
                 commands.push(crate::commands::events::build_events_command(locale));
             }
 
+            if self.config.commands_for(guild.guild_id).locations.enabled {
+                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
+                commands.push(crate::commands::locations::build_locations_command(locale));
+            }
+
             if self.config.commands_for(guild.guild_id).set.enabled {
                 let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
                 commands.push(crate::commands::set::build_set_command(locale));
@@ -207,8 +212,13 @@ impl EventHandler for Handler {
                         }
                     }
 
+                    let dm_reply_sent_key =
+                        crate::zulip::moderation::ModerationKind::from_topic(&topic)
+                            .map_or("command.events.dm_reply_sent", |(kind, _)| {
+                                kind.dm_reply_sent_key()
+                            });
                     let confirmation = rust_i18n::t!(
-                        "command.events.dm_reply_sent",
+                        dm_reply_sent_key,
                         locale = locale.as_str(),
                         title = event_title
                     );
@@ -522,6 +532,21 @@ impl EventHandler for Handler {
                 if let Err(e) = crate::workflows::handle_events_wizard_command(&ctx, &command).await
                 {
                     tracing::error!("Error handling events wizard command: {}", e);
+                }
+            }
+            Interaction::Command(command)
+                if (command.data.name.as_str() == "locations"
+                    || command.data.name.as_str() == "paikat")
+                    && self
+                        .config
+                        .commands_for(command.guild_id.unwrap_or_default().get())
+                        .locations
+                        .enabled =>
+            {
+                if let Err(e) =
+                    crate::workflows::handle_locations_wizard_command(&ctx, &command).await
+                {
+                    tracing::error!("Error handling locations wizard command: {}", e);
                 }
             }
             Interaction::Command(command)

@@ -24,12 +24,20 @@
 # [pocketbase]
 # url = "https://data.palikkaharrastajat.fi"
 # collection = "events"
+# # Collection holding map locations (optional, defaults to "locations")
+# locations_collection = "locations"
 
 # [interactions]
 # set = true
 # part = true
 
 # [commands.events]
+# enabled = true
+# enable_edit = true
+# enable_propose = true
+# enable_fallback_mention = false
+
+# [commands.locations]
 # enabled = true
 # enable_edit = true
 # enable_propose = true
@@ -49,6 +57,8 @@
 # 
 # # Override commands specifically for this guild (optional)
 # [guilds.commands.events]
+# enabled = false
+# [guilds.commands.locations]
 # enabled = false
 # [guilds.commands.set]
 # enabled = false
