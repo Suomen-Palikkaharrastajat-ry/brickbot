@@ -9,6 +9,7 @@ pub mod db;
 pub mod discord_limits;
 pub mod events_sync;
 pub mod http;
+mod i18n;
 pub mod interactions;
 mod links;
 mod notifications;

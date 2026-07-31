@@ -27,7 +27,7 @@ This document contains detailed information intended for coding agents, LLMs, an
 - **Red / Green TDD Requirement**: All new feature development or bug fixes must follow the Test-Driven Development (TDD) cycle. First, write a failing test (Red), implement the minimum code required to make it pass (Green), and finally refactor while keeping the tests passing.
 - **Test Coverage**: Run `make coverage` to generate HTML test coverage reports using `cargo-llvm-cov` or `cargo-tarpaulin`. Check `lcov.info` or HTML output.
 - **Formatting & Checks**: Run `make format check` before committing.
-- **Localization (i18n)**: All new user-facing strings must be localized using the `rust_i18n::t!` macro. Ensure strings are added to both `locales/en-US.yml` and `locales/fi-FI.yml` to keep them up to date.
+- **Localization (i18n)**: All new user-facing strings must be localized using the `rust_i18n::t!` macro. Ensure strings are added to both `locales/en-US.yml` and `locales/fi-FI.yml` to keep them up to date. This includes Discord modal titles, input labels and validation errors — the tests in `src/i18n.rs` fail on any key, placeholder or blank-value drift between the two bundles. Modal titles and input labels are capped at 45 characters by Discord, so keep translations short.
 
 ## Architecture & Project Structure
 

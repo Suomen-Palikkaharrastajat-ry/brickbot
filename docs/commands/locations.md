@@ -46,7 +46,14 @@ It mirrors the [events command](events.md) and shares its Zulip moderation flow;
      `image_description` get filled in.
    - Any other reply is forwarded to the submitter as a Discord DM.
 
-5. **Result notification**:
+5. **Localization**:
+   - Everything the submitter sees follows the guild's `locale`: the command name and its
+     `image` argument, the wizard prompts and buttons, the modal title and its field labels, and
+     the validation errors. Keys live under `command.locations.*`, `modal.location.*` and
+     `validation.*` in `locales/en-US.yml` and `locales/fi-FI.yml`.
+   - Zulip moderation messages use the locale of the guild the submission came from.
+
+6. **Result notification**:
    - On approval the topic is resolved with a link to
      `https://kartta.palikkaharrastajat.fi/#/locations/<id>` and the submitter is notified in
      Discord.

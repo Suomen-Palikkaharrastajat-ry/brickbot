@@ -44,6 +44,35 @@ modal:
     query: "Search Term"
   services:
     placeholder: "Select services to link"
+  event:
+    title_new: "Submit an Event"
+    title_edit: "Edit Event"
+    field_title: "Title"
+    field_dates: "Dates (YYYY-MM-DD HH:MM - HH:MM)"
+    field_location: "Location"
+    field_url: "URL"
+    field_description: "Description"
+  location:
+    title_new: "Submit a Location"
+    title_edit: "Edit Location"
+    field_title: "Title"
+    field_address: "Address"
+    field_opening_hours: "Opening hours"
+    field_url: "URL"
+    field_description: "Description"
+
+validation:
+  required: "%{field} is required."
+  too_long: "%{field} is too long (max %{max} characters)."
+  url_scheme: "URL must start with http:// or https://"
+  url_too_long: "URL is too long (max 200 characters)."
+  dates_blank: "Dates cannot be blank."
+  dates_start_format: "Start date must be in format YYYY-MM-DD HH:MM"
+  dates_end_time_format: "End time must be in format HH:MM"
+  dates_end_format: "End date must be in format YYYY-MM-DD HH:MM"
+  dates_start_invalid: "Invalid start time for Helsinki timezone."
+  dates_end_invalid: "Invalid end time for Helsinki timezone."
+  dates_end_before_start: "End date must be after the start date."
 
 command:
   set:
@@ -158,6 +187,7 @@ command:
   zulip:
     topic_new_event: "🆕"
     topic_edit_event: "📝"
+    unauthorized: "You are not authorized to moderate this proposal."
     cmd_approve: "approve"
     cmd_approve_published: "approve published"
     cmd_reject: "reject"

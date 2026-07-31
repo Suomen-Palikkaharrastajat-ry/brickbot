@@ -91,7 +91,7 @@ pub async fn handle_locations_wizard_command(
         .await
         {
             let mut locations = locations;
-            locations.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+            locations.sort_by_key(|loc| loc.title.to_lowercase());
             // Only the options Discord will actually render are worth caching on the session.
             locations.truncate(MAX_SELECT_OPTIONS);
 

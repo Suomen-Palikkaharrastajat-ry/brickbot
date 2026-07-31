@@ -44,6 +44,35 @@ modal:
     query: "Hakusana"
   services:
     placeholder: "Valitse linkitettävät palvelut"
+  event:
+    title_new: "Ehdota tapahtumaa"
+    title_edit: "Muokkaa tapahtumaa"
+    field_title: "Otsikko"
+    field_dates: "Ajankohta (YYYY-MM-DD HH:MM - HH:MM)"
+    field_location: "Sijainti"
+    field_url: "Verkko-osoite"
+    field_description: "Kuvaus"
+  location:
+    title_new: "Ehdota paikkaa"
+    title_edit: "Muokkaa paikkaa"
+    field_title: "Otsikko"
+    field_address: "Osoite"
+    field_opening_hours: "Aukioloajat"
+    field_url: "Verkko-osoite"
+    field_description: "Kuvaus"
+
+validation:
+  required: "%{field}: kenttä on pakollinen."
+  too_long: "%{field}: kenttä on liian pitkä (enintään %{max} merkkiä)."
+  url_scheme: "Verkko-osoitteen tulee alkaa http:// tai https://"
+  url_too_long: "Verkko-osoite on liian pitkä (enintään 200 merkkiä)."
+  dates_blank: "Ajankohta ei voi olla tyhjä."
+  dates_start_format: "Alkuajan muodon tulee olla YYYY-MM-DD HH:MM"
+  dates_end_time_format: "Loppuajan muodon tulee olla HH:MM"
+  dates_end_format: "Loppuajan muodon tulee olla YYYY-MM-DD HH:MM"
+  dates_start_invalid: "Alkuaika ei kelpaa Helsingin aikavyöhykkeellä."
+  dates_end_invalid: "Loppuaika ei kelpaa Helsingin aikavyöhykkeellä."
+  dates_end_before_start: "Loppuajan tulee olla alkuajan jälkeen."
 
 command:
   set:
@@ -158,6 +187,7 @@ command:
   zulip:
     topic_new_event: "🆕"
     topic_edit_event: "📝"
+    unauthorized: "Sinulla ei ole oikeutta moderoida tätä ehdotusta."
     cmd_approve: "hyväksy"
     cmd_approve_published: "hyväksy julkaistuna"
     cmd_reject: "hylkää"

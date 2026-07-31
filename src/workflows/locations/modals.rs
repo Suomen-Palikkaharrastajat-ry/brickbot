@@ -1,7 +1,7 @@
-use crate::workflows::events::{validate_text_field, validate_url};
 use crate::workflows::locations::models::{GeoPoint, Location, LocationModerationPayload};
 use crate::workflows::locations::pocketbase::fetch_pocketbase_locations;
 use crate::workflows::locations::validation::{format_location_zulip_topic, sanitize_tags};
+use crate::workflows::validation::{validate_text_field, validate_url};
 use crate::workflows::{AppContext, extract_locale_and_bot_name};
 use serde::Serialize;
 use serenity::all::{
@@ -130,11 +130,12 @@ pub fn location_to_payload(loc: &Location) -> serde_json::Value {
 
 /// The five-field submission modal. Coordinates are deliberately absent — moderators set
 /// `point` from the Zulip YAML block.
-pub fn create_submit_location_modal(session_id: &str) -> CreateModal {
+pub fn create_submit_location_modal(session_id: &str, locale: &str) -> CreateModal {
     build_location_modal(
         &format!("modal_submit_location_{session_id}"),
-        "Submit a Location",
+        false,
         &LocationFormValues::default(),
+        locale,
     )
 }
 
@@ -148,36 +149,68 @@ pub struct LocationFormValues {
     pub description: String,
 }
 
+/// Localized label of a location modal field, by input `custom_id`.
+///
+/// The address input is named `location` after the collection's own field, but is labelled
+/// "Address" so submitters are not asked for a "location" twice.
+fn field_label(field: &str, locale: &str) -> String {
+    let key = if field == "location" {
+        "modal.location.field_address".to_string()
+    } else {
+        format!("modal.location.field_{field}")
+    };
+    rust_i18n::t!(key, locale = locale).to_string()
+}
+
 fn build_location_modal(
     custom_id: &str,
-    modal_title: &str,
+    is_edit: bool,
     values: &LocationFormValues,
+    locale: &str,
 ) -> CreateModal {
+    let modal_title = if is_edit {
+        rust_i18n::t!("modal.location.title_edit", locale = locale)
+    } else {
+        rust_i18n::t!("modal.location.title_new", locale = locale)
+    };
+
     CreateModal::new(custom_id, modal_title).components(vec![
         CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Short, "Title", "title")
+            CreateInputText::new(InputTextStyle::Short, field_label("title", locale), "title")
                 .required(true)
                 .value(&values.title),
         ),
         CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Short, "Address", "location")
-                .required(false)
-                .value(&values.location),
+            CreateInputText::new(
+                InputTextStyle::Short,
+                field_label("location", locale),
+                "location",
+            )
+            .required(false)
+            .value(&values.location),
         ),
         CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Short, "Opening hours", "opening_hours")
-                .required(false)
-                .value(&values.opening_hours),
+            CreateInputText::new(
+                InputTextStyle::Short,
+                field_label("opening_hours", locale),
+                "opening_hours",
+            )
+            .required(false)
+            .value(&values.opening_hours),
         ),
         CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Short, "URL", "url")
+            CreateInputText::new(InputTextStyle::Short, field_label("url", locale), "url")
                 .required(false)
                 .value(&values.url),
         ),
         CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Paragraph, "Description", "description")
-                .required(false)
-                .value(&values.description),
+            CreateInputText::new(
+                InputTextStyle::Paragraph,
+                field_label("description", locale),
+                "description",
+            )
+            .required(false)
+            .value(&values.description),
         ),
     ])
 }
@@ -201,21 +234,38 @@ fn read_location_modal(interaction: &ModalInteraction) -> LocationFormValues {
 }
 
 /// Runs every field through the shared validators, collecting all failures at once.
-fn validate_location_form(values: &LocationFormValues) -> Result<LocationFormValues, Vec<String>> {
-    let title = validate_text_field(&values.title, "Title", MAX_TITLE_LEN, true);
-    let location = validate_text_field(&values.location, "Address", MAX_ADDRESS_LEN, false);
+fn validate_location_form(
+    values: &LocationFormValues,
+    locale: &str,
+) -> Result<LocationFormValues, Vec<String>> {
+    let title = validate_text_field(
+        &values.title,
+        &field_label("title", locale),
+        MAX_TITLE_LEN,
+        true,
+        locale,
+    );
+    let location = validate_text_field(
+        &values.location,
+        &field_label("location", locale),
+        MAX_ADDRESS_LEN,
+        false,
+        locale,
+    );
     let opening_hours = validate_text_field(
         &values.opening_hours,
-        "Opening hours",
+        &field_label("opening_hours", locale),
         MAX_OPENING_HOURS_LEN,
         false,
+        locale,
     );
-    let url = validate_url(&values.url);
+    let url = validate_url(&values.url, locale);
     let description = validate_text_field(
         &values.description,
-        "Description",
+        &field_label("description", locale),
         MAX_DESCRIPTION_LEN,
         false,
+        locale,
     );
 
     let errors: Vec<String> = [
@@ -406,14 +456,18 @@ pub async fn handle_wizard_location_submit_continue(
     )
     .await?;
 
+    let (locale, _) = extract_locale_and_bot_name(app_ctx, interaction.guild_id).await;
+
     interaction
         .create_response(
             &ctx.http,
-            CreateInteractionResponse::Modal(create_submit_location_modal(&session_id)),
+            CreateInteractionResponse::Modal(create_submit_location_modal(
+                &session_id,
+                locale.as_str(),
+            )),
         )
         .await?;
 
-    let (locale, _) = extract_locale_and_bot_name(app_ctx, interaction.guild_id).await;
     let msg = rust_i18n::t!(
         "command.locations.opening_submit_form",
         locale = locale.as_str()
@@ -492,7 +546,7 @@ pub async fn handle_modal_submit_location(
         .map(str::to_string);
 
     let raw = read_location_modal(interaction);
-    let values = match validate_location_form(&raw) {
+    let values = match validate_location_form(&raw, locale.as_str()) {
         Ok(v) => v,
         Err(errors) => {
             let draft_payload = serde_json::json!({
@@ -504,6 +558,8 @@ pub async fn handle_modal_submit_location(
                 "tags": tags,
                 "is_edit": false,
                 "uid": null,
+                // Carried so the retry keeps the cover image the user attached to the command.
+                "image_draft_id": draft_uuid,
             });
             return respond_with_validation_errors(
                 ctx,
@@ -661,15 +717,21 @@ pub async fn handle_wizard_locations_edit(
         }
     }
 
-    let selected = (!selected_uid.is_empty())
+    // Nothing selected means the wizard had no locations to offer; a selection that is missing
+    // from the cache means the session expired or the record went away since it was listed.
+    let nothing_to_edit = selected_uid.is_empty() || locations_cache.is_empty();
+    let selected = (!nothing_to_edit)
         .then(|| locations_cache.into_iter().find(|l| l.uid == selected_uid))
         .flatten();
 
     let Some(loc) = selected else {
-        let resp = CreateInteractionResponseMessage::new().content(rust_i18n::t!(
-            "errors.no_locations_to_edit",
-            locale = locale.as_str()
-        ));
+        let err_key = if nothing_to_edit {
+            "errors.no_locations_to_edit"
+        } else {
+            "errors.failed_to_fetch_locations"
+        };
+        let resp = CreateInteractionResponseMessage::new()
+            .content(rust_i18n::t!(err_key, locale = locale.as_str()));
         interaction
             .create_response(ctx, CreateInteractionResponse::Message(resp))
             .await?;
@@ -705,7 +767,7 @@ pub async fn handle_wizard_locations_edit(
 
     let modal = build_location_modal(
         &format!("modal_edit_location_{session_id}"),
-        "Edit Location",
+        true,
         &LocationFormValues {
             title: loc.title.clone(),
             location: loc.location.clone().unwrap_or_default(),
@@ -713,6 +775,7 @@ pub async fn handle_wizard_locations_edit(
             url: loc.url.clone().unwrap_or_default(),
             description,
         },
+        locale.as_str(),
     );
 
     interaction
@@ -787,7 +850,7 @@ pub async fn handle_modal_edit_location(
         .unwrap_or_default();
 
     let raw = read_location_modal(interaction);
-    let values = match validate_location_form(&raw) {
+    let values = match validate_location_form(&raw, locale.as_str()) {
         Ok(v) => v,
         Err(errors) => {
             let draft_payload = serde_json::json!({
@@ -992,6 +1055,12 @@ pub async fn handle_wizard_retry_location_submit(
                 .collect()
         })
         .unwrap_or_default();
+    // The submit modal resolves `draft_id` against the still-pending drafting input holding the
+    // cover image, not against the draft of the rejected form.
+    let image_draft_id = payload
+        .get("image_draft_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     let session_id = crate::db::create_workflow_session(
         &app_ctx.db,
@@ -1004,7 +1073,7 @@ pub async fn handle_wizard_retry_location_submit(
         &guild_id,
         &channel_id,
         serde_json::json!({
-            "draft_id": if is_edit { None } else { Some(draft_id) },
+            "draft_id": if is_edit { None } else { image_draft_id },
             "uid": if is_edit { Some(uid) } else { None },
             "tags": tags,
         }),
@@ -1021,11 +1090,7 @@ pub async fn handle_wizard_retry_location_submit(
                 "modal_submit_location_"
             }
         ),
-        if is_edit {
-            "Edit Location"
-        } else {
-            "Submit a Location"
-        },
+        is_edit,
         &LocationFormValues {
             title: get_str("title"),
             location: get_str("location"),
@@ -1033,6 +1098,7 @@ pub async fn handle_wizard_retry_location_submit(
             url: get_str("url"),
             description: get_str("description"),
         },
+        locale.as_str(),
     );
 
     interaction
@@ -1040,7 +1106,11 @@ pub async fn handle_wizard_retry_location_submit(
         .await?;
 
     let msg = rust_i18n::t!(
-        "command.locations.opening_edit_form",
+        if is_edit {
+            "command.locations.opening_edit_form"
+        } else {
+            "command.locations.opening_submit_form"
+        },
         locale = locale.as_str()
     );
     let _ = interaction
@@ -1126,7 +1196,7 @@ mod tests {
 
     #[test]
     fn test_create_submit_location_modal_structure() {
-        let modal = create_submit_location_modal("session123");
+        let modal = create_submit_location_modal("session123", "en-US");
         let json = serde_json::to_value(&modal).unwrap();
 
         assert_eq!(
@@ -1151,6 +1221,79 @@ mod tests {
             ids,
             vec!["title", "location", "opening_hours", "url", "description"]
         );
+
+        let labels: Vec<&str> = components
+            .iter()
+            .map(|row| {
+                row.get("components").unwrap().as_array().unwrap()[0]
+                    .get("label")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            vec!["Title", "Address", "Opening hours", "URL", "Description"]
+        );
+    }
+
+    #[test]
+    fn test_location_modals_are_localized() {
+        let submit = serde_json::to_value(create_submit_location_modal("s1", "fi-FI")).unwrap();
+        assert_eq!(submit["title"].as_str().unwrap(), "Ehdota paikkaa");
+
+        let labels: Vec<&str> = submit["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["components"][0]["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Otsikko",
+                "Osoite",
+                "Aukioloajat",
+                "Verkko-osoite",
+                "Kuvaus"
+            ]
+        );
+
+        // Discord rejects modal titles and input labels longer than 45 characters.
+        assert!(submit["title"].as_str().unwrap().chars().count() <= 45);
+        for label in labels {
+            assert!(label.chars().count() <= 45, "label too long: {label}");
+        }
+
+        let edit = serde_json::to_value(build_location_modal(
+            "modal_edit_location_s1",
+            true,
+            &LocationFormValues::default(),
+            "fi-FI",
+        ))
+        .unwrap();
+        assert_eq!(edit["title"].as_str().unwrap(), "Muokkaa paikkaa");
+    }
+
+    #[test]
+    fn test_validate_location_form_is_localized() {
+        let values = LocationFormValues {
+            title: String::new(),
+            url: "not-a-url".to_string(),
+            ..LocationFormValues::default()
+        };
+
+        let errors = validate_location_form(&values, "fi-FI").unwrap_err();
+        assert_eq!(errors.len(), 2);
+        assert!(
+            errors.iter().any(|e| e.starts_with("Otsikko")),
+            "expected a Finnish title error: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("Verkko-osoitteen")),
+            "expected a Finnish url error: {errors:?}"
+        );
     }
 
     #[test]
@@ -1163,7 +1306,7 @@ mod tests {
             description: String::new(),
         };
 
-        let errors = validate_location_form(&values).unwrap_err();
+        let errors = validate_location_form(&values, "en-US").unwrap_err();
         assert_eq!(errors.len(), 4);
         assert!(errors.iter().any(|e| e.contains("Title is required")));
         assert!(errors.iter().any(|e| e.contains("Address is too long")));
@@ -1182,7 +1325,7 @@ mod tests {
             ..LocationFormValues::default()
         };
 
-        let ok = validate_location_form(&values).unwrap();
+        let ok = validate_location_form(&values, "en-US").unwrap();
         assert_eq!(ok.title, "Legokauppa");
         assert_eq!(ok.location, "");
         assert_eq!(ok.url, "");

@@ -11,6 +11,7 @@ pub mod ambient;
 pub mod events;
 pub mod locations;
 pub mod search;
+pub mod validation;
 
 use serenity::all::{
     CommandInteraction, ComponentInteraction, Context, CreateInteractionResponse,

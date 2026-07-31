@@ -1,6 +1,7 @@
 use crate::workflows::events::{
     InteractionVisibility, WizardInteraction, format_zulip_topic, validate_event_dates,
 };
+use crate::workflows::validation::{validate_text_field, validate_url};
 use crate::workflows::{AppContext, extract_locale_and_bot_name};
 use chrono::{TimeZone, Timelike};
 use chrono_tz::Europe::Helsinki;
@@ -135,9 +136,13 @@ pub async fn handle_wizard_retry_submit(
                             .get("description")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
+                        // The submit modal resolves `draft_id` against the still-pending
+                        // drafting input holding the cover image, not against the draft of the
+                        // rejected form.
+                        let image_draft_id = payload.get("image_draft_id").and_then(|v| v.as_str());
 
                         let session_payload = serde_json::json!({
-                            "draft_id": if is_edit { None } else { Some(draft_id) },
+                            "draft_id": if is_edit { None } else { image_draft_id },
                             "uid": if is_edit { Some(uid) } else { None },
                             "tag": tag
                         });
@@ -163,56 +168,29 @@ pub async fn handle_wizard_retry_submit(
                             format!("modal_submit_event_{session_id}")
                         };
 
-                        let modal = CreateModal::new(
-                            modal_id,
-                            if is_edit {
-                                "Edit Event"
-                            } else {
-                                "Submit an Event"
+                        let modal = build_event_modal(
+                            &modal_id,
+                            is_edit,
+                            &EventFormValues {
+                                title: title.to_string(),
+                                dates,
+                                location: location.to_string(),
+                                url: url.to_string(),
+                                description: description.to_string(),
                             },
-                        )
-                        .components(vec![
-                            CreateActionRow::InputText(
-                                CreateInputText::new(InputTextStyle::Short, "Title", "title")
-                                    .required(true)
-                                    .value(title),
-                            ),
-                            CreateActionRow::InputText(
-                                CreateInputText::new(
-                                    InputTextStyle::Short,
-                                    "Dates (YYYY-MM-DD HH:MM - HH:MM)",
-                                    "dates",
-                                )
-                                .required(true)
-                                .value(dates),
-                            ),
-                            CreateActionRow::InputText(
-                                CreateInputText::new(InputTextStyle::Short, "Location", "location")
-                                    .required(false)
-                                    .value(location),
-                            ),
-                            CreateActionRow::InputText(
-                                CreateInputText::new(InputTextStyle::Short, "URL", "url")
-                                    .required(false)
-                                    .value(url),
-                            ),
-                            CreateActionRow::InputText(
-                                CreateInputText::new(
-                                    InputTextStyle::Paragraph,
-                                    "Description",
-                                    "description",
-                                )
-                                .required(false)
-                                .value(description),
-                            ),
-                        ]);
+                            locale.as_str(),
+                        );
 
                         interaction
                             .create_response(&ctx.http, CreateInteractionResponse::Modal(modal))
                             .await?;
 
                         let msg = rust_i18n::t!(
-                            "command.events.opening_edit_form",
+                            if is_edit {
+                                "command.events.opening_edit_form"
+                            } else {
+                                "command.events.opening_submit_form"
+                            },
                             locale = locale.as_str()
                         );
                         let _ = interaction
@@ -291,12 +269,13 @@ pub async fn handle_wizard_submit_tag_continue(
     )
     .await?;
 
-    let modal = create_submit_modal(&session_id);
+    let (locale, _) = extract_locale_and_bot_name(app_ctx, interaction.guild_id).await;
+
+    let modal = create_submit_modal(&session_id, locale.as_str());
     interaction
         .create_response(&ctx.http, CreateInteractionResponse::Modal(modal))
         .await?;
 
-    let (locale, _) = extract_locale_and_bot_name(app_ctx, interaction.guild_id).await;
     let msg = rust_i18n::t!(
         "command.events.opening_submit_form",
         locale = locale.as_str()
@@ -313,7 +292,73 @@ pub async fn handle_wizard_submit_tag_continue(
     Ok(())
 }
 
-pub fn create_submit_modal(session_id: &str) -> CreateModal {
+/// Values used to prefill the modal on edit or retry.
+#[derive(Default, Clone, Debug)]
+pub struct EventFormValues {
+    pub title: String,
+    pub dates: String,
+    pub location: String,
+    pub url: String,
+    pub description: String,
+}
+
+/// Localized label of an event modal field, by input `custom_id`.
+fn field_label(field: &str, locale: &str) -> String {
+    rust_i18n::t!(format!("modal.event.field_{field}"), locale = locale).to_string()
+}
+
+/// Builds the submit or edit modal. Both carry the same five fields, so they differ only in
+/// custom id and title.
+fn build_event_modal(
+    custom_id: &str,
+    is_edit: bool,
+    values: &EventFormValues,
+    locale: &str,
+) -> CreateModal {
+    let modal_title = if is_edit {
+        rust_i18n::t!("modal.event.title_edit", locale = locale)
+    } else {
+        rust_i18n::t!("modal.event.title_new", locale = locale)
+    };
+
+    CreateModal::new(custom_id, modal_title).components(vec![
+        CreateActionRow::InputText(
+            CreateInputText::new(InputTextStyle::Short, field_label("title", locale), "title")
+                .required(true)
+                .value(&values.title),
+        ),
+        CreateActionRow::InputText(
+            CreateInputText::new(InputTextStyle::Short, field_label("dates", locale), "dates")
+                .required(true)
+                .value(&values.dates),
+        ),
+        CreateActionRow::InputText(
+            CreateInputText::new(
+                InputTextStyle::Short,
+                field_label("location", locale),
+                "location",
+            )
+            .required(false)
+            .value(&values.location),
+        ),
+        CreateActionRow::InputText(
+            CreateInputText::new(InputTextStyle::Short, field_label("url", locale), "url")
+                .required(false)
+                .value(&values.url),
+        ),
+        CreateActionRow::InputText(
+            CreateInputText::new(
+                InputTextStyle::Paragraph,
+                field_label("description", locale),
+                "description",
+            )
+            .required(false)
+            .value(&values.description),
+        ),
+    ])
+}
+
+pub fn create_submit_modal(session_id: &str, locale: &str) -> CreateModal {
     let custom_id = format!("modal_submit_event_{session_id}");
 
     let now_utc = chrono::Utc::now();
@@ -333,30 +378,15 @@ pub fn create_submit_modal(session_id: &str) -> CreateModal {
         end_helsinki.format("%Y-%m-%d %H:%M")
     );
 
-    CreateModal::new(custom_id, "Submit an Event").components(vec![
-        CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Short, "Title", "title").required(true),
-        ),
-        CreateActionRow::InputText(
-            CreateInputText::new(
-                InputTextStyle::Short,
-                "Dates (YYYY-MM-DD HH:MM - HH:MM)",
-                "dates",
-            )
-            .required(true)
-            .value(&dates_str),
-        ),
-        CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Short, "Location", "location").required(false),
-        ),
-        CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Short, "URL", "url").required(false),
-        ),
-        CreateActionRow::InputText(
-            CreateInputText::new(InputTextStyle::Paragraph, "Description", "description")
-                .required(false),
-        ),
-    ])
+    build_event_modal(
+        &custom_id,
+        false,
+        &EventFormValues {
+            dates: dates_str,
+            ..EventFormValues::default()
+        },
+        locale,
+    )
 }
 
 fn parse_submit_modal_custom_id(custom_id: &str) -> Option<String> {
@@ -439,29 +469,35 @@ pub async fn handle_modal_submit_event(
 
     let mut validation_errors = Vec::new();
 
-    let title_res = crate::workflows::events::validate_text_field(&title, "Title", 100, true);
+    let loc = locale.as_str();
+    let title_res = validate_text_field(&title, &field_label("title", loc), 100, true, loc);
     if let Err(e) = &title_res {
         validation_errors.push(e.clone());
     }
 
     let location_res =
-        crate::workflows::events::validate_text_field(&location, "Location", 100, false);
+        validate_text_field(&location, &field_label("location", loc), 100, false, loc);
     if let Err(e) = &location_res {
         validation_errors.push(e.clone());
     }
 
-    let url_res = crate::workflows::events::validate_url(&url);
+    let url_res = validate_url(&url, loc);
     if let Err(e) = &url_res {
         validation_errors.push(e.clone());
     }
 
-    let description_res =
-        crate::workflows::events::validate_text_field(&description, "Description", 2000, false);
+    let description_res = validate_text_field(
+        &description,
+        &field_label("description", loc),
+        2000,
+        false,
+        loc,
+    );
     if let Err(e) = &description_res {
         validation_errors.push(e.clone());
     }
 
-    let dates_res = validate_event_dates(&dates_str);
+    let dates_res = validate_event_dates(&dates_str, loc);
     if let Err(e) = &dates_res {
         validation_errors.push(e.clone());
     }
@@ -477,6 +513,8 @@ pub async fn handle_modal_submit_event(
             "description": description,
             "is_edit": false,
             "uid": null,
+            // Carried so the retry keeps the cover image the user attached to the command.
+            "image_draft_id": draft_uuid,
         });
 
         let _ = crate::db::insert_draft_submission(
@@ -822,57 +860,18 @@ pub async fn handle_wizard_events_edit(
             format!("{start_str} - {end_str}")
         };
 
-        let modal = serenity::builder::CreateModal::new(
-            format!("modal_edit_event_{session_id}"),
-            "Edit Event",
-        )
-        .components(vec![
-            serenity::builder::CreateActionRow::InputText(
-                serenity::builder::CreateInputText::new(
-                    serenity::all::InputTextStyle::Short,
-                    "Title",
-                    "title",
-                )
-                .value(&ev.summary)
-                .required(true),
-            ),
-            serenity::builder::CreateActionRow::InputText(
-                serenity::builder::CreateInputText::new(
-                    serenity::all::InputTextStyle::Short,
-                    "Dates (YYYY-MM-DD HH:MM - HH:MM)",
-                    "dates",
-                )
-                .value(&dates_str)
-                .required(true),
-            ),
-            serenity::builder::CreateActionRow::InputText(
-                serenity::builder::CreateInputText::new(
-                    serenity::all::InputTextStyle::Short,
-                    "Location",
-                    "location",
-                )
-                .value(ev.location.as_deref().unwrap_or_default())
-                .required(false),
-            ),
-            serenity::builder::CreateActionRow::InputText(
-                serenity::builder::CreateInputText::new(
-                    serenity::all::InputTextStyle::Short,
-                    "URL",
-                    "url",
-                )
-                .value(ev.url.as_deref().unwrap_or_default())
-                .required(false),
-            ),
-            serenity::builder::CreateActionRow::InputText(
-                serenity::builder::CreateInputText::new(
-                    serenity::all::InputTextStyle::Paragraph,
-                    "Description",
-                    "description",
-                )
-                .value(&safe_desc)
-                .required(false),
-            ),
-        ]);
+        let modal = build_event_modal(
+            &format!("modal_edit_event_{session_id}"),
+            true,
+            &EventFormValues {
+                title: ev.summary.clone(),
+                dates: dates_str,
+                location: ev.location.clone().unwrap_or_default(),
+                url: ev.url.clone().unwrap_or_default(),
+                description: safe_desc,
+            },
+            locale.as_str(),
+        );
 
         interaction
             .create_response(
@@ -970,7 +969,7 @@ pub async fn handle_modal_edit_event(
         }
     }
 
-    let (pb_start, pb_end) = match validate_event_dates(&dates_str) {
+    let (pb_start, pb_end) = match validate_event_dates(&dates_str, locale.as_str()) {
         Ok(dates) => dates,
         Err(e) => {
             let draft_id = uuid::Uuid::new_v4().to_string();
@@ -1240,7 +1239,7 @@ mod tests {
     #[test]
     fn test_create_submit_modal_structure() {
         let tag = "exhibition";
-        let modal = create_submit_modal(tag);
+        let modal = create_submit_modal(tag, "en-US");
 
         let json = serde_json::to_value(&modal).unwrap();
 
@@ -1279,5 +1278,36 @@ mod tests {
                 "Description"
             ]
         );
+    }
+
+    #[test]
+    fn test_create_submit_modal_is_localized() {
+        let modal = create_submit_modal("session123", "fi-FI");
+        let json = serde_json::to_value(&modal).unwrap();
+
+        assert_eq!(json["title"].as_str().unwrap(), "Ehdota tapahtumaa");
+
+        let labels: Vec<_> = json["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["components"][0]["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Otsikko",
+                "Ajankohta (YYYY-MM-DD HH:MM - HH:MM)",
+                "Sijainti",
+                "Verkko-osoite",
+                "Kuvaus"
+            ]
+        );
+
+        // Discord rejects modal titles and input labels longer than 45 characters.
+        assert!(json["title"].as_str().unwrap().chars().count() <= 45);
+        for label in labels {
+            assert!(label.chars().count() <= 45, "label too long: {label}");
+        }
     }
 }
