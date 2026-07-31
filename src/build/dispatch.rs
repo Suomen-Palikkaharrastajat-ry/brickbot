@@ -218,6 +218,12 @@ fn run_sentences(
     let mut outcome = Outcome::default();
     // A working copy, so each sentence sees the effect of the previous one.
     let mut working = history.clone();
+    // The model `working` folds to, carried across sentences and kept in step
+    // as operations are applied. Materializing replays the whole log, so doing
+    // it per sentence — and again per operation — made a long session quadratic
+    // in its own history. It is rebuilt only when an undo, redo or revert moves
+    // the cursor, where the log no longer folds to what we are holding.
+    let mut model = working.materialize();
     // Set when a sentence failed, so the rest of the message is abandoned.
     let mut stopped = false;
 
@@ -245,10 +251,12 @@ fn run_sentences(
                     stopped = true;
                     break 'sentences;
                 }
+                if meta.rewrites_history() {
+                    model = working.materialize();
+                }
             }
 
             Statement::Query(query) => {
-                let model = working.materialize();
                 match queries::answer(&model, &working, &query) {
                     Ok(answer) => outcome
                         .replies
@@ -272,13 +280,11 @@ fn run_sentences(
             }
 
             Statement::Command(command) => {
-                let model = working.materialize();
                 match lower_command_with(&model, &command, chosen) {
                     Ok(ops) => {
                         for op in ops {
-                            let mut next = working.materialize();
                             let rev = working.next_rev();
-                            let effect = apply(&mut next, rev, &op);
+                            let effect = apply(&mut model, rev, &op);
                             outcome
                                 .replies
                                 .push(report::describe_effect(&op, &effect, locale));
@@ -491,6 +497,79 @@ mod tests {
             }
         }
         history
+    }
+
+    /// The interpreter carries one model across a message instead of replaying
+    /// the log per sentence. These check the carried model still equals the
+    /// replayed one.
+    #[test]
+    fn a_multi_sentence_message_matches_the_same_sentences_sent_separately() {
+        let batched = run(&["Add a red 2x4 brick at origin. Add a blue 2x4 brick."]).materialize();
+        let separate =
+            run(&["Add a red 2x4 brick at origin.", "Add a blue 2x4 brick."]).materialize();
+
+        let colors =
+            |m: &crate::build::Model| m.placements.iter().map(|p| p.color).collect::<Vec<_>>();
+        assert_eq!(colors(&batched), colors(&separate));
+        assert_eq!(batched.len(), 2);
+    }
+
+    #[test]
+    fn a_revert_inside_a_message_is_seen_by_the_sentences_after_it() {
+        let history = run(&[
+            "Add a red 2x4 brick at origin.",
+            "Add a blue 2x4 brick.",
+            "Add a yellow 2x4 brick.",
+        ]);
+        assert_eq!(history.materialize().len(), 3);
+
+        // Reverting and then building in one breath: the new brick must land on
+        // the reverted model, so it takes the revision the revert freed rather
+        // than being appended after the yellow one.
+        let outcome = interpret(
+            &history,
+            "Revert to revision 2. Add a green 2x4 brick.",
+            "en-US",
+        );
+        assert_eq!(outcome.ops.len(), 1);
+        assert_eq!(outcome.ops_start, Some(2));
+
+        let mut applied = history.clone();
+        applied.cursor = outcome.ops_start.unwrap();
+        for op in outcome.ops {
+            applied.push(op, "111");
+        }
+        let model = applied.materialize();
+        assert_eq!(model.len(), 3);
+        // Green replaced yellow rather than following it.
+        assert_eq!(model.placements.last().unwrap().color, 2);
+    }
+
+    /// Known bug, unrelated to how the model is carried: `Outcome::ops` is
+    /// append-only, so an undo *between* two commands in one message leaves the
+    /// superseded operation in the list. The session then persists a log the
+    /// interpreter never had — here `[red, blue, yellow]` with the cursor at 2,
+    /// which materializes to red+blue, when the message plainly asked for
+    /// red+yellow. Sending the same four sentences as separate messages is
+    /// correct, which is why this went unnoticed.
+    #[test]
+    #[ignore = "documents a known bug in Outcome::ops; see the comment above"]
+    fn an_undo_between_two_commands_in_one_message_is_persisted_wrongly() {
+        let batched = run(&[
+            "Add a red 2x4 brick at origin. Add a blue 2x4 brick. Undo. Add a yellow 2x4 brick.",
+        ])
+        .materialize();
+        let separate = run(&[
+            "Add a red 2x4 brick at origin.",
+            "Add a blue 2x4 brick.",
+            "Undo.",
+            "Add a yellow 2x4 brick.",
+        ])
+        .materialize();
+
+        let colors =
+            |m: &crate::build::Model| m.placements.iter().map(|p| p.color).collect::<Vec<_>>();
+        assert_eq!(colors(&batched), colors(&separate));
     }
 
     #[test]

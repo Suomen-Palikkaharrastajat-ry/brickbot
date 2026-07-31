@@ -89,6 +89,40 @@ pub fn is_guild_allowed(config: &crate::config::Config, guild_id: u64) -> bool {
     config.guilds.iter().any(|g| g.guild_id == guild_id)
 }
 
+/// The slash commands enabled for `guild_id`, each built in that guild's locale.
+fn build_guild_commands(
+    config: &crate::config::Config,
+    guild_id: u64,
+) -> Vec<serenity::all::CreateCommand> {
+    let locale = config.locale_or_default(guild_id);
+    let cmds = config.commands_for(guild_id);
+    let mut commands = Vec::new();
+
+    // Events alone is read globally rather than per guild; guild overrides still gate the
+    // interaction handler, so a guild that disables it registers the command but never runs it.
+    if config.commands.events.enabled {
+        commands.push(crate::commands::events::build_events_command(locale));
+    }
+    if cmds.locations.enabled {
+        commands.push(crate::commands::locations::build_locations_command(locale));
+    }
+    if cmds.set.enabled {
+        commands.push(crate::commands::set::build_set_command(locale));
+    }
+    if cmds.part.enabled {
+        commands.push(crate::commands::part::build_part_command(locale));
+    }
+    if cmds.diagnostics.enabled {
+        commands.push(crate::commands::diagnostics::build_diagnostics_command(
+            locale,
+        ));
+    }
+    if cmds.build.enabled {
+        commands.push(crate::commands::build::build_build_command(locale));
+    }
+
+    commands
+}
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
@@ -230,11 +264,7 @@ impl EventHandler for Handler {
                 None
             };
 
-            let locale = self
-                .config
-                .locale
-                .clone()
-                .unwrap_or_else(|| "en-US".to_string());
+            let locale = self.config.default_locale().to_string();
 
             if let Some((topic, stream, payload_str)) = zulip_info {
                 if let Some(zulip_cfg) = &self.config.zulip {
@@ -523,8 +553,7 @@ impl EventHandler for Handler {
 
                     let locale = self
                         .config
-                        .locale_for(msg.guild_id.unwrap_or_default().get())
-                        .unwrap_or("en-US")
+                        .locale_or_default(msg.guild_id.unwrap_or_default().get())
                         .to_string();
 
                     let text = crate::workflows::generate_suggestion_text(
@@ -645,8 +674,7 @@ impl EventHandler for Handler {
                 let app_ctx = crate::workflows::AppContext::from_serenity_ctx(&ctx).await;
                 let locale = self
                     .config
-                    .locale_for(command.guild_id.unwrap_or_default().get())
-                    .unwrap_or("en-US")
+                    .locale_or_default(command.guild_id.unwrap_or_default().get())
                     .to_string();
                 if let Err(e) = crate::commands::diagnostics::handle_diagnostics_command(
                     &ctx, &app_ctx, &command, &locale,

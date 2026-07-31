@@ -1,6 +1,13 @@
 use serde::Deserialize;
 use std::fs;
 
+/// The locale used when neither a guild nor the global config names one.
+///
+/// The bot is built for a Finnish community, so an unconfigured deployment
+/// speaks Finnish. This is the single fallback: nothing else may invent one,
+/// or command names and replies drift into different languages.
+pub const DEFAULT_LOCALE: &str = "fi-FI";
+
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct Config {
     pub locale: Option<String>,
@@ -496,17 +503,68 @@ impl Config {
         }
     }
 
+    /// The locale configured for a guild, if any.
+    ///
+    /// Prefer [`Self::locale_or_default`] when a locale is actually needed:
+    /// this returns `None` for an unconfigured deployment, and every call site
+    /// picking its own fallback is how the bot ended up registering `/rakenna`
+    /// and then answering in English.
     #[must_use]
     pub fn locale_for(&self, guild_id: u64) -> Option<&str> {
         self.get_guild_config(guild_id)
             .and_then(|g| g.locale.as_deref())
             .or(self.locale.as_deref())
     }
+
+    /// The locale to use for a guild, falling back to [`DEFAULT_LOCALE`].
+    #[must_use]
+    pub fn locale_or_default(&self, guild_id: u64) -> &str {
+        self.locale_for(guild_id).unwrap_or(DEFAULT_LOCALE)
+    }
+
+    /// The locale to use outside any guild — a DM, or a Zulip topic whose
+    /// Discord channel could not be resolved.
+    #[must_use]
+    pub fn default_locale(&self) -> &str {
+        self.locale.as_deref().unwrap_or(DEFAULT_LOCALE)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unconfigured_deployment_speaks_the_default_locale() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.locale_for(123), None);
+        assert_eq!(config.locale_or_default(123), DEFAULT_LOCALE);
+        assert_eq!(config.default_locale(), DEFAULT_LOCALE);
+    }
+
+    #[test]
+    fn a_guild_locale_wins_over_the_global_one_which_wins_over_the_default() {
+        let config: Config = toml::from_str(
+            r#"
+            locale = "en-US"
+
+            [[guilds]]
+            guild_id = 1
+            locale = "fi-FI"
+
+            [[guilds]]
+            guild_id = 2
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.locale_or_default(1), "fi-FI");
+        // No guild locale: the global one applies.
+        assert_eq!(config.locale_or_default(2), "en-US");
+        // Not a configured guild at all: still the global one.
+        assert_eq!(config.locale_or_default(999), "en-US");
+        assert_eq!(config.default_locale(), "en-US");
+    }
 
     #[test]
     fn build_command_config_defaults_are_sane() {

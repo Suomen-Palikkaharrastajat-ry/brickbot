@@ -54,7 +54,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
             let mut reply_msg_key = None;
             let mut reply_msg_raw = None;
 
-            let mut locale = "en-US".to_string();
+            let mut locale = state.config.default_locale().to_string();
             let mut resolved_guild_id = None;
             if let Ok(cid) = channel_id.parse::<u64>() {
                 let c = serenity::model::id::ChannelId::new(cid);
@@ -62,7 +62,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                     if let Some(guild_channel) = channel.guild() {
                         let g_id = guild_channel.guild_id.get();
                         resolved_guild_id = Some(g_id);
-                        locale = state.config.locale_for(g_id).unwrap_or("en-US").to_string();
+                        locale = state.config.locale_or_default(g_id).to_string();
                     }
                 }
             }
@@ -731,11 +731,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
         }
     } else {
         // Treat as a reply back to Discord for non-event topics
-        let locale = state
-            .config
-            .locale
-            .clone()
-            .unwrap_or_else(|| "fi-FI".to_string());
+        let locale = state.config.default_locale().to_string();
         let mut rest = content;
         if content_lower.starts_with("@**")
             || content_lower.starts_with("@bot")
@@ -779,7 +775,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                         .unwrap_or(None);
 
                 if let Some((id, user_id, channel_id, _payload_str)) = pending_input {
-                    let mut locale = "en-US".to_string();
+                    let mut locale = state.config.default_locale().to_string();
                     let mut resolved_guild_id = None;
                     if let Ok(cid) = channel_id.parse::<u64>() {
                         let c = serenity::model::id::ChannelId::new(cid);
@@ -787,8 +783,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                             if let Some(guild_channel) = channel.guild() {
                                 let g_id = guild_channel.guild_id.get();
                                 resolved_guild_id = Some(g_id);
-                                locale =
-                                    state.config.locale_for(g_id).unwrap_or("en-US").to_string();
+                                locale = state.config.locale_or_default(g_id).to_string();
                             }
                         }
                     }

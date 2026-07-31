@@ -200,6 +200,26 @@ impl Token {
             _ => None,
         }
     }
+
+    /// The token as it can be quoted back at the builder, if it can be.
+    ///
+    /// Only tokens that carry their own text, or that map back to one obvious
+    /// word, are quotable. Everything else answers `None` so the caller drops
+    /// the "I got as far as …" clause — a parse error must never show a Rust
+    /// type name to somebody who was building a castle.
+    #[must_use]
+    pub fn quotable(&self) -> Option<String> {
+        match self {
+            Self::Word(w) | Self::Quoted(w) => Some(w.clone()),
+            Self::Number(n) => Some(n.to_string()),
+            Self::Dim(w, d) => Some(format!("{w}x{d}")),
+            Self::Kind(kind) => Some(kind.as_str().to_string()),
+            Self::Direction(direction) => Some(direction.as_str().to_string()),
+            Self::Unit(unit) => Some(unit.as_str().to_string()),
+            Self::Color(code) => crate::ldraw::colors::name_of(*code).map(str::to_string),
+            Self::Verb(_) | Self::Keyword(_) => None,
+        }
+    }
 }
 
 /// One sentence's worth of tokens, plus the text it came from for error

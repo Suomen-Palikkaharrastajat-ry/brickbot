@@ -50,7 +50,7 @@ Create and configure your `config.toml` (or edit the existing one):
 ```toml
 # Global bot name (optional)
 bot_name = "Palikkaharrastaja"
-# Global default locale (optional, fallback when guild config is not set)
+# Global default locale (optional; guild config wins, and "fi-FI" applies when neither is set)
 locale = "fi-FI"
 
 ambient_debug_logging = true

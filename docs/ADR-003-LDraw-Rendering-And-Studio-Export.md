@@ -69,6 +69,21 @@ The model is stored **natively in LDraw coordinates** (right-handed, −Y up, in
 
 Two caches make repeated renders cheap: parsed part files, and flattened meshes keyed by part name only. Meshes keep LDraw's `inherit` colour code, so one cached mesh serves every colour the part is used in. Without the mesh cache a 300-brick model would re-flatten `3001` and its ten sub-files three hundred times per render, which would dominate everything else.
 
+### The bot runs as a single process
+
+Four pieces of session state live in process memory rather than in SQLite, keyed by session id:
+
+| State | Purpose |
+| --- | --- |
+| `SESSION_LOCKS` | Serializes load → interpret → persist, so two people building at once cannot overwrite each other |
+| `RENDER_STATE` | Per-session render pacing: when the last picture went out, and the render waiting to go |
+| `RENDER_SLOTS` | A semaphore capping concurrent renders at two, so rendering cannot starve the gateway |
+| The LDraw caches above | Parsed files and flattened meshes |
+
+**This assumes exactly one bot process.** Run a second instance against the same database and the session lock stops being a lock: both processes hold their own, both load the same history, and the later write silently discards the earlier one. The render debounce and the concurrency cap degrade more gently — you get two pictures instead of one, and twice the CPU cap — but the lock is a correctness boundary, not a performance one.
+
+Single-process is the right default here: one Discord gateway connection per bot token is the normal shape, and SQLite is already a single-writer store. Should the bot ever need to scale out, the lock has to move into the database — an advisory row taken in the same transaction as the write — before anything else is touched.
+
 ## Consequences
 
 ### Positive
@@ -83,6 +98,7 @@ Two caches make repeated renders cheap: parsed part files, and flattened meshes 
 - Flat two-sided shading with no edge lines is visibly simpler than a proper LDraw viewer. Adjacent bricks of the same colour have no visible seams.
 - Maintaining a hand-written ZIP and cipher is a small ongoing cost, and `.INFO`'s real structure is undocumented — the blob we write is a plausible guess. `enable_io_export = false` falls back to a plain `.ldr`, which Studio imports natively.
 - Rendering is CPU work on the bot's host, bounded by `spawn_blocking` and a process-wide semaphore of two.
+- Session locking, render pacing and the part caches are process-local, so the design assumes a single bot process. See *The bot runs as a single process* above for what breaks otherwise.
 
 ### Licensing
 This is the reason several of the decisions above look the way they do.

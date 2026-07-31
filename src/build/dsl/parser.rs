@@ -206,12 +206,7 @@ impl<'a> Parser<'a> {
     fn error(&self, expected: Expectation) -> ParseError {
         ParseError {
             expected,
-            found: self.peek().map(|t| match t {
-                Token::Word(w) | Token::Quoted(w) => w.clone(),
-                Token::Number(n) => n.to_string(),
-                Token::Dim(w, d) => format!("{w}x{d}"),
-                other => format!("{other:?}").to_lowercase(),
-            }),
+            found: self.peek().and_then(Token::quotable),
             sentence: self.sentence.to_string(),
         }
     }
@@ -1108,6 +1103,52 @@ mod tests {
 
     fn parse(text: &str) -> SentenceOutcome {
         parse_sentence(&tokenize_sentence(text))
+    }
+
+    #[test]
+    fn a_rejected_sentence_never_quotes_a_rust_type_name() {
+        // Each of these stops the parser on a token of a different kind, which
+        // is where a `{:?}` used to leak `verb(add)` or `keyword(at)` into the
+        // message shown in the thread.
+        for sentence in [
+            "Add the",
+            "Add at",
+            "Add north",
+            "Add 5",
+            "Add stud",
+            "Add red",
+            "Paint",
+            "Replace",
+            "Select",
+            "Group",
+            "Revert to",
+        ] {
+            let SentenceOutcome::Error(error) = parse(sentence) else {
+                continue;
+            };
+            if let Some(found) = &error.found {
+                assert!(
+                    !found.contains('(') && !found.contains('{'),
+                    "{sentence:?} quoted a debug value: {found:?}"
+                );
+                assert!(!found.is_empty(), "{sentence:?} quoted an empty token");
+            }
+        }
+    }
+
+    #[test]
+    fn a_quotable_token_is_still_quoted_back() {
+        let SentenceOutcome::Error(error) = parse("Add zzz qqq") else {
+            panic!("'Add zzz qqq' should be rejected");
+        };
+        assert_eq!(error.found.as_deref(), Some("zzz"));
+
+        // A typed token maps back to the word it was written as, rather than
+        // to the name of the enum variant it lexed to.
+        let SentenceOutcome::Error(error) = parse("Revert to north") else {
+            panic!("'Revert to north' should be rejected");
+        };
+        assert_eq!(error.found.as_deref(), Some("north"));
     }
 
     fn command(text: &str) -> Command {

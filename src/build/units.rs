@@ -77,6 +77,16 @@ pub enum Unit {
 }
 
 impl Unit {
+    /// The word this unit is written as.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stud => "stud",
+            Self::Plate => "plate",
+            Self::Brick => "brick",
+        }
+    }
+
     /// The length of one of these in LDraw units.
     #[must_use]
     pub const fn to_ldu(self) -> i32 {
@@ -110,6 +120,19 @@ pub enum Direction {
 }
 
 impl Direction {
+    /// The word this direction is written as.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::North => "north",
+            Self::South => "south",
+            Self::East => "east",
+            Self::West => "west",
+            Self::Up => "up",
+            Self::Down => "down",
+        }
+    }
+
     /// The unit step for this direction, in LDraw units.
     ///
     /// East is +X and south is +Z. Up is **-Y**, because LDraw's Y axis points

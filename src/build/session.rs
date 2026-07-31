@@ -222,7 +222,7 @@ pub async fn handle_thread_message(
 
     let guild_id = msg.guild_id.unwrap_or_default().get();
     let cfg = config.commands_for(guild_id).build;
-    let locale = config.locale_for(guild_id).unwrap_or("en-US").to_string();
+    let locale = config.locale_or_default(guild_id).to_string();
 
     // Everything from loading the history to writing it back must be atomic
     // with respect to other messages in this session, or simultaneous builders
@@ -560,6 +560,10 @@ fn builders_of(
 /// the same revision index — and the first person's brick would vanish with no
 /// error anywhere. The lock is per session, so busy threads do not block each
 /// other.
+///
+/// Process-local, and so only a lock while the bot runs as a single process —
+/// which the design assumes. See *The bot runs as a single process* in
+/// `docs/ADR-003-LDraw-Rendering-And-Studio-Export.md`.
 static SESSION_LOCKS: std::sync::OnceLock<
     moka::future::Cache<String, Arc<tokio::sync::Mutex<()>>>,
 > = std::sync::OnceLock::new();
@@ -748,11 +752,7 @@ pub async fn handle_part_choice(
 ) -> anyhow::Result<()> {
     let guild_id = interaction.guild_id.unwrap_or_default().get();
     let cfg = app_ctx.config.commands_for(guild_id).build;
-    let locale = app_ctx
-        .config
-        .locale_for(guild_id)
-        .unwrap_or("en-US")
-        .to_string();
+    let locale = app_ctx.config.locale_or_default(guild_id).to_string();
 
     let serenity::all::ComponentInteractionDataKind::StringSelect { values } =
         &interaction.data.kind
@@ -855,11 +855,7 @@ pub async fn handle_build_button(
 ) -> anyhow::Result<()> {
     let guild_id = interaction.guild_id.unwrap_or_default().get();
     let cfg = app_ctx.config.commands_for(guild_id).build;
-    let locale = app_ctx
-        .config
-        .locale_for(guild_id)
-        .unwrap_or("en-US")
-        .to_string();
+    let locale = app_ctx.config.locale_or_default(guild_id).to_string();
 
     let Some(session) = db::build::get_active_session_by_channel(
         &app_ctx.db,

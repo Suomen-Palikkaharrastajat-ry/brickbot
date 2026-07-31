@@ -260,6 +260,21 @@ pub enum Meta {
     Finish,
 }
 
+impl Meta {
+    /// Whether this moves the history cursor or marks an entry skipped, and so
+    /// changes which operations the model is the sum of.
+    ///
+    /// The interpreter keeps a model alongside the log and updates it as
+    /// operations are applied; after one of these it has to be rebuilt instead.
+    #[must_use]
+    pub const fn rewrites_history(&self) -> bool {
+        matches!(
+            self,
+            Self::Undo | Self::UndoBy(_) | Self::Redo | Self::RevertTo(_)
+        )
+    }
+}
+
 /// One parsed sentence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
