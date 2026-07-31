@@ -6,7 +6,7 @@
 #![allow(clippy::doc_markdown)]
 
 use super::dsl::parser::ParseError;
-use super::lower::LowerError;
+use super::lower::{LowerError, Unsupported};
 use super::model::Model;
 use super::ops::{Effect, Op};
 use super::queries::QueryAnswer;
@@ -73,12 +73,15 @@ pub fn describe_error(error: &LowerError, locale: &str) -> String {
             query = query
         )
         .to_string(),
-        LowerError::Unsupported(what) => t!(
-            "command.build.error_unsupported",
-            locale = locale,
-            what = what
-        )
-        .to_string(),
+        // Each gap is its own sentence rather than a fragment slotted into one
+        // template: "a paint with no colour" does not decline into Finnish, and
+        // asking the builder for the missing piece is more useful anyway.
+        LowerError::Unsupported(what) => match what {
+            Unsupported::TooLarge { total, limit } => {
+                t!(what.key(), locale = locale, total = total, limit = limit).to_string()
+            }
+            _ => t!(what.key(), locale = locale).to_string(),
+        },
     }
 }
 
@@ -90,7 +93,7 @@ pub fn describe_parse_error(error: &ParseError, locale: &str) -> String {
             t!(
                 "command.build.error_parse_general",
                 locale = locale,
-                expected = &error.expected
+                expected = t!(error.expected.key(), locale = locale)
             )
             .to_string()
         },
@@ -99,7 +102,7 @@ pub fn describe_parse_error(error: &ParseError, locale: &str) -> String {
                 "command.build.error_parse",
                 locale = locale,
                 found = found,
-                expected = &error.expected
+                expected = t!(error.expected.key(), locale = locale)
             )
             .to_string()
         },
@@ -172,7 +175,10 @@ pub fn describe_answer(answer: &QueryAnswer, model: &Model, locale: &str) -> Str
             let list = parts
                 .iter()
                 .map(|(part, color, quantity)| {
-                    let color_name = colors::name_of(*color).unwrap_or("unknown");
+                    let color_name = colors::name_of(*color).map_or_else(
+                        || t!("common.unknown_colour", locale = locale).to_string(),
+                        str::to_string,
+                    );
                     format!("- {quantity}x {} ({color_name})", part.name)
                 })
                 .collect::<Vec<_>>()
@@ -213,6 +219,7 @@ pub fn help_text(locale: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::dsl::parser::Expectation;
     use crate::build::model::{PartKind, PartRef, PlacementId};
     use crate::build::units::IVec3;
 
@@ -331,7 +338,7 @@ mod tests {
                 query: "3x12 brick".to_string(),
                 kind: PartKind::Brick,
             },
-            LowerError::Unsupported("that".to_string()),
+            LowerError::Unsupported(Unsupported::That),
         ];
 
         for error in &errors {
@@ -346,6 +353,86 @@ mod tests {
     }
 
     #[test]
+    fn every_unsupported_gap_reads_as_a_sentence_in_both_locales() {
+        let gaps = [
+            Unsupported::That,
+            Unsupported::Verb,
+            Unsupported::MoveWithoutDirection,
+            Unsupported::PaintWithoutColour,
+            Unsupported::Replacement,
+            Unsupported::Selection,
+            Unsupported::Name,
+            Unsupported::TooLarge {
+                total: 900,
+                limit: 400,
+            },
+        ];
+
+        for gap in gaps {
+            for locale in ["en-US", "fi-FI"] {
+                let text = describe_error(&LowerError::Unsupported(gap), locale);
+                assert!(!text.is_empty(), "{gap:?} has no {locale} text");
+                assert!(!text.contains("%{"), "unsubstituted: {text}");
+                // A missing key falls through as the key itself.
+                assert!(!text.contains("command.build."), "unresolved key: {text}");
+            }
+        }
+
+        let too_large = describe_error(
+            &LowerError::Unsupported(Unsupported::TooLarge {
+                total: 900,
+                limit: 400,
+            }),
+            "en-US",
+        );
+        assert!(too_large.contains("900") && too_large.contains("400"));
+    }
+
+    #[test]
+    fn every_expectation_is_named_in_both_locales() {
+        let expectations = [
+            Expectation::RevisionNumber,
+            Expectation::SomethingToFind,
+            Expectation::SomethingToShow,
+            Expectation::Name,
+            Expectation::SomethingToBuild,
+            Expectation::PartToAdd,
+            Expectation::ColourToPaintWith,
+            Expectation::SomethingToReplace,
+            Expectation::ReplacementPartOrColour,
+            Expectation::SomethingToSelect,
+            Expectation::GroupName,
+            Expectation::RightAngle,
+        ];
+
+        for expected in expectations {
+            for locale in ["en-US", "fi-FI"] {
+                let error = ParseError {
+                    expected,
+                    found: Some("the".to_string()),
+                    sentence: "Add the".to_string(),
+                };
+                let text = describe_parse_error(&error, locale);
+                assert!(!text.is_empty(), "{expected:?} has no {locale} text");
+                assert!(!text.contains("%{"), "unsubstituted: {text}");
+                assert!(!text.contains("command.build."), "unresolved key: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_parse_error_is_translated_rather_than_half_english() {
+        let error = ParseError {
+            expected: Expectation::PartToAdd,
+            found: Some("the".to_string()),
+            sentence: "Add the".to_string(),
+        };
+        let finnish = describe_parse_error(&error, "fi-FI");
+        assert!(finnish.contains("lisättävää osaa"), "got: {finnish}");
+        assert!(!finnish.contains("a part to add"), "got: {finnish}");
+    }
+
+    #[test]
     fn an_error_quotes_the_offending_word() {
         let text = describe_error(&LowerError::UnknownName("gatehouse".to_string()), "en-US");
         assert!(text.contains("gatehouse"), "got: {text}");
@@ -354,7 +441,7 @@ mod tests {
     #[test]
     fn a_parse_error_names_what_was_expected() {
         let error = ParseError {
-            expected: "a part to add".to_string(),
+            expected: Expectation::PartToAdd,
             found: Some("the".to_string()),
             sentence: "Add the".to_string(),
         };

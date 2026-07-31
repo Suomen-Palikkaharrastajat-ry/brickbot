@@ -4,6 +4,7 @@ common:
   no: "Ei"
   na: "N/A"
   default_bot_name: "Palikkaharrastaja"
+  unknown_colour: "tuntematon"
 
 workflow:
   set_search:
@@ -213,6 +214,7 @@ command:
     topic_resolved: "Merkitään aihe ratkaistuksi..."
   build:
     name: "rakenna"
+    default_thread_name: "Rakennelma"
     desc: "Aloita yhteinen LEGO-rakennusprojekti ketjussa"
     name_arg_name: "nimi"
     name_desc: "Mallin nimi (esim. 'Linna')"
@@ -268,9 +270,32 @@ command:
     error_nothing: "Mallissa ei ole vielä mitään."
     error_unknown_structure: "En osaa rakentaa kohdetta %{name}."
     error_needs_lookup: "En tunnista osaa '%{query}'. Kokeile osanumeroa tai yleistä kokoa kuten 2x4."
-    error_unsupported: "En osaa vielä tehdä toimintoa %{what}."
     error_parse: "Pääsin kohtaan '%{found}' — odotin %{expected}."
     error_parse_general: "Odotin %{expected}."
+    # Sijoitetaan yllä oleviin error_parse-viesteihin, siksi partitiivissa.
+    expected:
+      revision_number: "versionumeroa"
+      something_to_find: "jotain etsittävää, esimerkiksi 'collisions'"
+      something_to_show: "jotain näytettävää, esimerkiksi 'parts'"
+      name: "nimeä"
+      something_to_build: "jotain rakennettavaa"
+      part_to_add: "lisättävää osaa"
+      colour_to_paint_with: "väriä, jolla maalataan"
+      something_to_replace: "jotain korvattavaa"
+      replacement_part_or_colour: "korvaavaa osaa tai väriä"
+      something_to_select: "jotain valittavaa"
+      group_name: "ryhmän nimeä"
+      right_angle: "90 asteen monikertaa"
+    # Näytetään, kun lause ymmärrettiin mutta sitä ei voitu toteuttaa.
+    unsupported:
+      that: "En osaa tehdä tuota vielä."
+      verb: "En osaa vielä tehdä tuota."
+      move_without_direction: "Mihin suuntaan siirrän sitä?"
+      paint_without_colour: "Millä värillä maalaan sen?"
+      replacement: "Millä korvaan sen?"
+      selection: "En osaa valita tuota vielä."
+      name: "Minkä nimen annan sille?"
+      too_large: "Siitä tulisi %{total} osaa, ja pystyn asettamaan kerralla enintään %{limit}. Kokeile rakentaa se pienemmissä osissa."
 
 errors:
   unauthorized: "Sinulla ei ole oikeutta suorittaa tätä toimintoa."

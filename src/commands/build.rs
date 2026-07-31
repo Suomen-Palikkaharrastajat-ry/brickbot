@@ -121,10 +121,10 @@ pub fn finished_message(model: &Model, locale: &str) -> String {
 /// Discord caps channel names at 100 characters; an empty name falls back to a
 /// generic one rather than producing an unnamed thread.
 #[must_use]
-pub fn thread_name(model_name: &str) -> String {
+pub fn thread_name(model_name: &str, locale: &str) -> String {
     let trimmed = model_name.trim();
     if trimmed.is_empty() {
-        return "Build".to_string();
+        return t!("command.build.default_thread_name", locale = locale).to_string();
     }
     truncate(trimmed, 100)
 }
@@ -253,10 +253,11 @@ mod tests {
 
     #[test]
     fn thread_names_are_trimmed_and_never_empty() {
-        assert_eq!(thread_name("Castle"), "Castle");
-        assert_eq!(thread_name("  Castle  "), "Castle");
-        assert_eq!(thread_name(""), "Build");
-        assert_eq!(thread_name("   "), "Build");
-        assert!(thread_name(&"x".repeat(500)).chars().count() <= 100);
+        assert_eq!(thread_name("Castle", "en-US"), "Castle");
+        assert_eq!(thread_name("  Castle  ", "en-US"), "Castle");
+        assert_eq!(thread_name("", "en-US"), "Build");
+        assert_eq!(thread_name("   ", "en-US"), "Build");
+        assert_eq!(thread_name("", "fi-FI"), "Rakennelma");
+        assert!(thread_name(&"x".repeat(500), "en-US").chars().count() <= 100);
     }
 }

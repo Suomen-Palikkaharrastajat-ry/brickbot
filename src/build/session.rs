@@ -150,7 +150,7 @@ pub async fn handle_build_command(
         .create_thread_from_message(
             &ctx.http,
             anchor.id,
-            CreateThread::new(build_cmd::thread_name(&model_name))
+            CreateThread::new(build_cmd::thread_name(&model_name, &locale))
                 .auto_archive_duration(serenity::all::AutoArchiveDuration::OneDay),
         )
         .await?;
@@ -212,6 +212,13 @@ pub async fn handle_thread_message(
     let Some(session) = db::build::get_active_session_by_channel(pool, &channel_id).await? else {
         return Ok(false);
     };
+
+    // Most messages in a build thread are conversation, and parsing needs no
+    // model, so rule those out before taking the session lock and loading the
+    // history behind it. The message still belonged to the session.
+    if dispatch::is_ordinary_chat(&msg.content) {
+        return Ok(true);
+    }
 
     let guild_id = msg.guild_id.unwrap_or_default().get();
     let cfg = config.commands_for(guild_id).build;

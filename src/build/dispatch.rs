@@ -156,6 +156,18 @@ impl Outcome {
     }
 }
 
+/// Whether a message contains anything the interpreter would act on.
+///
+/// Parsing needs no model, so this answers the question without loading the
+/// session history — which is worth doing, because ordinary conversation is
+/// most of what a build thread carries.
+#[must_use]
+pub fn is_ordinary_chat(text: &str) -> bool {
+    parse_message(text)
+        .iter()
+        .all(|sentence| matches!(sentence, SentenceOutcome::Ignored))
+}
+
 /// Interprets one chat message against the session's history.
 ///
 /// Sentences are processed in order. A failure stops the rest of the message
@@ -972,5 +984,19 @@ mod tests {
         assert_eq!(nth_sentence(text, 0), "Add a brick");
         assert_eq!(nth_sentence(text, 1), "Add a 3x12 brick");
         assert_eq!(nth_sentence(text, 9), text.trim());
+    }
+    #[test]
+    fn ordinary_chat_is_recognised_without_a_model() {
+        for chat in ["how's everyone doing?", "that looks great", "brb"] {
+            assert!(is_ordinary_chat(chat), "should be chat: {chat}");
+        }
+
+        for command in [
+            "Add a red 2x4 brick at origin.",
+            "Undo.",
+            "How tall is the tower?",
+        ] {
+            assert!(!is_ordinary_chat(command), "should be a command: {command}");
+        }
     }
 }

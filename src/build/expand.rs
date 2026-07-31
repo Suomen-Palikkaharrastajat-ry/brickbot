@@ -12,8 +12,8 @@
 use super::dsl::ast::{Command, ExtentAxis, ObjectExpr, Ref, Structure};
 use super::dsl::lexer::Verb;
 use super::lower::{
-    LowerError, MAX_PLACEMENTS_PER_COMMAND, extent_count, resolve_ref, structure_group,
-    structure_part,
+    LowerError, MAX_PLACEMENTS_PER_COMMAND, Unsupported, extent_count, resolve_ref,
+    structure_group, structure_part,
 };
 use super::model::{Model, PartRef, Placement};
 use super::ops::{Op, Placed};
@@ -49,11 +49,12 @@ fn run_direction(command: &Command) -> Direction {
 
 /// Caps a placement count and reports when the cap bites, so the caller can
 /// tell the builder rather than silently building something smaller.
-fn checked_total(total: u32) -> Result<u32, LowerError> {
+const fn checked_total(total: u32) -> Result<u32, LowerError> {
     if total > MAX_PLACEMENTS_PER_COMMAND {
-        return Err(LowerError::Unsupported(format!(
-            "a structure that large ({total} parts, the limit is {MAX_PLACEMENTS_PER_COMMAND})"
-        )));
+        return Err(LowerError::Unsupported(Unsupported::TooLarge {
+            total,
+            limit: MAX_PLACEMENTS_PER_COMMAND,
+        }));
     }
     Ok(total)
 }
@@ -265,7 +266,7 @@ pub fn expand_copy(model: &Model, command: &Command) -> Result<Vec<Op>, LowerErr
     let reference = match &command.object {
         ObjectExpr::Reference(reference) => reference.clone(),
         ObjectExpr::None => Ref::Last,
-        _ => return Err(LowerError::Unsupported("that".to_string())),
+        _ => return Err(LowerError::Unsupported(Unsupported::That)),
     };
     let targets = resolve_ref(model, &reference)?;
     let sources: Vec<&Placement> = targets.iter().filter_map(|id| model.get(*id)).collect();
@@ -349,7 +350,7 @@ pub fn expand_copy(model: &Model, command: &Command) -> Result<Vec<Op>, LowerErr
             }])
         }
 
-        other => Err(LowerError::Unsupported(format!("{other:?}").to_lowercase())),
+        _ => Err(LowerError::Unsupported(Unsupported::Verb)),
     }
 }
 

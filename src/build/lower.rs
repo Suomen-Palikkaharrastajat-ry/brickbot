@@ -32,8 +32,49 @@ pub enum LowerError {
     UnknownStructure(String),
     /// The command would need a part we have to look up first.
     NeedsPartLookup { query: String, kind: PartKind },
-    /// The command is understood but not implemented yet.
-    Unsupported(String),
+    /// The command is understood but cannot be carried out as written.
+    Unsupported(Unsupported),
+}
+
+/// What exactly the interpreter could not do.
+///
+/// A closed set rather than free text: each variant maps to one sentence in
+/// each locale bundle, and `report.rs` is the only place that renders them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unsupported {
+    /// The verb was understood but the thing it was pointed at was not.
+    That,
+    /// The verb itself is not implemented yet.
+    Verb,
+    /// `Move` with nothing saying which way.
+    MoveWithoutDirection,
+    /// `Paint` with no colour.
+    PaintWithoutColour,
+    /// `Replace` with nothing to replace it with.
+    Replacement,
+    /// `Select` pointed at something that is not selectable.
+    Selection,
+    /// `Group` or `Name` with no name given.
+    Name,
+    /// The structure asked for would exceed the per-command placement cap.
+    TooLarge { total: u32, limit: u32 },
+}
+
+impl Unsupported {
+    /// Localization key of the sentence describing this gap.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::That => "command.build.unsupported.that",
+            Self::Verb => "command.build.unsupported.verb",
+            Self::MoveWithoutDirection => "command.build.unsupported.move_without_direction",
+            Self::PaintWithoutColour => "command.build.unsupported.paint_without_colour",
+            Self::Replacement => "command.build.unsupported.replacement",
+            Self::Selection => "command.build.unsupported.selection",
+            Self::Name => "command.build.unsupported.name",
+            Self::TooLarge { .. } => "command.build.unsupported.too_large",
+        }
+    }
 }
 
 impl std::fmt::Display for LowerError {
@@ -46,7 +87,7 @@ impl std::fmt::Display for LowerError {
             Self::NothingToActOn => write!(f, "there is nothing in the model yet"),
             Self::UnknownStructure(name) => write!(f, "I don't know how to build a {name}"),
             Self::NeedsPartLookup { query, .. } => write!(f, "I need to look up '{query}'"),
-            Self::Unsupported(what) => write!(f, "I can't do {what} yet"),
+            Self::Unsupported(what) => write!(f, "I can't do {what:?} yet"),
         }
     }
 }
@@ -277,7 +318,7 @@ pub fn lower_command_with(
     match command.verb {
         Verb::Add | Verb::Attach => {
             let ObjectExpr::Part(spec) = &command.object else {
-                return Err(LowerError::Unsupported("that".to_string()));
+                return Err(LowerError::Unsupported(Unsupported::That));
             };
             let part = resolve_part(spec, chosen)?;
             let pos = resolve_location(model, command.location.as_ref(), &part)?;
@@ -308,9 +349,7 @@ pub fn lower_command_with(
             let targets = targets_of(model, command)?;
             let offset = offset_of(command);
             if offset == IVec3::ZERO {
-                return Err(LowerError::Unsupported(
-                    "a move with no direction".to_string(),
-                ));
+                return Err(LowerError::Unsupported(Unsupported::MoveWithoutDirection));
             }
             Ok(vec![Op::Move { targets, offset }])
         }
@@ -323,7 +362,7 @@ pub fn lower_command_with(
             let targets = targets_of(model, command)?;
             let color = command
                 .target_color
-                .ok_or_else(|| LowerError::Unsupported("a paint with no colour".to_string()))?;
+                .ok_or(LowerError::Unsupported(Unsupported::PaintWithoutColour))?;
             Ok(vec![Op::Paint { targets, color }])
         }
 
@@ -354,14 +393,14 @@ pub fn lower_command_with(
             let spec = command
                 .target_part
                 .as_ref()
-                .ok_or_else(|| LowerError::Unsupported("a replacement".to_string()))?;
+                .ok_or(LowerError::Unsupported(Unsupported::Replacement))?;
             let part = resolve_part(spec, chosen)?;
             Ok(vec![Op::Replace { targets, part }])
         }
 
         Verb::Select => {
             let ObjectExpr::Reference(reference) = &command.object else {
-                return Err(LowerError::Unsupported("that selection".to_string()));
+                return Err(LowerError::Unsupported(Unsupported::Selection));
             };
             let predicate = match reference {
                 Ref::AllMatching(spec) | Ref::LastOfKind(spec) => predicate_of(spec),
@@ -383,7 +422,7 @@ pub fn lower_command_with(
                 .target_part
                 .as_ref()
                 .and_then(|s| s.part_num.clone())
-                .ok_or_else(|| LowerError::Unsupported("a name".to_string()))?;
+                .ok_or(LowerError::Unsupported(Unsupported::Name))?;
 
             // "Name this point gate." records a location rather than a group.
             let naming_point = command.modifiers.contains(&Modifier::Quantity(0));
@@ -402,14 +441,14 @@ pub fn lower_command_with(
 
         Verb::Build | Verb::Fill => {
             let ObjectExpr::Structure(structure) = &command.object else {
-                return Err(LowerError::Unsupported("that".to_string()));
+                return Err(LowerError::Unsupported(Unsupported::That));
             };
             super::expand::expand(model, command, structure, chosen)
         }
 
         Verb::Duplicate | Verb::Mirror | Verb::Repeat => super::expand::expand_copy(model, command),
 
-        other => Err(LowerError::Unsupported(format!("{other:?}").to_lowercase())),
+        _ => Err(LowerError::Unsupported(Unsupported::Verb)),
     }
 }
 
@@ -422,7 +461,7 @@ fn targets_of(model: &Model, command: &Command) -> Result<Vec<PlacementId>, Lowe
     match &command.object {
         ObjectExpr::Reference(reference) => resolve_ref(model, reference),
         ObjectExpr::None => resolve_ref(model, &Ref::Last),
-        _ => Err(LowerError::Unsupported("that".to_string())),
+        _ => Err(LowerError::Unsupported(Unsupported::That)),
     }
 }
 

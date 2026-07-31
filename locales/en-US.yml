@@ -4,6 +4,7 @@ common:
   no: "No"
   na: "N/A"
   default_bot_name: "AFOL"
+  unknown_colour: "unknown"
 
 workflow:
   set_search:
@@ -213,6 +214,7 @@ command:
     topic_resolved: "Marking topic as resolved..."
   build:
     name: "build"
+    default_thread_name: "Build"
     desc: "Start a collaborative LEGO build in a thread"
     name_arg_name: "name"
     name_desc: "What to call the model (e.g. 'Castle')"
@@ -268,9 +270,32 @@ command:
     error_nothing: "There's nothing in the model yet."
     error_unknown_structure: "I don't know how to build a %{name}."
     error_needs_lookup: "I don't recognise '%{query}'. Try a part number, or a common size like 2x4."
-    error_unsupported: "I can't do %{what} yet."
     error_parse: "I got as far as '%{found}' — I expected %{expected}."
     error_parse_general: "I expected %{expected}."
+    # Phrases slotted into error_parse / error_parse_general above.
+    expected:
+      revision_number: "a revision number"
+      something_to_find: "something to find, such as 'collisions'"
+      something_to_show: "something to show, such as 'parts'"
+      name: "a name"
+      something_to_build: "something to build"
+      part_to_add: "a part to add"
+      colour_to_paint_with: "a colour to paint with"
+      something_to_replace: "something to replace"
+      replacement_part_or_colour: "a replacement part or colour"
+      something_to_select: "something to select"
+      group_name: "a group name"
+      right_angle: "a multiple of 90 degrees"
+    # Sentences shown when a sentence parsed but could not be carried out.
+    unsupported:
+      that: "I can't do that yet."
+      verb: "I don't know how to do that yet."
+      move_without_direction: "Which way should I move it?"
+      paint_without_colour: "Which colour should I paint it?"
+      replacement: "What should I replace it with?"
+      selection: "I can't select that yet."
+      name: "What should I call it?"
+      too_large: "That would be %{total} parts and I can place at most %{limit} at a time. Try building it in smaller pieces."
 
 errors:
   unauthorized: "You are not authorized to perform this action."

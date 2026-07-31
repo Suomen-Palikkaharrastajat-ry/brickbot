@@ -21,11 +21,53 @@ use super::lexer::{Keyword, Sentence, Token, Verb};
 use crate::build::model::PartKind;
 use crate::build::units::{Direction, IVec3, Unit};
 
+/// What the parser was looking for when it gave up.
+///
+/// A closed set rather than free text, so the phrasing lives in the locale
+/// bundles with the rest of the user-facing strings and `report.rs` stays the
+/// only place that turns one into a sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expectation {
+    RevisionNumber,
+    SomethingToFind,
+    SomethingToShow,
+    Name,
+    SomethingToBuild,
+    PartToAdd,
+    ColourToPaintWith,
+    SomethingToReplace,
+    ReplacementPartOrColour,
+    SomethingToSelect,
+    GroupName,
+    RightAngle,
+}
+
+impl Expectation {
+    /// Localization key of the phrase describing what was expected.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::RevisionNumber => "command.build.expected.revision_number",
+            Self::SomethingToFind => "command.build.expected.something_to_find",
+            Self::SomethingToShow => "command.build.expected.something_to_show",
+            Self::Name => "command.build.expected.name",
+            Self::SomethingToBuild => "command.build.expected.something_to_build",
+            Self::PartToAdd => "command.build.expected.part_to_add",
+            Self::ColourToPaintWith => "command.build.expected.colour_to_paint_with",
+            Self::SomethingToReplace => "command.build.expected.something_to_replace",
+            Self::ReplacementPartOrColour => "command.build.expected.replacement_part_or_colour",
+            Self::SomethingToSelect => "command.build.expected.something_to_select",
+            Self::GroupName => "command.build.expected.group_name",
+            Self::RightAngle => "command.build.expected.right_angle",
+        }
+    }
+}
+
 /// Why a sentence that looked like a command could not be parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
     /// What the parser was looking for.
-    pub expected: String,
+    pub expected: Expectation,
     /// The word it stopped on, if any.
     pub found: Option<String>,
     /// The sentence as typed.
@@ -35,8 +77,8 @@ pub struct ParseError {
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.found {
-            Some(found) => write!(f, "expected {} but found '{}'", self.expected, found),
-            None => write!(f, "expected {}", self.expected),
+            Some(found) => write!(f, "expected {:?} but found '{found}'", self.expected),
+            None => write!(f, "expected {:?}", self.expected),
         }
     }
 }
@@ -161,9 +203,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn error(&self, expected: &str) -> ParseError {
+    fn error(&self, expected: Expectation) -> ParseError {
         ParseError {
-            expected: expected.to_string(),
+            expected,
             found: self.peek().map(|t| match t {
                 Token::Word(w) | Token::Quoted(w) => w.clone(),
                 Token::Number(n) => n.to_string(),
@@ -705,7 +747,7 @@ pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
                 Some(n) if n >= 0 => {
                     SentenceOutcome::Statement(Statement::Meta(Meta::RevertTo(n as u32)))
                 }
-                _ => SentenceOutcome::Error(parser.error("a revision number")),
+                _ => SentenceOutcome::Error(parser.error(Expectation::RevisionNumber)),
             }
         }
         Verb::Export => SentenceOutcome::Statement(Statement::Meta(Meta::Export)),
@@ -720,7 +762,7 @@ pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
             if parser.eat_word("collisions") {
                 return SentenceOutcome::Statement(Statement::Query(Query::FindCollisions));
             }
-            SentenceOutcome::Error(parser.error("something to find, such as 'collisions'"))
+            SentenceOutcome::Error(parser.error(Expectation::SomethingToFind))
         }
         Verb::Show => {
             if parser.eat_word("unsupported") {
@@ -732,7 +774,7 @@ pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
             if parser.eat_word("parts") || parser.eat_word("inventory") {
                 return SentenceOutcome::Statement(Statement::Query(Query::ListParts));
             }
-            SentenceOutcome::Error(parser.error("something to show, such as 'parts'"))
+            SentenceOutcome::Error(parser.error(Expectation::SomethingToShow))
         }
         Verb::Name => parse_name(&mut parser),
         _ => parse_command(&mut parser, verb),
@@ -836,7 +878,7 @@ fn parse_name(parser: &mut Parser<'_>) -> SentenceOutcome {
     parser.skip_filler();
     let name = match parser.next() {
         Some(Token::Word(w) | Token::Quoted(w)) => w.clone(),
-        _ => return SentenceOutcome::Error(parser.error("a name")),
+        _ => return SentenceOutcome::Error(parser.error(Expectation::Name)),
     };
 
     let mut command = Command {
@@ -873,7 +915,7 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
                     Structure::parse(w).unwrap_or_else(|| Structure::Unknown(w.clone()))
                 }
                 Some(Token::Keyword(Keyword::Steps)) => Structure::Stairs,
-                _ => return SentenceOutcome::Error(parser.error("something to build")),
+                _ => return SentenceOutcome::Error(parser.error(Expectation::SomethingToBuild)),
             };
             parser.pos += 1;
 
@@ -890,7 +932,7 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
         Verb::Add | Verb::Fill => {
             let spec = parser.part_spec();
             if spec.is_empty() {
-                return SentenceOutcome::Error(parser.error("a part to add"));
+                return SentenceOutcome::Error(parser.error(Expectation::PartToAdd));
             }
             ObjectExpr::Part(Box::new(spec))
         }
@@ -899,10 +941,10 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
             // "Paint all red bricks blue." Claim it before parsing the object,
             // or the part description would absorb it.
             let Some(color_index) = parser.last_color_index(parser.pos) else {
-                return SentenceOutcome::Error(parser.error("a colour to paint with"));
+                return SentenceOutcome::Error(parser.error(Expectation::ColourToPaintWith));
             };
             let Some(Token::Color(code)) = parser.tokens.get(color_index) else {
-                return SentenceOutcome::Error(parser.error("a colour to paint with"));
+                return SentenceOutcome::Error(parser.error(Expectation::ColourToPaintWith));
             };
             target_color = Some(*code);
 
@@ -916,7 +958,7 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
         }
         Verb::Replace => {
             let Some(reference) = parser.reference() else {
-                return SentenceOutcome::Error(parser.error("something to replace"));
+                return SentenceOutcome::Error(parser.error(Expectation::SomethingToReplace));
             };
             parser.eat_keyword(Keyword::With);
             parser.skip_filler();
@@ -927,7 +969,9 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
             } else {
                 let spec = parser.part_spec();
                 if spec.is_empty() {
-                    return SentenceOutcome::Error(parser.error("a replacement part or colour"));
+                    return SentenceOutcome::Error(
+                        parser.error(Expectation::ReplacementPartOrColour),
+                    );
                 }
                 target_part = Some(Box::new(spec));
             }
@@ -935,7 +979,7 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
         }
         Verb::Select => {
             let Some(reference) = parser.reference() else {
-                return SentenceOutcome::Error(parser.error("something to select"));
+                return SentenceOutcome::Error(parser.error(Expectation::SomethingToSelect));
             };
             ObjectExpr::Reference(reference)
         }
@@ -951,7 +995,7 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
                         ..PartSpec::default()
                     }));
                 }
-                _ => return SentenceOutcome::Error(parser.error("a group name")),
+                _ => return SentenceOutcome::Error(parser.error(Expectation::GroupName)),
             }
             ObjectExpr::Reference(reference)
         }
@@ -976,7 +1020,7 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
 
     if let Some(angle) = parser.bad_angle {
         return SentenceOutcome::Error(ParseError {
-            expected: "a multiple of 90 degrees".to_string(),
+            expected: Expectation::RightAngle,
             found: Some(format!("{angle} degrees")),
             sentence: parser.sentence.to_string(),
         });
@@ -1158,7 +1202,7 @@ mod tests {
             let SentenceOutcome::Error(error) = parse(sentence) else {
                 panic!("{sentence:?} should be rejected, got {:?}", parse(sentence));
             };
-            assert!(error.expected.contains("90"));
+            assert_eq!(error.expected, Expectation::RightAngle);
         }
         // The ones that do land on a quarter turn still work.
         assert!(

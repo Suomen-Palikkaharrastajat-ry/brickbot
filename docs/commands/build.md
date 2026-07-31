@@ -54,6 +54,19 @@ The language it understands is a controlled natural language — English-like, q
    - The `[Export .io]` button, or the sentence `Export.`, produces a BrickLink Studio `.io` file.
    - The exported file contains only part *references*, never part geometry.
 
+9. **Localization**:
+   - Everything the bot *says* follows the guild's `locale`: the command name and argument, the
+     intro embed, the buttons, every confirmation, answer and error. `src/build/report.rs` is the
+     only place that calls `rust_i18n::t!` for session output, so the whole vocabulary lives in
+     `command.build.*` in both locale bundles.
+   - Parse failures and unsupported commands are localized down to the fragment: `Expectation`
+     (`src/build/dsl/parser.rs`) and `Unsupported` (`src/build/lower.rs`) are closed sets whose
+     phrasing lives under `command.build.expected.*` and `command.build.unsupported.*` rather than
+     as English literals in the code.
+   - **The language itself is not translated.** BrickTalk verbs stay English in every locale, so
+     the help text and examples quote English sentences even in Finnish. Words echoed back from
+     what the builder typed — `'that'`, a group name, a part query — appear as typed.
+
 ## Configuration
 The command can be enabled or disabled globally or on a per-guild basis using the `config.toml` file. It is **off by default**, because it opens threads and listens to the conversation in them:
 
