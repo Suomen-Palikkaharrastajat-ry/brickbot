@@ -258,7 +258,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                             if let Some(zulip_cfg) = &state.config.zulip {
                                 if let Some(stream) = msg.display_recipient.as_str() {
                                     let err_msg = rust_i18n::t!(
-                                        "command.zulip.push_failed",
+                                        kind.push_failed_key(),
                                         locale = locale.as_str(),
                                         error = e.to_string()
                                     );

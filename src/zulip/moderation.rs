@@ -140,6 +140,15 @@ impl ModerationKind {
         }
     }
 
+    /// Zulip error message sent when pushing to `PocketBase` fails.
+    #[must_use]
+    pub const fn push_failed_key(self) -> &'static str {
+        match self {
+            Self::Event => "command.zulip.push_failed",
+            Self::Location => "command.zulip.push_failed_location",
+        }
+    }
+
     /// Whether the bot should @-mention the submitter when a DM cannot be delivered.
     #[must_use]
     pub const fn enable_fallback_mention(self, commands: &CommandsConfig) -> bool {
