@@ -750,6 +750,7 @@ pub async fn handle_wizard_locations_edit(
         serde_json::json!({
             "uid": selected_uid,
             "tags": loc.tags.clone().unwrap_or_default(),
+            "point": loc.point,
         }),
         15,
     )
@@ -853,6 +854,10 @@ pub async fn handle_modal_edit_location(
     let values = match validate_location_form(&raw, locale.as_str()) {
         Ok(v) => v,
         Err(errors) => {
+            let point_val = session_payload
+                .get("point")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let draft_payload = serde_json::json!({
                 "title": raw.title,
                 "location": raw.location,
@@ -862,6 +867,7 @@ pub async fn handle_modal_edit_location(
                 "tags": tags,
                 "is_edit": true,
                 "uid": uid,
+                "point": point_val,
             });
             return respond_with_validation_errors(
                 ctx,
@@ -875,8 +881,13 @@ pub async fn handle_modal_edit_location(
         }
     };
 
-    // `point` and `state` are intentionally absent: PocketBase PATCHes partially, so the
-    // existing coordinates and publication state survive an edit.
+    // `state` is intentionally absent: PocketBase PATCHes partially, so the
+    // existing publication state survives an edit.
+    let point_val = session_payload
+        .get("point")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
     let payload_json = serde_json::json!({
         "uid": uid,
         "title": values.title,
@@ -885,6 +896,7 @@ pub async fn handle_modal_edit_location(
         "url": values.url,
         "tags": sanitize_tags(&tags),
         "description": values.description,
+        "point": point_val,
     });
 
     let yaml_str = generate_location_display_yaml(&payload_json);
@@ -1061,6 +1073,10 @@ pub async fn handle_wizard_retry_location_submit(
         .get("image_draft_id")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let point_val = payload
+        .get("point")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
     let session_id = crate::db::create_workflow_session(
         &app_ctx.db,
@@ -1076,6 +1092,7 @@ pub async fn handle_wizard_retry_location_submit(
             "draft_id": if is_edit { None } else { image_draft_id },
             "uid": if is_edit { Some(uid) } else { None },
             "tags": tags,
+            "point": point_val,
         }),
         15,
     )
