@@ -1,8 +1,5 @@
 /target/
-/data/bot.db
-/data/bot.db-journal
-/data/bot.db-shm
-/data/bot.db-wal
+/data/
 /.env
 /config.toml
 /result
@@ -21,6 +18,7 @@ check.json
 lcov.info
 scratch.rs
 test_moka.rs
+src/bin/
 target_tmp/
 *.log
 TODO*.md
