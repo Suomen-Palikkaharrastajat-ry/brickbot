@@ -35,6 +35,23 @@
 # library_url = "https://library.ldraw.org/library/updates/complete.zip"
 # max_files = 200
 
+# Sticky cache of part lookups, in its own SQLite database.
+#
+# Discord fires autocomplete on every keystroke, so the network can never be on
+# that path. Instead every lookup the bot makes is kept, building a local index
+# that answers instantly and survives restarts — the more the guild uses
+# /part, the better its suggestions get.
+#
+# Everything in it is derived and disposable: deleting the file is a clean
+# rebuild, which is exactly why it is not in bot.db.
+# [parts_cache]
+# enabled = true
+# path = "sqlite:data/cache.db"
+# search_ttl_days = 30      # a search that found something
+# miss_ttl_mins = 60        # a search that found nothing
+# warm_concurrency = 2
+# warm_timeout_secs = 5
+
 # [interactions]
 # set = true
 # part = true

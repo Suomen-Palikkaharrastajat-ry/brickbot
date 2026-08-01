@@ -93,6 +93,10 @@ pub struct AppContext {
     pub config: std::sync::Arc<crate::config::Config>,
     pub http: std::sync::Arc<dyn crate::http::HttpProvider>,
     pub sync_mutex: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// The sticky part cache, absent when it could not be opened or was
+    /// switched off. Callers degrade to the built-in catalogue rather than
+    /// failing.
+    pub parts_cache: Option<std::sync::Arc<crate::parts_cache::PartCache>>,
 }
 
 impl AppContext {
@@ -108,11 +112,18 @@ impl AppContext {
             .get::<crate::SyncMutexData>()
             .expect("SyncMutexData missing")
             .clone();
+        // Absent rather than fatal: a bot with no cache still works, it just
+        // forgets what it has looked up.
+        let parts_cache = data
+            .get::<crate::PartsCacheData>()
+            .cloned()
+            .unwrap_or_default();
         Self {
             db,
             config,
             http,
             sync_mutex,
+            parts_cache,
         }
     }
 }
@@ -168,6 +179,48 @@ pub async fn handle_component_interaction(
         // The /build render buttons all carry the session id as their argument.
         "build_export" | "build_undo" | "build_finish" => {
             crate::build::session::handle_build_button(
+                ctx,
+                &app_ctx,
+                interaction,
+                base_id,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
+        // Opens the private drawing form, prefilled with the model.
+        "build_draw" => {
+            crate::build::session::handle_draw_button(
+                ctx,
+                &app_ctx,
+                interaction,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
+        // The private preview's own buttons carry the draft id, not the
+        // session id: a draft belongs to one person, the session to the thread.
+        "build_draft_edit"
+        | "build_draft_apply"
+        | "build_draft_discard"
+        | "build_draft_repreview" => {
+            crate::build::session::handle_draft_button(
+                ctx,
+                &app_ctx,
+                interaction,
+                base_id,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
+        // The two-step legend picker. Its argument carries more than a draft
+        // id — a page, and the colour already chosen — so each handler splits
+        // what the router leaves after the first colon.
+        "build_insert"
+        | "build_insert_colour"
+        | "build_insert_part"
+        | "build_insert_colour_pick"
+        | "build_insert_part_pick" => {
+            crate::build::session::handle_insert(
                 ctx,
                 &app_ctx,
                 interaction,
@@ -292,6 +345,8 @@ pub async fn handle_modal_submit(
         locations::handle_modal_submit_location(ctx, &app_ctx, interaction).await?;
     } else if let Some(sid) = custom_id.strip_prefix("modal_edit_location_") {
         locations::handle_modal_edit_location(ctx, &app_ctx, interaction, sid).await?;
+    } else if let Some(draft_id) = custom_id.strip_prefix("build_draw_modal:") {
+        crate::build::session::handle_draw_modal(ctx, &app_ctx, interaction, draft_id).await?;
     }
 
     Ok(())

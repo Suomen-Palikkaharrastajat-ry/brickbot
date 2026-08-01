@@ -319,6 +319,7 @@ pub async fn build_part_response_data(
     crate::commands::part::part_interaction(
         ctx,
         app_ctx.http.as_ref(),
+        app_ctx.parts_cache.as_deref(),
         query,
         locale,
         &default_services,
@@ -812,6 +813,7 @@ pub async fn handle_part_search_show(
         crate::commands::part::part_interaction(
             ctx,
             app_ctx.http.as_ref(),
+            app_ctx.parts_cache.as_deref(),
             query,
             &locale,
             &default_services,

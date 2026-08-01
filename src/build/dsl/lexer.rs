@@ -12,6 +12,7 @@
 
 #![allow(clippy::doc_markdown)]
 
+use super::block::{self, CodeBlock, Segment};
 use crate::build::model::PartKind;
 use crate::build::units::{Direction, Unit};
 use crate::ldraw::colors;
@@ -35,7 +36,7 @@ pub enum Verb {
     Undo,
     Redo,
     Revert,
-    Measure,
+    Queries,
     Count,
     Find,
     Show,
@@ -71,7 +72,7 @@ impl Verb {
             "undo" => Self::Undo,
             "redo" => Self::Redo,
             "revert" | "rewind" => Self::Revert,
-            "measure" => Self::Measure,
+            "query" | "queries" | "questions" => Self::Queries,
             "count" => Self::Count,
             "find" => Self::Find,
             "show" | "list" => Self::Show,
@@ -82,6 +83,42 @@ impl Verb {
             "repeat" => Self::Repeat,
             "fill" => Self::Fill,
             _ => return None,
+        })
+    }
+
+    /// Localization key for `Help <verb>.`'s per-topic syntax and examples.
+    ///
+    /// Synonyms resolve to their canonical verb's topic. `Queries` exists
+    /// to let `Help queries.` document read-only operations that aren't
+    /// tied to a single verb.
+    #[must_use]
+    pub const fn help_key(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Add | Self::Attach | Self::Fill => "command.build.help_topic.add",
+            Self::Move => "command.build.help_topic.move",
+            Self::Raise => "command.build.help_topic.raise",
+            Self::Lower => "command.build.help_topic.lower",
+            Self::Rotate => "command.build.help_topic.rotate",
+            Self::Remove => "command.build.help_topic.remove",
+            Self::Replace => "command.build.help_topic.replace",
+            Self::Paint => "command.build.help_topic.paint",
+            Self::Build => "command.build.help_topic.build",
+            Self::Duplicate | Self::Repeat => "command.build.help_topic.duplicate",
+            Self::Mirror => "command.build.help_topic.mirror",
+            Self::Select => "command.build.help_topic.select",
+            Self::Group => "command.build.help_topic.group",
+            Self::Name => "command.build.help_topic.name",
+            Self::Undo => "command.build.help_topic.undo",
+            Self::Redo => "command.build.help_topic.redo",
+            Self::Revert => "command.build.help_topic.revert",
+            Self::Count => "command.build.help_topic.count",
+            Self::Find => "command.build.help_topic.find",
+            Self::Show => "command.build.help_topic.show",
+            Self::Export => "command.build.help_topic.export",
+            Self::Render => "command.build.help_topic.render",
+            Self::Help => "command.build.help_topic.help",
+            Self::Finish => "command.build.help_topic.finish",
+            Self::Queries => "command.build.help_topic.queries",
         })
     }
 }
@@ -230,9 +267,31 @@ pub struct Sentence {
     pub text: String,
     /// True when the sentence began with a comment marker such as `Note:`.
     pub is_comment: bool,
+    /// The fenced block that followed this sentence, if any.
+    ///
+    /// A drawing is not a sentence — it is an argument to one, the way
+    /// `10 studs long` is. Keeping it here rather than in the token stream is
+    /// what lets the grid grammar reuse the ordinary sentence machinery for
+    /// its header, locations included.
+    pub block: Option<CodeBlock>,
 }
 
 impl Sentence {
+    /// The sentence as it must be re-sent to mean the same thing again.
+    ///
+    /// A sentence that paused on an unknown part is parked verbatim and
+    /// replayed once the builder has picked one, so a drawing has to survive
+    /// the round trip — without its fence, `Build from top:` means nothing.
+    /// The fence is re-emitted canonically, which re-lexes to exactly this
+    /// sentence again.
+    #[must_use]
+    pub fn replay_text(&self) -> String {
+        self.block.as_ref().map_or_else(
+            || self.text.clone(),
+            |block| format!("{}\n```\n{}\n```", self.text, block.lines.join("\n")),
+        )
+    }
+
     /// True when the sentence opens with something the grammar could act on.
     ///
     /// This is the gate that keeps ordinary conversation out of the parser: a
@@ -320,13 +379,29 @@ pub fn strip_discord_noise(text: &str) -> String {
         }
     }
 
-    // Drop anything that looks like a URL, line by line. Filtering the whole
-    // string at once would rejoin it with spaces and lose every newline —
-    // which are sentence terminators, so a message typed as several lines
-    // would collapse into one and everything after the first line would be
-    // silently swallowed by the modifier parser.
+    // Drop anything that looks like a URL, and anything that is a Discord
+    // block-quote, line by line. Filtering the whole string at once would
+    // rejoin it with spaces and lose every newline — which are sentence
+    // terminators, so a message typed as several lines would collapse into
+    // one and everything after the first line would be silently swallowed by
+    // the modifier parser.
+    //
+    // A quoted line is someone else's words, not the author's — most often
+    // the bot's own instructions, quoted back while asking "did this work?".
+    // Without this, a `> Add a red brick.` line is parsed exactly like a real
+    // command and quietly repeats whatever was quoted.
+    let mut in_block_quote = false;
     out.split('\n')
         .map(|line| {
+            let trimmed_start = line.trim_start();
+            if in_block_quote || is_quote_line(trimmed_start) {
+                // `>>>` turns everything from here to the end of the message
+                // into a quote, unlike a single `>` line.
+                if trimmed_start.starts_with(">>>") {
+                    in_block_quote = true;
+                }
+                return String::new();
+            }
             line.split_whitespace()
                 .filter(|w| !w.starts_with("http://") && !w.starts_with("https://"))
                 .collect::<Vec<_>>()
@@ -334,6 +409,14 @@ pub fn strip_discord_noise(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Whether a line is a Discord block-quote (`> …` or `>>> …`), rather than a
+/// stray `>` inside ordinary text.
+fn is_quote_line(trimmed_start: &str) -> bool {
+    trimmed_start.strip_prefix('>').is_some_and(|rest| {
+        rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('>')
+    })
 }
 
 /// Splits text into sentences on terminators and newlines.
@@ -430,6 +513,7 @@ pub fn tokenize_sentence(text: &str) -> Sentence {
         return Sentence {
             tokens: Vec::new(),
             text: trimmed.to_string(),
+            block: None,
             is_comment: true,
         };
     }
@@ -475,6 +559,7 @@ pub fn tokenize_sentence(text: &str) -> Sentence {
     Sentence {
         tokens,
         text: trimmed.to_string(),
+        block: None,
         is_comment: false,
     }
 }
@@ -515,13 +600,37 @@ fn classify(word: &str) -> Token {
 }
 
 /// Tokenizes a whole chat message into sentences.
+///
+/// Fenced blocks are lifted out first and attached to the sentence in front of
+/// them, so their characters never reach [`strip_discord_noise`] or
+/// [`split_sentences`] — both of which would destroy a drawing. Everything
+/// else is unchanged: a fence never produces a sentence of its own, so sentence
+/// indices mean exactly what they always did.
 #[must_use]
 pub fn tokenize(text: &str) -> Vec<Sentence> {
-    let cleaned = strip_discord_noise(text);
-    split_sentences(&cleaned)
-        .iter()
-        .map(|s| tokenize_sentence(s))
-        .collect()
+    let mut sentences: Vec<Sentence> = Vec::new();
+
+    for segment in block::split_code_fences(text) {
+        match segment {
+            Segment::Text(text) => sentences.extend(
+                split_sentences(&strip_discord_noise(&text))
+                    .iter()
+                    .map(|s| tokenize_sentence(s)),
+            ),
+            // A block belongs to the sentence just before it. One with nothing
+            // in front of it is a pasted code sample, not a command, and one
+            // sentence carries at most one drawing.
+            Segment::Fence(block) => {
+                if let Some(last) = sentences.last_mut() {
+                    if last.block.is_none() {
+                        last.block = Some(block);
+                    }
+                }
+            }
+        }
+    }
+
+    sentences
 }
 
 #[cfg(test)]
@@ -634,11 +743,107 @@ mod tests {
 
     #[test]
     fn code_fences_are_dropped_entirely() {
+        // Still true of this function on its own. `tokenize` no longer hands
+        // it a fence at all — `split_code_fences` captures those first — so a
+        // drawing survives even though anything reaching here does not.
         let text = "before ```\nAdd a brick.\n``` after";
         let cleaned = strip_discord_noise(text);
         assert!(cleaned.contains("before"));
         assert!(cleaned.contains("after"));
         assert!(!cleaned.contains("Add a brick"));
+    }
+
+    #[test]
+    fn a_fenced_block_is_attached_to_the_sentence_before_it() {
+        let sentences = tokenize("Build from top:\n```\n..bb..\n.rbbr.\n```");
+        assert_eq!(sentences.len(), 1, "a fence must not make a sentence");
+        assert_eq!(sentences[0].text, "Build from top:");
+        assert_eq!(
+            sentences[0].block.as_ref().unwrap().lines,
+            vec!["..bb..".to_string(), ".rbbr.".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_grid_row_full_of_dots_is_not_split_into_sentences() {
+        // Unfenced, a row collapses to whatever sat between its dots: '.' ends
+        // a sentence, so every empty cell is erased and with it the position
+        // of every full one. Capture is the only reason a drawing survives.
+        assert_eq!(split_sentences("..bb.."), vec!["bb".to_string()]);
+        assert_eq!(
+            split_sentences(".r..r."),
+            vec!["r".to_string(), "r".to_string()]
+        );
+        let sentences = tokenize("Build from top:\n```\n..bb..\n```");
+        assert_eq!(
+            sentences[0].block.as_ref().unwrap().lines,
+            vec!["..bb..".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_captured_block_keeps_its_columns_past_the_url_pass() {
+        // The URL filter rejoins each line with single spaces, which would
+        // shift every cell in a drawing.
+        let sentences = tokenize("Build from top:\n```\n.b  b.\n```");
+        assert_eq!(
+            sentences[0].block.as_ref().unwrap().lines,
+            vec![".b  b.".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_captured_block_survives_the_block_quote_filter() {
+        // A '>' row would otherwise be read as someone else's words quoted
+        // back and dropped.
+        let sentences = tokenize("Build from north:\n```\n> b <\n```");
+        assert_eq!(
+            sentences[0].block.as_ref().unwrap().lines,
+            vec!["> b <".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_fence_with_no_sentence_before_it_is_dropped() {
+        // A pasted code sample is not a command.
+        assert!(tokenize("```\n..bb..\n```").is_empty());
+    }
+
+    #[test]
+    fn a_second_fence_after_the_same_sentence_is_dropped() {
+        let sentences = tokenize("Build from top:\n```\naa\n```\n```\nbb\n```");
+        assert_eq!(sentences.len(), 1);
+        assert_eq!(
+            sentences[0].block.as_ref().unwrap().lines,
+            vec!["aa".to_string()]
+        );
+    }
+
+    #[test]
+    fn sentences_after_a_fence_are_tokenized_normally() {
+        let sentences = tokenize("Build from top:\n```\nbb\n```\nHow tall is it?");
+        assert_eq!(sentences.len(), 2);
+        assert!(sentences[0].block.is_some());
+        assert_eq!(sentences[1].text, "How tall is it?");
+        assert!(sentences[1].block.is_none());
+    }
+
+    #[test]
+    fn a_sentence_replays_with_its_block() {
+        // What gets parked when a drawing pauses on an unknown part, and what
+        // must re-lex to the very same sentence.
+        let original = "Build from top:\n```\nb = blue 1x1 brick\n\n..bb..\n```";
+        let parked = tokenize(original)[0].replay_text();
+        let again = tokenize(&parked);
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].text, "Build from top:");
+        assert_eq!(again[0].block, tokenize(original)[0].block);
+    }
+
+    #[test]
+    fn a_sentence_without_a_block_replays_as_itself() {
+        let sentences = tokenize("Add a red 2x4 brick at origin.");
+        assert_eq!(sentences[0].replay_text(), sentences[0].text);
     }
 
     #[test]
@@ -745,6 +950,37 @@ mod tests {
         assert_eq!(
             strip_discord_noise("see https://example.org/x\nAdd a brick"),
             "see\nAdd a brick"
+        );
+    }
+
+    #[test]
+    fn a_quoted_line_is_dropped_not_replayed() {
+        // Regression: someone quoting the bot's own instructions while asking
+        // "did this work?" made the bot silently re-run whatever it had said,
+        // because a `> ` line reads as a perfectly ordinary sentence otherwise.
+        let cleaned = strip_discord_noise("> Add a red 2x4 brick at origin.\nHow tall is it?");
+        assert!(!cleaned.contains("Add"), "got: {cleaned:?}");
+        assert!(cleaned.contains("How tall is it?"), "got: {cleaned:?}");
+    }
+
+    #[test]
+    fn a_block_quote_drops_everything_after_it_too() {
+        let cleaned = strip_discord_noise(">>> Add a red brick.\nAdd a blue brick.");
+        assert!(!cleaned.contains("Add"), "got: {cleaned:?}");
+    }
+
+    #[test]
+    fn indented_and_nested_quote_markers_are_still_recognised() {
+        assert!(strip_discord_noise("  > Add a brick.").trim().is_empty());
+        assert!(strip_discord_noise(">> Add a brick.").trim().is_empty());
+    }
+
+    #[test]
+    fn a_stray_greater_than_sign_is_not_mistaken_for_a_quote() {
+        // Only a '>' that opens the line is a quote marker.
+        assert_eq!(
+            strip_discord_noise("Count bricks taller >100 studs"),
+            "Count bricks taller >100 studs"
         );
     }
 

@@ -41,20 +41,47 @@ The language it understands is a controlled natural language — English-like, q
    - `Duplicate` steps the copy clear by the width of *what was copied*, not of the whole model, so duplicating one brick inside a large build puts it alongside.
    - Expansions are **not** black boxes: every brick they create is individually addressable afterwards, so `Paint all red bricks dark tan.` works on them normally. A whole structure is a single undo step.
 
-6. **Rendering**:
+6. **Drawings**:
+   - A message can carry an ASCII drawing in a fenced code block: a header sentence naming the
+     view, then a legend and a grid. See [Drawings](#drawings) for the full syntax.
+   - One cell is one stud. A symbol repeated over a rectangle the size of its part's footprint
+     becomes **one** part, so `bbbb` with `b = red 1x4 brick` is a single brick rather than four
+     in a heap.
+   - `Show top view.` draws the model back **in the same syntax**, so the answer can be pasted
+     straight into the thread to rebuild it. That round trip is how the syntax is meant to be
+     discovered, and it needs neither the LDraw library nor the renderer.
+   - Like a structure, a whole drawing is one undo step while every part in it stays
+     individually addressable afterwards.
+
+7. **Drafting Privately**:
+   - The `[Draw…]` button on any render opens a private form — view, legend, drawing, and an
+     optional location — and shows a preview **only you can see**.
+   - The preview is the real interpreter running against a copy of the session: the same
+     replies, the same errors, nothing written. `[Edit]` reopens the form as you left it,
+     `[Apply]` commits it and posts publicly, `[Discard]` throws it away.
+   - The form opens **prefilled with the current model**, so the easiest way to pick parts that
+     exist is to start from the ones already in the build and edit them.
+   - `[Apply]` **refuses** if anyone else has built since the preview: what you saw must be
+     exactly what lands. The draft is kept, and `[Preview again]` re-runs it against the model
+     as it now stands.
+   - The form holds **drawings only** — ordinary sentences like `Paint the highest brick red.`
+     stay on the public path. A Discord form can hold nothing but text boxes, which is also why
+     parts and colours are picked either side of it rather than inside it.
+
+8. **Rendering**:
    - After every accepted command the model is re-rendered and posted as a PNG.
    - Rendering uses real LDraw part geometry when the part library is installed (see [the runbook](../runbook.md)); until then it draws simple boxes and says so once.
    - A burst of commands coalesces into a single render, so several people building at once produce one picture rather than one each.
 
-7. **Part Resolution**:
+9. **Part Resolution**:
    - Everyday elements (`a red 2x4 brick`) resolve instantly from a built-in catalogue, with no lookup.
    - Anything unusual falls through to the same Rebrickable search that backs [`/part`](part.md), and the builder picks from a dropdown. The sentence that was waiting is then carried out with the chosen element, exactly as if the catalogue had known it. Anything else that changes the model in the meantime cancels the pending choice, since the sentence would no longer mean what its author meant.
 
-8. **Export**:
+10. **Export**:
    - The `[Export .io]` button, or the sentence `Export.`, produces a BrickLink Studio `.io` file.
    - The exported file contains only part *references*, never part geometry.
 
-9. **Localization**:
+11. **Localization**:
    - Everything the bot *says* follows the guild's `locale`: the command name and argument, the
      intro embed, the buttons, every confirmation, answer and error. `src/build/report.rs` is the
      only place that calls `rust_i18n::t!` for session output, so the whole vocabulary lives in
@@ -100,19 +127,41 @@ Install it once with `make fetch-ldraw`. See [ADR-003](../ADR-003-LDraw-Renderin
 ## Internal Implementation
 Everything except the last item is pure and unit-tested, with no serenity, sqlx or reqwest types crossing into it:
 
-- `src/build/dsl/` — the language: `lexer.rs` (tokens, multi-word colours, Discord noise stripping), `ast.rs`, `parser.rs` (the grammar and the silence policy).
+- `src/build/dsl/` — the language: `block.rs` (lifting fenced drawings out before anything else reads them), `lexer.rs` (tokens, multi-word colours, Discord noise stripping), `ast.rs`, `parser.rs` (the grammar and the silence policy).
 - `src/build/lower.rs` — resolves references and locations against the model and emits operations.
 - `src/build/expand.rs` — expands high-level structures into ordinary placements.
+- `src/build/grid.rs` — gathers a drawing's cells into whole parts and places them.
+- `src/build/textview.rs` — draws the model back as a grid, in the syntax a drawing is typed in.
+- `src/build/draft.rs` — the private form's fields, the text they assemble into, and the preview. Pure: a preview is `process_message` against a clone of the history with `persist` skipped, so the preview and the eventual apply cannot disagree.
 - `src/build/{model,ops,units}.rs` — the model, the operation log, and LDraw units.
 - `src/build/{parts,queries,report,scene}.rs` — the part catalogue, questions, localized output, and the model-to-triangles step.
 - `src/build/export/` — LDraw text and the `.io` container.
 - `src/ldraw/` and `src/render/` — part geometry and the software rasterizer.
 - `src/build/dispatch.rs` — `process_message`, the single pure entry point the Discord layer calls.
 - `src/build/session.rs` — the only part that touches Discord: thread creation, persistence, the render loop and the part-choice dropdown.
+- `src/build/debug_log.rs` — the optional `--build-debug-log` trace described below.
 
 Storage is `build_sessions` and `build_revisions` (`migrations/0002_build_sessions.sql`, `migrations/0003_build_session_state.sql`), accessed through `src/db/build.rs`. Only the operation log is stored; the model is a fold over it. Where undo and redo have left the session is session state (`build_sessions.cursor`), separate from the per-revision `skipped` flag that `Undo alice's last edit.` sets — conflating the two makes redo impossible to express.
 
 Each session's read-interpret-write cycle is serialised by a per-session lock and committed in one transaction, because two people building in the same second is the expected case rather than a rare one.
+
+## Debugging & Grammar Iteration
+
+Running the bot with `--build-debug-log <path>` appends a JSONL line for every message any build thread receives, whether or not it did anything — the raw input needed to see where BrickTalk's grammar or silence policy falls short in real conversation. Off by default; not a data-collection feature, just a development aid, and a write failure never interrupts building.
+
+Each line:
+
+```json
+{"ts":"2026-07-31T12:00:00Z","session_id":"...","channel_id":123,"author_id":"456","locale":"en-US","message":"Add a red 2x4 brick at origin.","classification":"ok","reactions":["✅"],"replies":["Added a red 2x4 brick."],"ops_applied":1,"pending_lookup":false}
+```
+
+`classification` is one of:
+- `ignored` — the silence policy read it as ordinary chat before parsing ever reached the model. Skim these for sentences that plainly meant a command but didn't open with a known verb or question word.
+- `silent` — parsed further (typically a question) but resolved to nothing worth reporting.
+- `ok` — applied, at least in part.
+- `problem` — stopped on a parse or lowering error; `replies` carries what was reported.
+
+`problem` and `ignored` lines are the ones worth reviewing when deciding what to extend in `src/build/dsl/`.
 
 ## Appendix: The BrickTalk language
 
@@ -129,13 +178,15 @@ Sentences end with a full stop (or a newline). Several may appear in one message
 | `remove` / `delete` | `Remove the last brick.` |
 | `replace` / `swap` | `Replace all red bricks with dark red.` |
 | `paint` / `colour` | `Paint the selection dark tan.` |
-| `build` / `make` | `Build a wall 10 studs long 6 bricks high.` |
+| `build` / `make` | `Build a wall 10 studs long 6 bricks high.` `Build from top at origin:` followed by a drawing — see [Drawings](#drawings). |
 | `duplicate` / `mirror` | `Mirror everything.` `Duplicate tower east 4 studs.` |
 | `select` | `Select all red bricks.` |
 | `group` / `call` / `name` | `Call this wall.` `Name this point gate.` |
 | `undo` / `redo` / `revert` | `Undo.` `Undo alice's last edit.` `Revert to revision 12.` |
-| `count` / `find` / `show` | `Count red bricks.` `Find collisions.` `Show unsupported bricks.` |
-| `export` / `render` / `help` / `finish` | `Export.` `Help.` |
+| `count` / `find` / `show` | `Count red bricks.` `Find collisions.` `Show unsupported bricks.` `Show top view.` |
+| `export` / `render` / `help` / `commands` / `finish` | `Export.` `Help.` `Help select.` |
+
+`Help.` alone shows this table's overview; `Help <verb>.` (e.g. `Help select.`) shows that verb's own syntax and examples, localized like everything else the bot says. It covers every verb in the table above by its canonical name — a synonym still resolves to it, so `Help put.` answers the same as `Help add.`. `Attach`, `Fill` and `Repeat` are lexer-level aliases rather than verbs with syntax of their own, so a topic that names one of those, or one the parser doesn't recognise as a verb at all, falls back to the general overview instead of erroring.
 
 ### Parts
 
@@ -156,6 +207,166 @@ Colours are LDraw colour names: `red`, `dark tan`, `light bluish gray`, `trans c
 
 With no location, a part rests on top of whatever was last touched — which is how a conversation naturally stacks bricks.
 
+### Drawings
+
+Some things are far easier to draw than to describe. A message can carry an ASCII drawing: a
+header sentence naming the view, then a fenced code block holding a legend and a grid.
+
+````
+Build from top at origin:
+```
+b = blue 1x1 brick
+r = red 1x1 brick
+
+.bb.
+rbbr
+```
+````
+
+- **The header is an ordinary sentence** and sits *outside* the fence, so every location form
+  above works on it: `Build from top at origin:`, `Build from north at 20 0 40:`,
+  `Build from east at gate:`. With no location, a drawing starts on top of whatever was last
+  touched, like anything else. `from` is optional (`Build top view:`) and a trailing `:` is
+  ignored.
+- **The fence holds nothing but the legend and the grid.** It must be a triple backtick fence;
+  single backticks are still treated as inline code and dropped.
+- **A legend line is `<one character> = <part>`**, recognised wherever it appears — above,
+  below or among the drawing. The part is described exactly as in `Add …`, so `blue 1x1 brick`,
+  `3 tan plates` and a bare part number all work. A key of more than one character is reported.
+- **`.` and a space are empty cells.** Everything else must be in the legend.
+- **A blank line starts a new block** — the next layer up in a plan view, the next slice back in
+  an elevation.
+
+#### One cell, one stud
+
+A cell is one stud. A symbol repeated over a rectangle matching its part's footprint becomes
+**one** part, so `bbbb` with `b = red 1x4 brick` is a single brick rather than four in a heap.
+
+The footprint is tried as written and then turned a quarter, and the first that fits wins,
+scanning from the top left. That makes the spelling in the legend meaningful: a 2x2 field of
+`b` tiles into two dominoes running back if the legend says `1x2 brick`, and two running across
+if it says `2x1 brick`. **Parts are laid the way you drew them.**
+
+Cells that cannot be gathered into a whole part are reported with their position, and nothing is
+placed — half a drawing would leave you undoing the rest by hand.
+
+#### Views
+
+| View | Columns run | Rows run | Each block is |
+|---|---|---|---|
+| `top` (`above`, `plan`) | east | south | the next layer up |
+| `bottom` (`below`, `underside`) | east | north | the next layer up |
+| `north` | east | downward | the next slice back |
+| `south` | west | downward | the next slice back |
+| `east` | south | downward | the next slice back |
+| `west` | north | downward | the next slice back |
+
+An elevation sees only the face turned towards it, so parts are never gathered across two rows:
+two 1x1 bricks drawn one above the other really are two bricks. Its rows are courses of real
+parts, so a plate course is 8 LDU and a brick course 24 — the drawing stacks by what is actually
+in it rather than at a fixed pitch. Plan-view layers likewise rest on the tallest part below.
+
+#### Reading a model back
+
+`Show top view.` draws the model as a grid **in this same syntax**, so the answer can be pasted
+back into the thread to rebuild it. `Show the north view.`, `Show the view from the east.` and
+`Show top view layer 2.` all work. Symbols are assigned from the model's own parts list, so a
+colour usually gets its initial and the output is identical every time for the same model.
+
+The reply is capped to one Discord message: whole layers are dropped from the end rather than
+cutting a drawing off mid-row, and the bot says how many it left out.
+
+Round trips are exact for stud-aligned models built from catalogue parts. Parts sitting off the
+stud grid snap to the nearest cell, and a part with no known footprint cannot be drawn at all.
+
+### Drafting a drawing privately
+
+A build thread is public, so every attempt at a drawing is seen by everyone. The `[Draw…]`
+button under any render opens a private form instead:
+
+| Field | What goes in it |
+|---|---|
+| View | `top`, `north`, `east`, … |
+| Legend | one `b = blue 1x1 brick` per line |
+| Drawing | the grid; `.` is an empty stud, a blank line starts the next layer |
+| Where to put it | optional — any location form from the table above |
+
+Submitting shows a preview **only you can see**: the drawing as it would stand, plus whatever
+the interpreter had to say about it. Nothing is written to the model. `[Edit]` reopens the form
+as you left it, so a legend with a bad colour or a size that does not exist can be fixed without
+anyone watching.
+
+The form opens **prefilled with the current model**. Editing what is already built is the
+simplest way to name parts and colours that certainly exist — the legend it opens with is one
+the bot itself wrote.
+
+`[Apply]` commits the drawing and posts it publicly, exactly as if it had been typed into the
+thread. It **refuses** if anyone else has built in the meantime: the preview was taken against a
+particular revision, and what you looked at must be what lands. The draft survives, and
+`[Preview again]` re-runs it against the model as it now stands.
+
+Two limits worth knowing. The form holds **drawings only** — ordinary sentences stay on the
+public path. And a Discord form can contain nothing but text boxes, so there is no dropdown
+inside it; parts and colours are chosen before or after, never within.
+
+### Choosing parts and colours
+
+Discord's only typed-ahead is slash-command autocomplete, and it cannot run inside a form — a
+Discord modal holds nothing but text boxes. So suggestions appear where they can: on the `/part`
+command's argument, which now autocompletes as you type.
+
+Suggestions never wait for the network. Autocomplete fires on every keystroke with a
+three-second deadline, so it is answered from two local sources:
+
+- the **built-in catalogue** of everyday sizes, compiled into the binary, which works on a cold
+  start and with no API key at all;
+- the **sticky cache** (`data/cache.db`), which remembers every part lookup the bot has ever
+  made.
+
+A query the cache does not know is answered with whatever is on hand, and quietly fetched in the
+background — so the keystroke that misses costs nothing and the next one is fast. Because
+ordinary `/part` searches fill the same cache, suggestions get better the more the guild uses
+the bot, and they survive restarts.
+
+The cache also answers queries nobody has typed before: it indexes part *names*, so `wind`
+finds `Windscreen 3 x 4 x 1.3` if any earlier search happened to mention it.
+
+#### Adding to a legend without typing the line
+
+A form cannot hold a dropdown, so the legend is edited from outside it. Two routes, and they
+reach different things:
+
+| | Reaches | For |
+|---|---|---|
+| `/build-legend part: colour:` | the **whole** palette and everything ever looked up | when you know roughly what you want |
+| `[Insert…]` on the preview | the 74 colours and the 38 catalogue parts, a page at a time | when you don't, and want to look |
+
+Both append a line to your open drawing and show the preview again; `[Edit]` then reopens the
+form with the line in it. `/build-legend` opens a drawing for you if you have none, so it works
+as a first step and not only as an edit. Neither needs a symbol — one is chosen for you,
+preferring the colour's own initial, so a legend reads the way you would have written it. Pass
+`symbol:` to choose it yourself.
+
+`[Insert…]` asks for a colour first and then a part, because a colour on its own is not a legend
+line. "No colour" is offered on every page and gives a line that takes the drawing's default.
+
+Everything in `data/cache.db` is derived and disposable — deleting the file is a clean rebuild.
+See `[parts_cache]` in `config.toml.example` for the expiry settings; part records never expire,
+searches last 30 days, and a search that found nothing lasts an hour.
+
+### When a part or colour is not recognised
+
+The catalogue holds the everyday elements, not every size. A size that does not exist is
+answered with the ones that do:
+
+```
+Add a 1x7 brick.
+→ I don't have 'brick 1 x 7'. Did you mean 1x6 brick, 1x8 brick?
+```
+
+A symbol missing from a drawing's legend is answered with the symbols that are in it, so a typo
+in a grid does not require re-reading the whole legend to spot.
+
 ### Units and directions
 
 One stud is 20 LDU, one plate 8, one brick 24. Directions are `north`, `south`, `east`, `west`, `up`, `down`. A bare count means studs horizontally but bricks vertically, so `Move it east 2.` is two studs while `Move it up 2.` is two bricks. Say the unit to override: `Raise by one plate.`
@@ -166,12 +377,20 @@ Lines beginning `Note:` or `TODO:` are acknowledged with a reaction and otherwis
 
 ### Example session
 
-```
+````
 Alice: Add a light bluish gray 8x8 plate at origin.
 Bob:   Build a wall 8 studs long 4 bricks high.
 Carol: Mirror the wall across the centre.
 Bob:   Build a tower 6 bricks high.
 Alice: Paint the highest brick red.
 Carol: How tall is it?
+Alice: Build from top:
+       ```
+       t = tan 1x1 tile
+       
+       .tt.
+       tttt
+       ```
+Bob:   Show top view.
 Bob:   Export.
-```
+````

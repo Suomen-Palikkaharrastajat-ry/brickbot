@@ -28,6 +28,9 @@ pub enum QueryAnswer {
     Changed(Option<String>),
     /// Part, colour code and quantity, sorted for stable output.
     Inventory(Vec<(PartRef, u16, usize)>),
+    /// The model drawn back as a grid. Boxed because it is much larger than
+    /// every other answer and would otherwise set the size of all of them.
+    View(Box<super::textview::TextView>),
     NothingToReport,
 }
 
@@ -129,6 +132,11 @@ pub fn answer(model: &Model, history: &History, query: &Query) -> Result<QueryAn
             }
             Ok(QueryAnswer::Inventory(parts))
         }
+
+        Query::ShowView { view, layer } => Ok(super::textview::render(model, *view, *layer)
+            .map_or(QueryAnswer::NothingToReport, |drawing| {
+                QueryAnswer::View(Box::new(drawing))
+            })),
     }
 }
 

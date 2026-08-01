@@ -42,6 +42,10 @@ moka = { version = "0.12.15", features = ["future"] }
 regex = "1"
 rust-i18n = "3"
 aho-corasick = "1.1"
+
+# Edit distance behind the "did you mean" suggestions for colours and parts.
+# Already in the tree as a serenity dependency, so promoting it costs nothing.
+levenshtein = "1"
 uuid = { version = "1", features = ["v4"] }
 reqwest-eventsource = "0.6.0"
 futures-util = "0.3.30"

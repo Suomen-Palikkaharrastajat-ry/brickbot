@@ -14,12 +14,13 @@
 #![allow(clippy::doc_markdown, clippy::too_many_lines)]
 
 use super::ast::{
-    Command, ExtentAxis, Location, Meta, Modifier, ObjectExpr, PartSpec, Place, Query, Ref,
-    Statement, Structure,
+    Command, ExtentAxis, GridLayer, GridSpec, LegendEntry, Location, Meta, Modifier, ObjectExpr,
+    PartSpec, Place, Query, Ref, Statement, Structure,
 };
+use super::block::{self, CodeBlock};
 use super::lexer::{Keyword, Sentence, Token, Verb};
 use crate::build::model::PartKind;
-use crate::build::units::{Direction, IVec3, Unit};
+use crate::build::units::{Direction, GridView, IVec3, Unit};
 
 /// What the parser was looking for when it gave up.
 ///
@@ -40,6 +41,7 @@ pub enum Expectation {
     SomethingToSelect,
     GroupName,
     RightAngle,
+    ViewName,
 }
 
 impl Expectation {
@@ -59,6 +61,7 @@ impl Expectation {
             Self::SomethingToSelect => "command.build.expected.something_to_select",
             Self::GroupName => "command.build.expected.group_name",
             Self::RightAngle => "command.build.expected.right_angle",
+            Self::ViewName => "command.build.expected.view_name",
         }
     }
 }
@@ -93,6 +96,7 @@ pub enum SentenceOutcome {
     Error(ParseError),
 }
 
+#[derive(Clone, Copy)]
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
@@ -104,6 +108,10 @@ struct Parser<'a> {
     /// description would swallow the colour.
     end: usize,
     sentence: &'a str,
+    /// The drawing that followed this sentence, if there was one. A grid is an
+    /// argument to a sentence rather than part of its token stream, so the
+    /// header parses with the ordinary machinery — locations included.
+    block: Option<&'a CodeBlock>,
     /// An angle that is not a whole number of quarter turns, so the sentence
     /// can be rejected rather than silently rounded.
     bad_angle: Option<i64>,
@@ -116,7 +124,64 @@ impl<'a> Parser<'a> {
             pos: 0,
             end: sentence.tokens.len(),
             sentence: &sentence.text,
+            block: sentence.block.as_ref(),
             bad_angle: None,
+        }
+    }
+
+    const fn has_block(&self) -> bool {
+        self.block.is_some()
+    }
+
+    /// Reads a view name, which may arrive as either kind of token: `top` and
+    /// `bottom` are bare words, while `north` and `above` lex as directions.
+    fn grid_view(&mut self) -> Option<GridView> {
+        let view = match self.peek() {
+            Some(Token::Direction(direction)) => GridView::from_direction(*direction),
+            Some(Token::Word(word)) => GridView::parse(word),
+            _ => None,
+        }?;
+        self.pos += 1;
+        Some(view)
+    }
+
+    /// True when what follows could name a view, so a drawing header can be
+    /// told apart from `Build a wall …` without consuming anything.
+    ///
+    /// A leading `from` counts on its own: nothing else in the language is
+    /// built *from* something, so `Build from sideways:` with a drawing after
+    /// it is a misspelled view rather than an unknown structure, and saying so
+    /// is more use than "I expected something to build".
+    fn looks_like_grid_header(&self) -> bool {
+        let mut probe = Parser {
+            pos: self.pos,
+            block: None,
+            ..*self
+        };
+        probe.skip_filler();
+        if probe.eat_keyword(Keyword::From) {
+            return true;
+        }
+        probe.skip_filler();
+        probe.grid_view().is_some()
+    }
+
+    /// Reads `layer 2`, `block 2` or `slice 2`, counted from one.
+    fn layer_index(&mut self) -> Option<u32> {
+        let start = self.pos;
+        self.skip_filler();
+        let named = self.eat_word("layer") || self.eat_word("block") || self.eat_word("slice");
+        if !named {
+            self.pos = start;
+            return None;
+        }
+        match self.number() {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Some(n) if n >= 1 => Some(n as u32),
+            _ => {
+                self.pos = start;
+                None
+            }
         }
     }
 
@@ -747,7 +812,17 @@ pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
         }
         Verb::Export => SentenceOutcome::Statement(Statement::Meta(Meta::Export)),
         Verb::Render => SentenceOutcome::Statement(Statement::Meta(Meta::Render)),
-        Verb::Help => SentenceOutcome::Statement(Statement::Meta(Meta::Help)),
+        Verb::Help => {
+            // "Help select." names a topic; a bare "Help." does not. Anything
+            // else after "help" that isn't a verb (a typo, "help me") is
+            // quietly ignored rather than reported — asking for help wrong is
+            // still asking for help.
+            let topic = match parser.peek() {
+                Some(Token::Verb(v)) => Some(*v),
+                _ => None,
+            };
+            SentenceOutcome::Statement(Statement::Meta(Meta::Help(topic)))
+        }
         Verb::Finish => SentenceOutcome::Statement(Statement::Meta(Meta::Finish)),
         Verb::Count => {
             let spec = parser.part_spec();
@@ -768,6 +843,9 @@ pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
             }
             if parser.eat_word("parts") || parser.eat_word("inventory") {
                 return SentenceOutcome::Statement(Statement::Query(Query::ListParts));
+            }
+            if let Some(query) = parse_view_query(&mut parser) {
+                return SentenceOutcome::Statement(Statement::Query(query));
             }
             SentenceOutcome::Error(parser.error(Expectation::SomethingToShow))
         }
@@ -902,6 +980,21 @@ fn parse_command(parser: &mut Parser<'_>, verb: Verb) -> SentenceOutcome {
     let mut extra_modifiers: Vec<Modifier> = Vec::new();
 
     let object = match verb {
+        // "Build from top:" with a drawing after it. Only a sentence that
+        // carries a block *and* names a view takes this path, so
+        // `Build a wall 8 studs long.` with a stray fence after it still
+        // builds a wall.
+        Verb::Build if parser.has_block() && parser.looks_like_grid_header() => {
+            parser.skip_filler();
+            parser.eat_keyword(Keyword::From);
+            parser.skip_filler();
+            let Some(view) = parser.grid_view() else {
+                return SentenceOutcome::Error(parser.error(Expectation::ViewName));
+            };
+            let _ = parser.eat_word("view");
+            let block = parser.block.unwrap_or(&EMPTY_BLOCK);
+            ObjectExpr::Grid(Box::new(grid_spec(view, block)))
+        }
         Verb::Build => {
             parser.skip_filler();
             // "Build a wall ..." / "Build a row of 20 black tiles east."
@@ -1071,6 +1164,85 @@ pub fn parse_message(text: &str) -> Vec<SentenceOutcome> {
         .iter()
         .map(parse_sentence)
         .collect()
+}
+
+/// Stands in when a grid header somehow has no block, which the guard on the
+/// branch already rules out. A drawing with nothing in it is reported by
+/// lowering as `NoLegend`, the same as an empty fence would be.
+static EMPTY_BLOCK: CodeBlock = CodeBlock { lines: Vec::new() };
+
+/// Parses `Show top view.` and its rearrangements.
+///
+/// Runs after the other `Show` forms, none of whose words name a view, so
+/// there is nothing for it to shadow.
+fn parse_view_query(parser: &mut Parser<'_>) -> Option<Query> {
+    let start = parser.pos;
+    parser.skip_filler();
+
+    // "Show top view." and "Show the view from the east." both occur; neither
+    // reads naturally as the other.
+    let view = if parser.eat_word("view") {
+        parser.eat_keyword(Keyword::From);
+        parser.skip_filler();
+        parser.grid_view()
+    } else {
+        let view = parser.grid_view();
+        if view.is_some() {
+            let _ = parser.eat_word("view");
+        }
+        view
+    };
+
+    let Some(view) = view else {
+        parser.pos = start;
+        return None;
+    };
+    Some(Query::ShowView {
+        view,
+        layer: parser.layer_index(),
+    })
+}
+
+/// Turns a captured block into a drawing.
+///
+/// The legend's right-hand sides go through the ordinary part grammar, so
+/// `blue 1x1 brick`, `3 tan plates` and a bare part number all mean here what
+/// they mean in `Add …`.
+fn grid_spec(view: GridView, block: &CodeBlock) -> GridSpec {
+    let shaped = block::shape(block);
+    GridSpec {
+        view,
+        legend: shaped
+            .legend
+            .into_iter()
+            .map(|(symbol, text)| LegendEntry {
+                symbol,
+                spec: parse_part_spec(&text),
+            })
+            .collect(),
+        layers: shaped
+            .layers
+            .into_iter()
+            .map(|rows| GridLayer { rows })
+            .collect(),
+        bad_legend_key: shaped.bad_legend_key,
+    }
+}
+
+/// Parses a bare part description, with no verb in front of it.
+///
+/// The right-hand side of a legend line — `b = blue 1x1 brick` — describes a
+/// part in exactly the words `Add a blue 1x1 brick.` uses, so it goes through
+/// the same grammar rather than a second one that could drift from it.
+///
+/// The caller must have split the line on its `=` first: `split_words` keeps
+/// `=` inside a word and [`Parser::axis_coords`] reads `x=12` as a coordinate,
+/// so an unsplit legend line would parse as something else entirely.
+#[must_use]
+pub fn parse_part_spec(text: &str) -> PartSpec {
+    let sentence = super::lexer::tokenize_sentence(text);
+    let mut parser = Parser::new(&sentence);
+    parser.part_spec()
 }
 
 /// Numbers at or above this are read as part numbers rather than counts.
@@ -1497,6 +1669,179 @@ mod tests {
         assert_eq!(c.using().and_then(|s| s.kind), Some(PartKind::Plate));
     }
 
+    // --- Drawings ----------------------------------------------------------
+
+    /// A whole message, so the fenced block reaches the sentence in front of
+    /// it. `parse` above goes through `tokenize_sentence`, which has no block.
+    fn first(text: &str) -> SentenceOutcome {
+        super::parse_message(text)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no sentence in {text:?}"))
+    }
+
+    fn drawing(header: &str) -> GridSpec {
+        let text = format!("{header}\n```\nb = blue 1x1 brick\n\n..bb..\n```");
+        match first(&text) {
+            SentenceOutcome::Statement(Statement::Command(c)) => match c.object {
+                ObjectExpr::Grid(spec) => *spec,
+                other => panic!("expected a drawing from {header:?}, got {other:?}"),
+            },
+            other => panic!("expected a command from {header:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_a_grid_header_with_a_view_and_a_location() {
+        let text = "Build from top at origin:\n```\nb = blue 1x1 brick\n\n..bb..\n```";
+        let SentenceOutcome::Statement(Statement::Command(c)) = first(text) else {
+            panic!("expected a command");
+        };
+        // The location comes from the ordinary grammar, not a second one.
+        assert_eq!(c.location, Some(Location::At(Place::Origin)));
+        match c.object {
+            ObjectExpr::Grid(spec) => {
+                assert_eq!(spec.view, GridView::Top);
+                assert_eq!(spec.legend.len(), 1);
+                assert_eq!(spec.legend[0].symbol, 'b');
+                assert_eq!(spec.legend[0].spec.color, Some(1));
+                assert_eq!(spec.layers.len(), 1);
+                assert_eq!(spec.layers[0].rows[0], "..bb..".chars().collect::<Vec<_>>());
+            }
+            other => panic!("expected a drawing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_every_view_word_including_the_ones_that_lex_as_directions() {
+        // `top` and `bottom` are bare words; the compass points and
+        // `above`/`below` lex as directions, so both kinds must be accepted.
+        for (header, expected) in [
+            ("Build from top:", GridView::Top),
+            ("Build from the top view:", GridView::Top),
+            ("Build top view:", GridView::Top),
+            ("Build from bottom:", GridView::Bottom),
+            ("Build from north:", GridView::North),
+            ("Build from south:", GridView::South),
+            ("Build from east:", GridView::East),
+            ("Build from west:", GridView::West),
+            ("Build from above:", GridView::Top),
+            ("Build from below:", GridView::Bottom),
+            ("Make from east at gate:", GridView::East),
+        ] {
+            assert_eq!(drawing(header).view, expected, "header: {header}");
+        }
+    }
+
+    #[test]
+    fn a_build_header_with_no_view_is_reported() {
+        let text = "Build from sideways:\n```\nb = blue 1x1 brick\n\n..bb..\n```";
+        let SentenceOutcome::Error(error) = first(text) else {
+            panic!("a misspelled view should be reported");
+        };
+        assert_eq!(error.expected, Expectation::ViewName);
+    }
+
+    #[test]
+    fn a_structure_sentence_that_happens_to_carry_a_block_still_builds_the_structure() {
+        // A fence pasted under an ordinary command must not turn it into a
+        // drawing.
+        let text = "Build a wall 8 studs long.\n```\nsome code\n```";
+        let SentenceOutcome::Statement(Statement::Command(c)) = first(text) else {
+            panic!("expected a command");
+        };
+        assert_eq!(c.object, ObjectExpr::Structure(Structure::Wall));
+    }
+
+    #[test]
+    fn a_grid_header_without_a_block_is_not_a_drawing() {
+        // Nothing to draw, so it falls back to the structure grammar and is
+        // reported there.
+        assert!(matches!(
+            first("Build from top."),
+            SentenceOutcome::Error(_)
+        ));
+    }
+
+    #[test]
+    fn the_legend_keeps_the_order_it_was_written_in() {
+        // Resolution order fixes which part a pending lookup answers, so it
+        // must not depend on anything but what was typed.
+        let text = "Build from top:\n```\nr = red 1x1 brick\nb = blue 1x1 brick\n\nrb\n```";
+        let SentenceOutcome::Statement(Statement::Command(c)) = first(text) else {
+            panic!("expected a command");
+        };
+        let ObjectExpr::Grid(spec) = c.object else {
+            panic!("expected a drawing");
+        };
+        let symbols: Vec<char> = spec.legend.iter().map(|e| e.symbol).collect();
+        assert_eq!(symbols, vec!['r', 'b']);
+    }
+
+    #[test]
+    fn a_badly_keyed_legend_line_is_carried_through_to_lowering() {
+        let text = "Build from top:\n```\nbb = blue 1x1 brick\n\n..bb..\n```";
+        let SentenceOutcome::Statement(Statement::Command(c)) = first(text) else {
+            panic!("expected a command");
+        };
+        let ObjectExpr::Grid(spec) = c.object else {
+            panic!("expected a drawing");
+        };
+        assert_eq!(spec.bad_legend_key.as_deref(), Some("bb"));
+    }
+
+    #[test]
+    fn parses_show_view_in_both_word_orders() {
+        for (text, expected) in [
+            ("Show top view", GridView::Top),
+            ("Show the north view", GridView::North),
+            ("Show the view from the east", GridView::East),
+            ("Show bottom view", GridView::Bottom),
+        ] {
+            assert_eq!(
+                statement(text),
+                Statement::Query(Query::ShowView {
+                    view: expected,
+                    layer: None
+                }),
+                "text: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_a_layer_selector_on_a_view_query() {
+        assert_eq!(
+            statement("Show top view layer 2"),
+            Statement::Query(Query::ShowView {
+                view: GridView::Top,
+                layer: Some(2)
+            })
+        );
+        assert_eq!(
+            statement("Show the north view slice 3"),
+            Statement::Query(Query::ShowView {
+                view: GridView::North,
+                layer: Some(3)
+            })
+        );
+    }
+
+    #[test]
+    fn the_other_show_forms_are_untouched_by_the_view_grammar() {
+        assert_eq!(statement("Show parts"), Statement::Query(Query::ListParts));
+        assert_eq!(
+            statement("Show unsupported"),
+            Statement::Query(Query::ShowUnsupported)
+        );
+        assert_eq!(
+            statement("Show collisions"),
+            Statement::Query(Query::FindCollisions)
+        );
+        // And something that names no view at all is still reported.
+        assert!(matches!(parse("Show zzz"), SentenceOutcome::Error(_)));
+    }
+
     #[test]
     fn an_unknown_structure_is_kept_so_the_bot_can_say_so() {
         let c = command("Build a gazebo");
@@ -1526,8 +1871,23 @@ mod tests {
     fn parses_session_commands() {
         assert_eq!(statement("Export"), Statement::Meta(Meta::Export));
         assert_eq!(statement("Render"), Statement::Meta(Meta::Render));
-        assert_eq!(statement("Help"), Statement::Meta(Meta::Help));
+        assert_eq!(statement("Help"), Statement::Meta(Meta::Help(None)));
         assert_eq!(statement("Finish"), Statement::Meta(Meta::Finish));
+    }
+
+    #[test]
+    fn help_names_a_topic_by_its_verb() {
+        assert_eq!(
+            statement("Help select"),
+            Statement::Meta(Meta::Help(Some(Verb::Select)))
+        );
+        // A synonym still resolves to the canonical verb.
+        assert_eq!(
+            statement("Help put"),
+            Statement::Meta(Meta::Help(Some(Verb::Add)))
+        );
+        // Anything else after "help" is ignored rather than reported.
+        assert_eq!(statement("Help me"), Statement::Meta(Meta::Help(None)));
     }
 
     #[test]

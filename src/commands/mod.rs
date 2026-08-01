@@ -1,3 +1,4 @@
+pub mod autocomplete;
 pub mod build;
 pub mod diagnostics;
 pub mod events;

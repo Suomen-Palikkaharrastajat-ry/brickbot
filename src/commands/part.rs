@@ -9,19 +9,28 @@ pub enum PartInteractionResponse {
     SearchResults(Vec<serenity::all::CreateSelectMenuOption>),
 }
 
+/// Looks up a part for the `/part` command and the `/build` disambiguator.
+///
+/// Every lookup goes through the sticky cache (`cache`, absent when it could
+/// not be opened). That is deliberate and load-bearing: ordinary use of `/part`
+/// is what fills the index that makes part autocomplete instant, so the more a
+/// guild searches, the better its suggestions get.
 pub async fn part_interaction(
     _ctx: &Context,
     http: &dyn crate::http::HttpProvider,
+    cache: Option<&crate::parts_cache::PartCache>,
     query: &str,
     locale: &str,
     services: &[String],
     limit: u64,
 ) -> anyhow::Result<PartInteractionResponse> {
+    use crate::parts_cache::warm;
+
     let clean_query = query.trim();
 
     // Attempt direct lookup first using the first token
     let first_word = clean_query.split_whitespace().next().unwrap_or("");
-    if let Ok(part) = fetch_part(http, first_word, limit).await {
+    if let Ok(part) = warm::detail(cache, http, first_word, limit).await {
         let (content, builder) = build_part_message(&part, first_word, locale, services);
         let in_production = part.year_to >= chrono::Utc::now().naive_utc().year();
         return Ok(PartInteractionResponse::DirectMatch(
@@ -32,13 +41,13 @@ pub async fn part_interaction(
     }
 
     // Fallback to search
-    match crate::brick::search_parts(http, clean_query, limit).await {
+    match warm::search(cache, http, clean_query, limit).await {
         Ok(results) => {
             if results.is_empty() {
                 Err(anyhow::anyhow!("No parts found matching query"))
             } else if results.len() == 1 {
                 let p_num = &results[0].part_num;
-                fetch_part(http, p_num, limit).await.map_or_else(
+                warm::detail(cache, http, p_num, limit).await.map_or_else(
                     |_| Err(anyhow::anyhow!("Failed to fetch part details")),
                     |part| {
                         let (content, builder) = build_part_message(&part, p_num, locale, services);
@@ -184,9 +193,13 @@ pub fn build_part_command(locale: &str) -> serenity::all::CreateCommand {
     let part_arg_name = rust_i18n::t!("command.part.part_arg_name", locale = locale).to_string();
     let part_desc = rust_i18n::t!("command.part.part_desc", locale = locale).to_string();
 
+    // Typed-ahead suggestions from the built-in catalogue and the sticky
+    // cache. Answered locally, so it never waits for the network — see
+    // `crate::commands::autocomplete`.
     let part_option =
         CreateCommandOption::new(CommandOptionType::String, &part_arg_name, &part_desc)
-            .required(true);
+            .required(true)
+            .set_autocomplete(true);
 
     CreateCommand::new(&cmd_name)
         .description(&cmd_desc)
@@ -240,5 +253,35 @@ mod tests {
             "http://example.com/3001.png"
         );
         assert_eq!(embed_json["url"], "https://rebrickable.com/parts/3001");
+    }
+
+    #[test]
+    fn the_part_argument_asks_for_typed_ahead_suggestions() {
+        // Without this flag Discord never sends an autocomplete interaction,
+        // and the whole suggestion path is unreachable.
+        for locale in ["en-US", "fi-FI"] {
+            let json = serde_json::to_value(build_part_command(locale)).unwrap();
+            let option = &json["options"][0];
+            assert_eq!(
+                option["autocomplete"],
+                true,
+                "{locale}: {}",
+                serde_json::to_string(option).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn the_autocompleting_argument_is_named_something_the_router_answers() {
+        // The router matches on the option's name, which is localized, so the
+        // two have to agree or suggestions silently stop in one locale.
+        for locale in ["en-US", "fi-FI"] {
+            let json = serde_json::to_value(build_part_command(locale)).unwrap();
+            let name = json["options"][0]["name"].as_str().unwrap();
+            assert!(
+                matches!(name, "part" | "osa" | "query" | "haku"),
+                "{locale}: main.rs does not route {name:?}"
+            );
+        }
     }
 }

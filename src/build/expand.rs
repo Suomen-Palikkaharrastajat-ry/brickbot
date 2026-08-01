@@ -12,8 +12,8 @@
 use super::dsl::ast::{Command, ExtentAxis, ObjectExpr, Ref, Structure};
 use super::dsl::lexer::Verb;
 use super::lower::{
-    LowerError, MAX_PLACEMENTS_PER_COMMAND, Unsupported, extent_count, resolve_ref,
-    structure_group, structure_part,
+    LowerError, Unsupported, checked_total, extent_count, resolve_ref, structure_group,
+    structure_part,
 };
 use super::model::{Model, PartRef, Placement};
 use super::ops::{Op, Placed};
@@ -45,18 +45,6 @@ fn run_direction(command: &Command) -> Direction {
         .map(|(direction, ..)| direction)
         .filter(|d| !d.is_vertical())
         .unwrap_or(Direction::East)
-}
-
-/// Caps a placement count and reports when the cap bites, so the caller can
-/// tell the builder rather than silently building something smaller.
-const fn checked_total(total: u32) -> Result<u32, LowerError> {
-    if total > MAX_PLACEMENTS_PER_COMMAND {
-        return Err(LowerError::Unsupported(Unsupported::TooLarge {
-            total,
-            limit: MAX_PLACEMENTS_PER_COMMAND,
-        }));
-    }
-    Ok(total)
 }
 
 /// Expands a `build` command into placement operations.

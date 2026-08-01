@@ -231,6 +231,76 @@ pub fn is_color_prefix(prefix: &str) -> bool {
             .any(|(alias, _)| normalize(alias).starts_with(&with_space))
 }
 
+/// Every colour in the palette, as `(code, name)`.
+///
+/// For pickers that have to show the whole list — an autocomplete fallback or
+/// a select menu — rather than answer one query.
+pub fn all() -> impl Iterator<Item = (u16, &'static str)> {
+    PALETTE.iter().map(|entry| (entry.code, entry.name))
+}
+
+/// How far apart two colour names may be and still be worth suggesting.
+///
+/// Proportional to what was typed, so a long phrase tolerates a couple of
+/// slips while a three-letter word does not match half the palette.
+fn distance_budget(needle: &str) -> usize {
+    match needle.chars().count() {
+        0..=3 => 1,
+        4..=7 => 2,
+        _ => 3,
+    }
+}
+
+/// Colour names close to what was typed, best first.
+///
+/// Ranks exact match, then names starting with the phrase, then names
+/// containing it, then near misses by edit distance — and alphabetically
+/// within each tier, so the same input always suggests the same things.
+///
+/// Aliases are candidates too: `grey` and `clear` are what people actually
+/// type, and both resolve through [`code_from_name`], so a suggestion is
+/// always something that will work if typed back.
+#[must_use]
+pub fn suggest(input: &str, limit: usize) -> Vec<&'static str> {
+    let needle = normalize(input);
+    if needle.is_empty() {
+        return PALETTE.iter().take(limit).map(|entry| entry.name).collect();
+    }
+
+    let budget = distance_budget(&needle);
+    let candidates = PALETTE
+        .iter()
+        .map(|entry| entry.name)
+        .chain(ALIASES.iter().map(|(alias, _)| *alias));
+
+    // (tier, distance, name) sorts into exactly the order described above.
+    let mut scored: Vec<(u8, usize, &'static str)> = candidates
+        .filter_map(|name| {
+            let distance = levenshtein::levenshtein(&needle, name);
+            let tier = if name == needle {
+                0
+            } else if name.starts_with(&needle) {
+                1
+            } else if name.contains(&needle) {
+                2
+            } else if distance <= budget {
+                3
+            } else {
+                return None;
+            };
+            Some((tier, distance, name))
+        })
+        .collect();
+
+    scored.sort_unstable();
+    scored.dedup_by_key(|(_, _, name)| *name);
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, _, name)| name)
+        .collect()
+}
+
 /// Substitutes the placement colour for the `inherit` and `edge` codes.
 #[must_use]
 pub const fn resolve_inherited(code: u16, parent: u16) -> u16 {
@@ -244,6 +314,91 @@ pub const fn resolve_inherited(code: u16, parent: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_palette_colour_is_enumerable() {
+        let listed: Vec<_> = all().collect();
+        assert_eq!(listed.len(), PALETTE.len());
+        assert!(listed.contains(&(4, "red")));
+        // And every listed name resolves back, so a picker can only ever
+        // offer something that works when typed.
+        for (code, name) in listed {
+            assert_eq!(code_from_name(name), Some(code), "{name} does not resolve");
+        }
+    }
+
+    #[test]
+    fn an_exact_colour_suggests_itself_first() {
+        assert_eq!(suggest("red", 5).first(), Some(&"red"));
+        assert_eq!(suggest("dark tan", 5).first(), Some(&"dark tan"));
+        // American spelling and case fold through `normalize` first.
+        assert_eq!(
+            suggest("Light Bluish Gray", 5).first(),
+            Some(&"light bluish grey")
+        );
+    }
+
+    #[test]
+    fn a_prefix_suggests_the_colours_that_extend_it() {
+        let dark = suggest("dark", 10);
+        assert!(dark.contains(&"dark tan"), "got: {dark:?}");
+        assert!(dark.contains(&"dark red"), "got: {dark:?}");
+        // Every one of them genuinely starts with what was typed.
+        assert!(
+            dark.iter().filter(|n| n.starts_with("dark")).count() >= 3,
+            "got: {dark:?}"
+        );
+    }
+
+    #[test]
+    fn a_misspelling_suggests_the_colour_meant() {
+        // The cases that actually come up.
+        for (typo, expected) in [
+            ("yelow", "yellow"),
+            ("orage", "orange"),
+            ("purpel", "purple"),
+            ("blak", "black"),
+        ] {
+            let got = suggest(typo, 5);
+            assert!(
+                got.contains(&expected),
+                "{typo:?} should have suggested {expected:?}, got {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn aliases_are_suggested_because_they_are_what_people_type() {
+        assert!(suggest("grey", 5).contains(&"grey"));
+        assert!(suggest("clear", 5).contains(&"clear"));
+    }
+
+    #[test]
+    fn a_word_nothing_resembles_suggests_nothing() {
+        // Better to say "I don't know that colour" than to offer a wild guess.
+        assert!(suggest("zzzzzzzzzz", 5).is_empty());
+    }
+
+    #[test]
+    fn suggestions_are_stable_and_capped() {
+        assert_eq!(suggest("blu", 3), suggest("blu", 3));
+        assert!(suggest("dark", 3).len() <= 3);
+        // An empty query is a listing, not a failure: it gives a picker
+        // something to show before anything is typed.
+        assert_eq!(suggest("", 5).len(), 5);
+    }
+
+    #[test]
+    fn every_suggestion_resolves_to_a_real_colour() {
+        for query in ["red", "dark", "yelow", "grey", "bluish", ""] {
+            for name in suggest(query, 10) {
+                assert!(
+                    code_from_name(name).is_some(),
+                    "{query:?} suggested {name:?}, which does not resolve"
+                );
+            }
+        }
+    }
 
     #[test]
     fn resolves_well_known_codes() {

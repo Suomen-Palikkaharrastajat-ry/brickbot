@@ -44,7 +44,19 @@ DISCORD_TOKEN=your_token_here
 DATABASE_URL=sqlite:data/bot.db
 ZULIP_API_KEY=your_zulip_api_key_here
 POCKETBASE_IMPERSONATE_AUTH_TOKEN=your_pb_token_here
+REBRICKABLE_API_KEY=your_rebrickable_api_key_here
+BRICKSET_API_KEY=your_brickset_api_key_here
 ```
+
+`REBRICKABLE_API_KEY` (free, from <https://rebrickable.com/api/>) is what `/part`, the
+`/build` part picker and part autocomplete look parts up with. Without it every part lookup
+fails, and autocomplete falls back to the built-in catalogue of everyday sizes. `BRICKSET_API_KEY`
+is only used by `/set`.
+
+Part lookups are remembered in a separate SQLite database (`data/cache.db` by default), so
+suggestions get better the more the bot is used and survive a restart. It holds nothing that
+cannot be re-fetched: deleting the file is a clean rebuild. See `[parts_cache]` in
+`config.toml.example`.
 
 Create and configure your `config.toml` (or edit the existing one):
 ```toml

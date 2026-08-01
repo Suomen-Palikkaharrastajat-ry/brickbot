@@ -16,6 +16,7 @@
 #![allow(clippy::doc_markdown)]
 
 pub mod ast;
+pub mod block;
 pub mod lexer;
 pub mod parser;
 

@@ -206,6 +206,115 @@ impl Direction {
     }
 }
 
+/// The side a drawing is seen from.
+///
+/// A drawing is a 2D grid, so it needs to say which way it is facing before its
+/// columns and rows mean anything. The plan views (`Top`, `Bottom`) stack their
+/// blocks as layers; the elevations stack theirs as slices receding along the
+/// direction they are named for.
+///
+/// Like every other word of the build language, these names are **never
+/// translated** — a Finnish guild writes `Build from top:` too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum GridView {
+    Top,
+    Bottom,
+    North,
+    South,
+    East,
+    West,
+}
+
+impl GridView {
+    /// The word this view is written as, which is also what a drawing prints
+    /// itself back as.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::North => "north",
+            Self::South => "south",
+            Self::East => "east",
+            Self::West => "west",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(word: &str) -> Option<Self> {
+        match word.trim().to_lowercase().as_str() {
+            "top" | "plan" | "overhead" => Some(Self::Top),
+            "bottom" | "underside" => Some(Self::Bottom),
+            _ => Direction::parse(word).and_then(Self::from_direction),
+        }
+    }
+
+    /// The view a direction names, for the compass words that lex as a
+    /// [`Direction`] rather than a bare word.
+    #[must_use]
+    pub const fn from_direction(direction: Direction) -> Option<Self> {
+        Some(match direction {
+            Direction::North => Self::North,
+            Direction::South => Self::South,
+            Direction::East => Self::East,
+            Direction::West => Self::West,
+            Direction::Up => Self::Top,
+            Direction::Down => Self::Bottom,
+        })
+    }
+
+    /// True when this view looks at the model from the side, so its rows climb
+    /// rather than recede.
+    #[must_use]
+    pub const fn is_elevation(self) -> bool {
+        !matches!(self, Self::Top | Self::Bottom)
+    }
+
+    /// The direction the viewer is looking, which is also the way successive
+    /// slices of an elevation recede.
+    ///
+    /// Follows from *right × up = into the screen*: for the north view that is
+    /// `x̂ × -ŷ = -ẑ`, which is north.
+    #[must_use]
+    pub const fn into_screen(self) -> Direction {
+        match self {
+            Self::Top => Direction::Down,
+            Self::Bottom => Direction::Up,
+            Self::North => Direction::North,
+            Self::South => Direction::South,
+            Self::East => Direction::East,
+            Self::West => Direction::West,
+        }
+    }
+
+    /// The direction a drawing's columns run in, left to right.
+    #[must_use]
+    pub const fn column_direction(self) -> Direction {
+        match self {
+            // Looking down, east runs to the right and south runs down the
+            // page, which is how a plan view is drawn on paper.
+            Self::Top | Self::Bottom | Self::North => Direction::East,
+            Self::South => Direction::West,
+            Self::East => Direction::South,
+            Self::West => Direction::North,
+        }
+    }
+
+    /// The direction a drawing's rows run in, top to bottom.
+    ///
+    /// For an elevation that is always downward: the top of the drawing is the
+    /// top of the model.
+    #[must_use]
+    pub const fn row_direction(self) -> Direction {
+        match self {
+            Self::Top => Direction::South,
+            // Seen from underneath, the near edge is the far one.
+            Self::Bottom => Direction::North,
+            Self::North | Self::South | Self::East | Self::West => Direction::Down,
+        }
+    }
+}
+
 /// A part's orientation, as one of the four axis-aligned quarter turns about
 /// the vertical axis, optionally flipped upside down.
 ///
@@ -385,6 +494,78 @@ mod tests {
         }
         assert!(Direction::Up.is_vertical());
         assert!(!Direction::East.is_vertical());
+    }
+
+    const EVERY_VIEW: [GridView; 6] = [
+        GridView::Top,
+        GridView::Bottom,
+        GridView::North,
+        GridView::South,
+        GridView::East,
+        GridView::West,
+    ];
+
+    #[test]
+    fn every_view_parses_from_the_word_it_prints() {
+        // The round trip is what makes a printed drawing pasteable back.
+        for view in EVERY_VIEW {
+            assert_eq!(GridView::parse(view.as_str()), Some(view));
+        }
+        assert_eq!(GridView::parse("plan"), Some(GridView::Top));
+        assert_eq!(GridView::parse("underside"), Some(GridView::Bottom));
+        // The compass words come through Direction, so its synonyms work too.
+        assert_eq!(GridView::parse("above"), Some(GridView::Top));
+        assert_eq!(GridView::parse("below"), Some(GridView::Bottom));
+        assert_eq!(GridView::parse("front"), Some(GridView::South));
+        assert_eq!(GridView::parse("sideways"), None);
+    }
+
+    #[test]
+    fn views_know_which_way_their_columns_and_rows_run() {
+        // A plan view is drawn the way it is on paper: east to the right,
+        // south down the page.
+        assert_eq!(GridView::Top.column_direction(), Direction::East);
+        assert_eq!(GridView::Top.row_direction(), Direction::South);
+        // Seen from underneath, the near edge is the far one.
+        assert_eq!(GridView::Bottom.row_direction(), Direction::North);
+
+        // Every elevation puts the top of the model at the top of the drawing.
+        for view in EVERY_VIEW.iter().filter(|v| v.is_elevation()) {
+            assert_eq!(view.row_direction(), Direction::Down);
+            assert!(!view.column_direction().is_vertical());
+        }
+        assert!(!GridView::Top.is_elevation());
+        assert!(!GridView::Bottom.is_elevation());
+    }
+
+    #[test]
+    fn opposite_views_run_their_columns_opposite_ways() {
+        // Walking round the model reverses what is on your left.
+        assert_eq!(
+            GridView::North.column_direction().opposite(),
+            GridView::South.column_direction()
+        );
+        assert_eq!(
+            GridView::East.column_direction().opposite(),
+            GridView::West.column_direction()
+        );
+    }
+
+    #[test]
+    fn a_views_axes_are_right_handed() {
+        // right x up = into the screen, which is what fixes every sign in the
+        // coordinate mapping. `up` is the row direction reversed.
+        for view in EVERY_VIEW {
+            let right = view.column_direction().step();
+            let up = view.row_direction().opposite().step();
+            let into = view.into_screen().step();
+            let cross = IVec3::new(
+                right.y * up.z - right.z * up.y,
+                right.z * up.x - right.x * up.z,
+                right.x * up.y - right.y * up.x,
+            );
+            assert_eq!(cross, into, "{} is left-handed", view.as_str());
+        }
     }
 
     #[test]

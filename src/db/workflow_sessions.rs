@@ -26,6 +26,57 @@ pub async fn create_workflow_session(
     Ok(session_id)
 }
 
+/// The newest live session of a kind, for one person in one channel.
+///
+/// Every other accessor here starts from a session id, which a slash command
+/// does not have: `/build-legend` knows only who ran it and where. Returns the
+/// id alongside the payload, because the caller needs it to write back.
+///
+/// Newest first because a person may briefly hold more than one — the ordering
+/// keeps that from being ambiguous even when it happens.
+pub async fn find_latest_workflow_session(
+    db: &SqlitePool,
+    kind: &str,
+    owner_user_id: &str,
+    channel_id: &str,
+) -> Result<Option<(String, Value)>, sqlx::Error> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT id, payload_json FROM workflow_sessions
+         WHERE kind = ? AND owner_user_id = ? AND channel_id = ?
+           AND consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+         ORDER BY created_at DESC, rowid DESC
+         LIMIT 1",
+    )
+    .bind(kind)
+    .bind(owner_user_id)
+    .bind(channel_id)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.map(|(id, payload)| (id, serde_json::from_str(&payload).unwrap_or(Value::Null))))
+}
+
+/// Marks a session finished, so it stops being found.
+///
+/// Distinct from letting it expire: a draft that has been applied or discarded
+/// is over, and leaving it live would make the *next* lookup return something
+/// the builder has already dealt with.
+pub async fn consume_workflow_session(
+    db: &SqlitePool,
+    session_id: &str,
+    owner_user_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE workflow_sessions SET consumed_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND owner_user_id = ? AND consumed_at IS NULL",
+    )
+    .bind(session_id)
+    .bind(owner_user_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 pub async fn update_workflow_session_payload(
     db: &SqlitePool,
     session_id: &str,
@@ -205,5 +256,117 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fetched_wrong_user, None);
+    }
+
+    /// Opens a session and returns its id.
+    async fn open(db: &SqlitePool, kind: &str, user: &str, channel: &str) -> String {
+        create_workflow_session(
+            db,
+            kind,
+            user,
+            "guild1",
+            channel,
+            serde_json::json!({ "at": channel }),
+            15,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_session_is_found_by_who_opened_it_and_where() {
+        // What a slash command has to work from: it knows the person and the
+        // channel, never a session id.
+        let db = setup_db().await;
+        let id = open(&db, "build_draft", "user1", "chan1").await;
+
+        let found = find_latest_workflow_session(&db, "build_draft", "user1", "chan1")
+            .await
+            .unwrap();
+        assert_eq!(found.map(|(id, _)| id), Some(id));
+    }
+
+    #[tokio::test]
+    async fn a_session_belonging_to_someone_else_or_elsewhere_is_not_found() {
+        // A draft is private, and a build thread is shared, so both halves of
+        // the key have to be honoured.
+        let db = setup_db().await;
+        open(&db, "build_draft", "user1", "chan1").await;
+
+        for (kind, user, channel) in [
+            ("build_draft", "user2", "chan1"),
+            ("build_draft", "user1", "chan2"),
+            ("submit_event", "user1", "chan1"),
+        ] {
+            assert!(
+                find_latest_workflow_session(&db, kind, user, channel)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "({kind}, {user}, {channel}) should not have matched"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_newest_session_wins_when_someone_holds_more_than_one() {
+        let db = setup_db().await;
+        open(&db, "build_draft", "user1", "chan1").await;
+        let second = open(&db, "build_draft", "user1", "chan1").await;
+
+        let found = find_latest_workflow_session(&db, "build_draft", "user1", "chan1")
+            .await
+            .unwrap();
+        assert_eq!(found.map(|(id, _)| id), Some(second));
+    }
+
+    #[tokio::test]
+    async fn a_consumed_session_stops_being_found() {
+        // What makes discarding or applying a draft final, rather than leaving
+        // it to be picked up again by the next command.
+        let db = setup_db().await;
+        let id = open(&db, "build_draft", "user1", "chan1").await;
+
+        consume_workflow_session(&db, &id, "user1").await.unwrap();
+        assert!(
+            find_latest_workflow_session(&db, "build_draft", "user1", "chan1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // And it can no longer be read or written by id either.
+        assert!(
+            get_workflow_session_payload(&db, &id, "user1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_owner_can_consume_a_session() {
+        let db = setup_db().await;
+        let id = open(&db, "build_draft", "user1", "chan1").await;
+
+        consume_workflow_session(&db, &id, "user2").await.unwrap();
+        assert!(
+            find_latest_workflow_session(&db, "build_draft", "user1", "chan1")
+                .await
+                .unwrap()
+                .is_some(),
+            "someone else's consume must not close it"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_payload_comes_back_with_the_id() {
+        let db = setup_db().await;
+        open(&db, "build_draft", "user1", "chan1").await;
+
+        let (_, payload) = find_latest_workflow_session(&db, "build_draft", "user1", "chan1")
+            .await
+            .unwrap()
+            .expect("a session");
+        assert_eq!(payload, serde_json::json!({ "at": "chan1" }));
     }
 }

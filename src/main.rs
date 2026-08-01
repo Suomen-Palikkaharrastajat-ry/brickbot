@@ -16,6 +16,7 @@ pub mod ldraw;
 mod links;
 pub mod math;
 mod notifications;
+pub mod parts_cache;
 mod pocketbase;
 pub mod render;
 mod rss;
@@ -48,12 +49,20 @@ struct Cli {
         help = "Download the LDraw part library into the configured data directory and exit"
     )]
     fetch_ldraw: bool,
+
+    #[arg(
+        long,
+        help = "Append a JSONL trace of every /build thread message and how BrickTalk resolved \
+                it, for offline grammar tuning. Off by default."
+    )]
+    build_debug_log: Option<String>,
 }
 
 struct Handler {
     config: Config,
     pool: SqlitePool,
     user_cooldowns: moka::future::Cache<String, ()>,
+    build_debug_log: Option<std::sync::Arc<crate::build::debug_log::BuildDebugLog>>,
 }
 
 pub struct ConfigData;
@@ -69,6 +78,15 @@ impl TypeMapKey for DbData {
 pub struct HttpData;
 impl TypeMapKey for HttpData {
     type Value = std::sync::Arc<dyn crate::http::HttpProvider>;
+}
+
+/// The sticky part cache, in its own database.
+///
+/// Absent when it could not be opened or was switched off, in which case
+/// autocomplete falls back to the built-in catalogue rather than failing.
+pub struct PartsCacheData;
+impl TypeMapKey for PartsCacheData {
+    type Value = Option<std::sync::Arc<crate::parts_cache::PartCache>>;
 }
 
 pub struct SyncMutexData;
@@ -119,6 +137,9 @@ fn build_guild_commands(
     }
     if cmds.build.enabled {
         commands.push(crate::commands::build::build_build_command(locale));
+        // Part of drafting rather than a separable feature, so it rides on the
+        // same flag.
+        commands.push(crate::commands::build::build_legend_command(locale));
     }
 
     commands
@@ -221,6 +242,7 @@ impl EventHandler for Handler {
                     &self.pool,
                     &self.config,
                     &msg,
+                    self.build_debug_log.as_deref(),
                 )
                 .await
                 {
@@ -514,7 +536,14 @@ impl EventHandler for Handler {
                             }
                             crate::ambient::Topic::LegoPart => {
                                 let http = crate::http::HttpClient::new();
-                                if let Ok(part) = crate::brick::fetch_part(
+                                // Through the sticky cache, so even a part
+                                // merely mentioned in chat is remembered.
+                                let cache = {
+                                    let data = ctx.data.read().await;
+                                    data.get::<PartsCacheData>().cloned().unwrap_or_default()
+                                };
+                                if let Ok(part) = crate::parts_cache::warm::detail(
+                                    cache.as_deref(),
                                     &http,
                                     id,
                                     self.config.resource_limits.max_http_body_bytes,
@@ -700,9 +729,98 @@ impl EventHandler for Handler {
                     tracing::error!("Error handling build command: {}", e);
                 }
             }
+            // Must sit before the autocomplete arm, or it never fires. The
+            // name is exact, so it cannot collide with `build` above.
+            Interaction::Command(command)
+                if (command.data.name.as_str() == "build-legend"
+                    || command.data.name.as_str() == "selite")
+                    && self
+                        .config
+                        .commands_for(command.guild_id.unwrap_or_default().get())
+                        .build
+                        .enabled =>
+            {
+                let app_ctx = crate::workflows::AppContext::from_serenity_ctx(&ctx).await;
+                if let Err(e) =
+                    crate::build::session::handle_legend_command(&ctx, &app_ctx, &command).await
+                {
+                    tracing::error!("Error handling build-legend command: {}", e);
+                }
+            }
+            Interaction::Autocomplete(autocomplete) => {
+                if let Err(e) = handle_autocomplete(&ctx, &autocomplete).await {
+                    tracing::error!("Error handling autocomplete: {}", e);
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// Answers a typed-ahead suggestion request.
+///
+/// Discord gives three seconds and no defer, so this **never** waits for the
+/// network: colours come from the compiled-in palette, parts from the
+/// catalogue plus whatever the sticky cache already knows. A query the cache
+/// has not seen starts a background fetch and is answered with what is on
+/// hand, so the next keystroke is better than this one.
+async fn handle_autocomplete(
+    ctx: &Context,
+    interaction: &serenity::all::CommandInteraction,
+) -> anyhow::Result<()> {
+    use crate::commands::autocomplete;
+
+    let Some(focused) = interaction.data.autocomplete() else {
+        return Ok(());
+    };
+
+    let choices = match focused.name {
+        "colour" | "color" | "vari" => autocomplete::colour_choices(focused.value),
+        // `/part`'s own argument, under each locale's name for it.
+        "part" | "osa" | "query" | "haku" => {
+            let (cache, config) = {
+                let data = ctx.data.read().await;
+                (
+                    data.get::<PartsCacheData>().cloned().unwrap_or_default(),
+                    data.get::<ConfigData>().cloned(),
+                )
+            };
+
+            let cached = match &cache {
+                Some(cache) => cache.matches(focused.value, 25).await.unwrap_or_default(),
+                None => Vec::new(),
+            };
+            let choices = autocomplete::part_choices(focused.value, &cached);
+
+            // Fill the cache for next time. Returns immediately; the guards
+            // inside stop a burst of keystrokes becoming a burst of requests.
+            if let (Some(cache), Some(config)) = (cache, config) {
+                crate::parts_cache::warm::spawn_warm(
+                    cache,
+                    std::sync::Arc::new(crate::http::HttpClient::new()),
+                    focused.value.to_string(),
+                    &config.parts_cache,
+                    config.resource_limits.max_http_body_bytes,
+                );
+            }
+            choices
+        }
+        // An option we do not suggest for still needs an answer, or the
+        // client shows an error rather than simply nothing.
+        _ => Vec::new(),
+    };
+
+    let mut response = serenity::all::CreateAutocompleteResponse::new();
+    for choice in choices {
+        response = response.add_string_choice(choice.name, choice.value);
+    }
+    interaction
+        .create_response(
+            &ctx.http,
+            serenity::all::CreateInteractionResponse::Autocomplete(response),
+        )
+        .await?;
+    Ok(())
 }
 
 /// Installs the `LDraw` part library and exits.
@@ -727,6 +845,82 @@ async fn install_ldraw_library(config: &Config) -> ! {
             std::process::exit(1);
         }
     }
+}
+
+/// Opens the `--build-debug-log` file, if one was requested.
+///
+/// A bad path is a startup misconfiguration, not a reason to run without the
+/// trace the operator explicitly asked for, so it exits rather than warns.
+async fn open_build_debug_log(
+    path: Option<&str>,
+) -> Option<std::sync::Arc<crate::build::debug_log::BuildDebugLog>> {
+    let path = path?;
+    match crate::build::debug_log::BuildDebugLog::open(path).await {
+        Ok(log) => {
+            tracing::info!("Logging /build debug trace to {}", path);
+            Some(std::sync::Arc::new(log))
+        }
+        Err(e) => {
+            tracing::error!("Failed to open --build-debug-log {}: {}", path, e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Opens the sticky part cache, or explains why there is none.
+///
+/// A cache that will not open is a degradation, not a failure: autocomplete
+/// falls back to the built-in catalogue and every lookup goes to the network
+/// as it does today. Saying so once at startup is what stops that being a
+/// mystery later.
+async fn open_parts_cache(
+    config: &Config,
+) -> Option<std::sync::Arc<crate::parts_cache::PartCache>> {
+    if !config.parts_cache.enabled {
+        tracing::info!("Part cache disabled; autocomplete will use the built-in catalogue only.");
+        return None;
+    }
+    let ttl = crate::parts_cache::Ttl {
+        search_days: config.parts_cache.search_ttl_days,
+        miss_mins: config.parts_cache.miss_ttl_mins,
+    };
+    match crate::parts_cache::PartCache::open(&config.parts_cache.path, ttl).await {
+        Ok(cache) => {
+            let known = cache.len().await.unwrap_or(0);
+            tracing::info!(
+                "Part cache open at {} ({known} part(s) known).",
+                config.parts_cache.path
+            );
+            Some(std::sync::Arc::new(cache))
+        }
+        Err(e) => {
+            tracing::error!(
+                "Could not open the part cache at {}: {e}. Falling back to the built-in \
+                 catalogue; part lookups will not be remembered.",
+                config.parts_cache.path
+            );
+            None
+        }
+    }
+}
+
+/// Drops expired searches from the part cache once a day.
+///
+/// Only searches expire. The parts themselves are the index that makes
+/// autocomplete instant and are never swept — that is the whole point of a
+/// cache that gets better the longer it runs.
+fn spawn_part_cache_sweep(cache: Option<std::sync::Arc<crate::parts_cache::PartCache>>) {
+    let Some(cache) = cache else {
+        return;
+    };
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = cache.sweep().await {
+                tracing::error!("Failed to sweep the part cache: {e}");
+            }
+            tokio::time::sleep(std::time::Duration::from_hours(24)).await;
+        }
+    });
 }
 
 async fn setup_database(database_url: &str) -> anyhow::Result<SqlitePool> {
@@ -844,6 +1038,8 @@ async fn main() -> anyhow::Result<()> {
 
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
+    let build_debug_log = open_build_debug_log(cli.build_debug_log.as_deref()).await;
+
     crate::http::init_cache(config.cache_ttl_secs.unwrap_or(600), 50 * 1024 * 1024);
 
     let intents = GatewayIntents::GUILDS
@@ -885,6 +1081,7 @@ async fn main() -> anyhow::Result<()> {
             user_cooldowns: moka::future::Cache::builder()
                 .time_to_idle(std::time::Duration::from_hours(2))
                 .build(),
+            build_debug_log,
         })
         .await?;
 
@@ -893,12 +1090,15 @@ async fn main() -> anyhow::Result<()> {
 
     let sync_mutex = std::sync::Arc::new(tokio::sync::Mutex::new(()));
 
+    let parts_cache = open_parts_cache(&config).await;
+
     {
         let mut data = client.data.write().await;
         data.insert::<ConfigData>(std::sync::Arc::new(config.clone()));
         data.insert::<DbData>(pool.clone());
         data.insert::<HttpData>(http_client.clone());
         data.insert::<SyncMutexData>(sync_mutex.clone());
+        data.insert::<PartsCacheData>(parts_cache.clone());
         // One library for the whole process, so its parsed-file and mesh
         // caches are shared rather than rebuilt per render.
         data.insert::<LdrawData>(std::sync::Arc::new(
@@ -911,6 +1111,8 @@ async fn main() -> anyhow::Result<()> {
             ),
         ));
     }
+
+    spawn_part_cache_sweep(parts_cache.clone());
 
     let http = client.http.clone();
     let data = client.data.clone();

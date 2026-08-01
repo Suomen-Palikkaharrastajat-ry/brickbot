@@ -12,7 +12,7 @@ run:      ## Run the bot locally
 
 watch:    ## Watch for changes and run the bot locally
 	mkdir -p data
-	cargo watch -x 'run --bin brickbot'
+	cargo watch -x 'run --bin brickbot -- --build-debug-log data/build-debug.log'
 
 fetch-ldraw: ## Download the LDraw part library into the configured data directory
 	mkdir -p data

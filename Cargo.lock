@@ -226,6 +226,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "futures-util",
+ "levenshtein",
  "mockall",
  "moka",
  "opml",

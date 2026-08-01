@@ -11,9 +11,10 @@
 #![allow(clippy::doc_markdown)]
 
 use super::dsl::ast::{
-    Command, ExtentAxis, Location, Modifier, ObjectExpr, PartSpec, Place, Ref, Structure,
+    Command, ExtentAxis, GridSpec, Location, Modifier, ObjectExpr, PartSpec, Place, Ref, Structure,
 };
 use super::dsl::lexer::Verb;
+use super::grid::{GridError, LegendPart};
 use super::model::{Model, PartKind, PartRef, PlacementId};
 use super::ops::{Op, Repeat, SelectPredicate};
 use super::parts::{self, Resolution};
@@ -34,6 +35,9 @@ pub enum LowerError {
     NeedsPartLookup { query: String, kind: PartKind },
     /// The command is understood but cannot be carried out as written.
     Unsupported(Unsupported),
+    /// A drawing that could not be read. Carries data, which is why it is here
+    /// rather than in the data-free [`Unsupported`] set.
+    Grid(GridError),
 }
 
 /// What exactly the interpreter could not do.
@@ -88,6 +92,7 @@ impl std::fmt::Display for LowerError {
             Self::UnknownStructure(name) => write!(f, "I don't know how to build a {name}"),
             Self::NeedsPartLookup { query, .. } => write!(f, "I need to look up '{query}'"),
             Self::Unsupported(what) => write!(f, "I can't do {what:?} yet"),
+            Self::Grid(error) => write!(f, "I can't read that drawing: {error:?}"),
         }
     }
 }
@@ -97,6 +102,20 @@ impl std::fmt::Display for LowerError {
 /// `Build a floor 200 by 200` is a typo, not a request, and expanding it
 /// would lock up the renderer.
 pub const MAX_PLACEMENTS_PER_COMMAND: u32 = 400;
+
+/// Caps a placement count and reports when the cap bites, so the caller can
+/// tell the builder rather than silently building something smaller.
+///
+/// Lives beside the limit it enforces; both structures and drawings use it.
+pub const fn checked_total(total: u32) -> Result<u32, LowerError> {
+    if total > MAX_PLACEMENTS_PER_COMMAND {
+        return Err(LowerError::Unsupported(Unsupported::TooLarge {
+            total,
+            limit: MAX_PLACEMENTS_PER_COMMAND,
+        }));
+    }
+    Ok(total)
+}
 
 /// Resolves a reference to the placements it names.
 pub fn resolve_ref(model: &Model, reference: &Ref) -> Result<Vec<PlacementId>, LowerError> {
@@ -440,6 +459,9 @@ pub fn lower_command_with(
         }
 
         Verb::Build | Verb::Fill => {
+            if let ObjectExpr::Grid(spec) = &command.object {
+                return lower_grid(model, command, spec, chosen);
+            }
             let ObjectExpr::Structure(structure) = &command.object else {
                 return Err(LowerError::Unsupported(Unsupported::That));
             };
@@ -454,6 +476,76 @@ pub fn lower_command_with(
 
 /// The colour used when a sentence names no colour.
 pub const DEFAULT_COLOR: u16 = 71;
+
+/// The group a drawing's parts belong to, so the whole thing can be referred
+/// to afterwards — `Paint the grid dark tan.`
+const GRID_GROUP: &str = "grid";
+
+/// Resolves a drawing's legend into real elements, in the order written.
+///
+/// Written order matters: it decides which entry a pending part choice
+/// answers, so the whole expansion stays reproducible.
+fn resolve_legend(
+    spec: &GridSpec,
+    chosen: Option<&PartRef>,
+) -> Result<Vec<LegendPart>, LowerError> {
+    if let Some(text) = &spec.bad_legend_key {
+        return Err(LowerError::Grid(GridError::LegendSymbolNotSingleChar {
+            text: text.clone(),
+        }));
+    }
+
+    // The dropdown can only answer one question at a time, and a replayed
+    // sentence hands its answer to whichever entry asks first — so a second
+    // unknown part would pause forever, resolving the first one again. Say so
+    // up front instead.
+    let unknown = spec
+        .legend
+        .iter()
+        .filter(|entry| matches!(parts::resolve(&entry.spec), Resolution::NeedsLookup { .. }))
+        .count();
+    if unknown > 1 {
+        return Err(LowerError::Grid(GridError::ManyUnknownParts));
+    }
+
+    let mut resolved = Vec::with_capacity(spec.legend.len());
+    for entry in &spec.legend {
+        resolved.push(LegendPart {
+            symbol: entry.symbol,
+            part: resolve_part(&entry.spec, chosen)?,
+            color: entry.spec.color.unwrap_or(DEFAULT_COLOR),
+        });
+    }
+    Ok(resolved)
+}
+
+/// Lays a drawing out into one operation.
+///
+/// The whole drawing is a single [`Op::AddMany`], so it is one undo step while
+/// every part in it still gets its own stable id — exactly how a wall behaves.
+fn lower_grid(
+    model: &Model,
+    command: &Command,
+    spec: &GridSpec,
+    chosen: Option<&PartRef>,
+) -> Result<Vec<Op>, LowerError> {
+    let legend = resolve_legend(spec, chosen)?;
+
+    // `resolve_location` measures `under` against the part being placed; the
+    // first of the drawing's own parts is the honest thing to measure with.
+    let representative = legend
+        .first()
+        .map_or_else(parts::default_part, |entry| entry.part.clone());
+    let anchor = resolve_location(model, command.location.as_ref(), &representative)?;
+
+    let placements = super::grid::expand(spec, &legend, anchor).map_err(LowerError::Grid)?;
+    checked_total(u32::try_from(placements.len()).unwrap_or(u32::MAX))?;
+
+    Ok(vec![Op::AddMany {
+        placements,
+        group: Some(GRID_GROUP.to_string()),
+    }])
+}
 
 /// Resolves the placements a command acts on, defaulting to the last
 /// referenced thing.

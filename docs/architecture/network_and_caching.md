@@ -27,6 +27,42 @@ The `HttpClient` currently caches the following operations:
 - `get_json_with_auth`: Fetches and deserializes JSON payloads using a Bearer token.
 - `post_form_json`: Submits a form payload and caches the response.
 
+> **Stale:** the method names in this section predate the current `HttpProvider` trait — see `src/http.rs` for the real surface. The behaviour described is still accurate.
+
+## The Sticky Part Cache (`src/parts_cache/`)
+
+The `moka` cache above is deliberately short-lived, in-memory, and keyed on the *request*: its key includes a `DefaultHasher` of the auth header, which is randomly seeded per process. It cannot be persisted, and it is empty after every restart.
+
+Part lookups need the opposite. Discord fires slash-command autocomplete on **every keystroke** with a three-second deadline and no defer, so the network can never be on that path — and we cannot ship a comprehensive LEGO catalogue. So part lookups are cached durably, keyed on the *query*, in a second SQLite database.
+
+### A separate database
+
+`data/cache.db`, its own pool, its own `migrations_cache/` directory applied with an explicit `sqlx::migrate!("./migrations_cache")`. Pointing the cache pool at `./migrations` would create the entire bot schema inside the cache file.
+
+It is separate from `data/bot.db` because everything in it is derived and disposable: deleting the file is a clean rebuild, backups of real state stay small, and it can run `journal_mode=WAL` with `synchronous=NORMAL`, which would be the wrong trade for session data.
+
+### Two tables, two volatilities
+
+| Table | Key | Expiry |
+|---|---|---|
+| `part_details` | `part_num` | **never** — a 2x4 brick's number and name do not change |
+| `part_searches` | normalised query | 30 days for a hit, **1 hour** when the search found nothing |
+
+The negative entry matters: without it a typo would re-ask the API on every keystroke.
+
+### Two lookup paths
+
+- `PartCache::lookup` replays a query someone has run before.
+- `PartCache::matches` prefix- and substring-matches over `part_details.name`, answering queries *nobody has typed before* as long as the part has been seen. Typing `wind` finds `Windscreen 3 x 4 x 1.3` because an unrelated earlier search cached it, so the index ends up better than the sum of the queries put into it.
+
+### Filling it
+
+`parts_cache::warm::{search, detail}` are read-through wrappers around the Rebrickable calls, and **every** part lookup goes through them — `/part`, the `/build` part picker, and the ambient assistant. Ordinary use of the bot is therefore what warms the index that makes autocomplete good.
+
+`parts_cache::warm::spawn_warm` fills it in the background for autocomplete, which answers from what it already has. Three guards, because autocomplete fires per keystroke: in-flight de-duplication (one fetch per query however fast someone types), a three-character minimum, and a timeout plus a concurrency semaphore. The timeout is not optional — `src/http.rs` has no timeout, retry or rate limiting of its own.
+
+Expired searches are swept daily alongside `cleanup_expired_rows`; part records are never swept.
+
 ### Bypassing the Cache
 For operations where fresh data is strictly required, the client provides un-cached variants like `get_bytes_no_cache` and `get_text_no_cache`. These methods execute the network request directly and then insert the fresh result into the cache.
 

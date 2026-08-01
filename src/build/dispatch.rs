@@ -435,7 +435,7 @@ fn apply_meta(
             outcome.needs_render = true;
             outcome.applied();
         }
-        Meta::Help => outcome.replies.push(report::help_text(locale)),
+        Meta::Help(topic) => outcome.replies.push(report::help_text(*topic, locale)),
         Meta::Finish => {
             outcome.finished = true;
             outcome.applied();
@@ -445,11 +445,15 @@ fn apply_meta(
 }
 
 /// Recovers the nth sentence of a message, for retrying after a part lookup.
+///
+/// Goes back through the lexer rather than re-splitting the text by hand, so a
+/// sentence carrying a drawing is recovered with its fence attached — without
+/// it, `Build from top:` on its own means nothing when it is replayed.
 fn nth_sentence(text: &str, index: usize) -> String {
-    super::dsl::lexer::split_sentences(&super::dsl::lexer::strip_discord_noise(text))
+    super::dsl::lexer::tokenize(text)
         .into_iter()
         .nth(index)
-        .unwrap_or_else(|| text.trim().to_string())
+        .map_or_else(|| text.trim().to_string(), |s| s.replay_text())
 }
 
 #[cfg(test)]
@@ -534,7 +538,7 @@ mod tests {
         assert_eq!(outcome.ops.len(), 1);
         assert_eq!(outcome.ops_start, Some(2));
 
-        let mut applied = history.clone();
+        let mut applied = history;
         applied.cursor = outcome.ops_start.unwrap();
         for op in outcome.ops {
             applied.push(op, "111");
@@ -980,6 +984,23 @@ mod tests {
     }
 
     #[test]
+    fn help_for_a_verb_answers_with_that_verbs_own_text() {
+        let general = interpret(&empty(), "Help.", "en-US");
+        let select = interpret(&empty(), "Help select.", "en-US");
+        assert_eq!(select.replies.len(), 1);
+        assert_ne!(
+            select.replies[0], general.replies[0],
+            "a topic should not just repeat the general help"
+        );
+        assert!(select.replies[0].to_lowercase().contains("select"));
+
+        // An unrecognised or synonym-only topic falls back to the general
+        // text rather than erroring.
+        let unknown = interpret(&empty(), "Help wobble.", "en-US");
+        assert!(unknown.reactions.is_empty(), "got: {unknown:?}");
+    }
+
+    #[test]
     fn a_query_answers_without_changing_anything() {
         let history = run(&["Add a red 2x4 brick at origin.", "Add a blue 2x4 brick."]);
         let outcome = interpret(&history, "How tall is it?", "en-US");
@@ -1063,6 +1084,190 @@ mod tests {
         assert_eq!(nth_sentence(text, 0), "Add a brick");
         assert_eq!(nth_sentence(text, 1), "Add a 3x12 brick");
         assert_eq!(nth_sentence(text, 9), text.trim());
+    }
+
+    // --- Drawings ----------------------------------------------------------
+
+    /// The drawing from the docs: two blue bricks over a red pair, seen from
+    /// above.
+    const DRAWING: &str = "Build from top at origin:\n\
+        ```\n\
+        b = blue 1x1 brick\n\
+        r = red 1x1 brick\n\
+        \n\
+        .bb.\n\
+        rbbr\n\
+        ```";
+
+    #[test]
+    fn a_drawing_in_a_code_block_builds_the_model() {
+        let outcome = interpret(&empty(), DRAWING, "en-US");
+        assert!(
+            outcome.reactions.contains(&reactions::APPLIED),
+            "got: {outcome:?}"
+        );
+        assert!(outcome.needs_render);
+
+        // One operation, so one undo step — exactly as a wall behaves.
+        assert_eq!(outcome.ops.len(), 1);
+        let mut history = empty();
+        for op in outcome.ops {
+            history.push(op, "111");
+        }
+        let model = history.materialize();
+        assert_eq!(model.len(), 6, "four blue and two red");
+        assert_eq!(model.count_matching(|p| p.color == 1), 4);
+        assert_eq!(model.count_matching(|p| p.color == 4), 2);
+        // And every part is individually addressable afterwards.
+        let ids: std::collections::BTreeSet<_> = model.placements.iter().map(|p| p.id).collect();
+        assert_eq!(ids.len(), 6);
+    }
+
+    #[test]
+    fn a_drawing_is_one_undo_step() {
+        let history = run(&[DRAWING]);
+        assert_eq!(history.materialize().len(), 6);
+        let after = run(&[DRAWING, "Undo."]);
+        assert!(after.materialize().is_empty());
+    }
+
+    #[test]
+    fn a_code_block_with_no_header_sentence_is_ignored() {
+        // A pasted code sample is not a command, and a build thread has to
+        // stay usable for talking.
+        let outcome = interpret(&empty(), "```\n.bb.\nrbbr\n```", "en-US");
+        assert!(outcome.is_silent(), "got: {outcome:?}");
+    }
+
+    #[test]
+    fn chat_around_a_drawing_only_acts_on_the_drawing() {
+        let text = format!("here's my idea\n{DRAWING}\nwhat do you reckon?");
+        let outcome = interpret(&empty(), &text, "en-US");
+        assert_eq!(outcome.ops.len(), 1);
+        assert!(outcome.reactions.contains(&reactions::APPLIED));
+    }
+
+    #[test]
+    fn a_grid_that_cannot_be_read_is_reported_not_ignored() {
+        // A drawing opens with a verb, so its problems are worth reporting —
+        // unlike a question, which falls back to silence.
+        for (text, hint) in [
+            ("Build from top:\n```\nb = blue 1x1 brick\n\n.bz.\n```", "z"),
+            (
+                "Build from top:\n```\nb = blue 1x1 brick\n\nbbb\nbb\n```",
+                "wide",
+            ),
+        ] {
+            let outcome = interpret(&empty(), text, "en-US");
+            assert!(outcome.ops.is_empty(), "nothing should be placed: {text}");
+            assert!(outcome.reactions.contains(&reactions::PROBLEM));
+            assert_eq!(outcome.replies.len(), 1);
+            assert!(
+                outcome.replies[0].contains(hint),
+                "expected {hint:?} in: {}",
+                outcome.replies[0]
+            );
+        }
+    }
+
+    #[test]
+    fn a_drawing_needing_one_part_lookup_pauses_with_its_block_intact() {
+        // 1x7 is not in the built-in catalogue, so it has to be looked up.
+        let text = "Build from top:\n```\nq = 1x7 brick\n\nqqqqqqq\n```";
+        let outcome = interpret(&empty(), text, "en-US");
+
+        let pending = outcome
+            .pending_lookup
+            .as_ref()
+            .expect("an unknown part should pause");
+        // The parked sentence must carry the whole drawing, or replaying it
+        // would be a header with nothing to build from.
+        assert!(pending.sentence.contains("q = 1x7 brick"));
+        assert!(pending.sentence.contains("qqqqqqq"));
+
+        // And the replay, with a part chosen, finishes the drawing.
+        let chosen = crate::build::PartRef::new("3008", "Brick 1 x 7", (1, 7), PartKind::Brick);
+        let resumed = process_message_with_part(
+            &empty(),
+            &pending.sentence,
+            "en-US",
+            &builders(),
+            "111",
+            &chosen,
+        );
+        assert_eq!(resumed.ops.len(), 1);
+        let mut history = empty();
+        for op in resumed.ops {
+            history.push(op, "111");
+        }
+        assert_eq!(history.materialize().len(), 1, "one 1x7 brick");
+    }
+
+    #[test]
+    fn two_unknown_legend_parts_are_refused_rather_than_looping() {
+        // The dropdown answers one question, and a replay hands its answer to
+        // whichever entry asks first — so a second would resolve the wrong one
+        // forever.
+        let text = "Build from top:\n```\nq = 1x7 brick\nz = 1x9 plate\n\nqz\n```";
+        let outcome = interpret(&empty(), text, "en-US");
+        assert!(outcome.pending_lookup.is_none());
+        assert!(outcome.reactions.contains(&reactions::PROBLEM));
+    }
+
+    #[test]
+    fn a_drawing_survives_a_round_trip_through_the_view() {
+        // The headline: what the bot prints back must rebuild the same model.
+        let history = run(&[DRAWING]);
+        let model = history.materialize();
+
+        let drawn =
+            crate::build::textview::render(&model, crate::build::units::GridView::Top, None)
+                .expect("a model should draw");
+        let block = crate::build::textview::to_block(&drawn);
+
+        let rebuilt = run(&[&block]);
+        assert_eq!(
+            rebuilt.materialize().placements.len(),
+            model.placements.len(),
+            "round trip changed the part count\n{block}"
+        );
+        // Same parts, same colours, same places.
+        let describe = |m: &crate::build::Model| {
+            let mut rows: Vec<_> = m
+                .placements
+                .iter()
+                .map(|p| (p.part.ldraw_id.clone(), p.color, p.pos))
+                .collect();
+            rows.sort();
+            rows
+        };
+        assert_eq!(
+            describe(&rebuilt.materialize()),
+            describe(&model),
+            "round trip moved something\n{block}"
+        );
+    }
+
+    #[test]
+    fn nth_sentence_carries_the_block_it_was_written_with() {
+        // What gets parked when a drawing pauses on an unknown part. Without
+        // the fence the replayed sentence would be a header with nothing to
+        // build from.
+        let text = "Build from top:\n```\nb = blue 1x1 brick\n\n..bb..\n```";
+        let parked = nth_sentence(text, 0);
+        assert!(parked.starts_with("Build from top:"));
+        assert!(parked.contains("b = blue 1x1 brick"));
+        assert!(parked.contains("..bb.."));
+        // And it must mean the same thing when it comes back through.
+        assert_eq!(nth_sentence(&parked, 0), parked);
+    }
+
+    #[test]
+    fn a_fence_does_not_shift_the_sentences_after_it() {
+        // Sentence indices are what `pending_lookup` is recorded against, so a
+        // captured block must not count as one.
+        let text = "Build from top:\n```\nbb\n```\nUndo.";
+        assert_eq!(nth_sentence(text, 1), "Undo");
     }
     #[test]
     fn ordinary_chat_is_recognised_without_a_model() {

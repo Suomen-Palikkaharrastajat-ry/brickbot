@@ -9,7 +9,7 @@
 
 use super::lexer::Verb;
 use crate::build::model::PartKind;
-use crate::build::units::{Direction, IVec3, Unit};
+use crate::build::units::{Direction, GridView, IVec3, Unit};
 
 /// A part as described in a sentence, before it has been resolved to a real
 /// element.
@@ -125,6 +125,37 @@ pub enum ExtentAxis {
     Depth,
 }
 
+/// One symbol of a drawing's legend, e.g. `b = blue 1x1 brick`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegendEntry {
+    pub symbol: char,
+    pub spec: PartSpec,
+}
+
+/// One block of a drawing: a layer of a plan view, or a slice of an elevation.
+///
+/// Rows are kept exactly as they were drawn, ragged ones included, so that
+/// lowering can say *which* row is out of line rather than quietly padding it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GridLayer {
+    pub rows: Vec<Vec<char>>,
+}
+
+/// A drawing: which side it is seen from, what its symbols mean, and the
+/// blocks themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GridSpec {
+    pub view: GridView,
+    /// In the order written, which is what fixes the order parts are resolved
+    /// in — and so keeps the whole expansion deterministic.
+    pub legend: Vec<LegendEntry>,
+    pub layers: Vec<GridLayer>,
+    /// A legend line whose key was more than one character, kept rather than
+    /// rejected here so that lowering reports it as the drawing problem it is.
+    /// The parser stays permissive; everything positional is diagnosed later.
+    pub bad_legend_key: Option<String>,
+}
+
 /// What a command acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectExpr {
@@ -134,6 +165,8 @@ pub enum ObjectExpr {
     Reference(Ref),
     /// A high-level structure to build.
     Structure(Structure),
+    /// A drawing to lay out, from the fenced block after the sentence.
+    Grid(Box<GridSpec>),
     /// No object at all, e.g. `Undo.`
     None,
 }
@@ -244,6 +277,12 @@ pub enum Query {
     WhoAdded(Ref),
     WhatChanged,
     ListParts,
+    /// `Show top view.` — the model drawn back as a grid, in the same syntax
+    /// a drawing is typed in. `layer` picks one block, 1-based.
+    ShowView {
+        view: GridView,
+        layer: Option<u32>,
+    },
 }
 
 /// A session-level command that is not an edit.
@@ -256,7 +295,11 @@ pub enum Meta {
     RevertTo(u32),
     Export,
     Render,
-    Help,
+    /// `Help.` for the general text, `Help select.` for one verb's syntax and
+    /// examples. `None` when the topic named isn't one [`Verb::help_key`]
+    /// covers, which falls back to the general text rather than reporting an
+    /// error — a builder asking for help should never be met with one.
+    Help(Option<Verb>),
     Finish,
 }
 

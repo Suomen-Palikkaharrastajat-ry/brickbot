@@ -120,6 +120,63 @@ pub fn lookup(kind: PartKind, width: u8, depth: u8) -> Option<PartRef> {
         })
 }
 
+/// The catalogue, optionally narrowed to one shape.
+///
+/// For pickers that show what is available rather than answering a query.
+pub fn catalogue(kind: Option<PartKind>) -> impl Iterator<Item = PartRef> {
+    CATALOG
+        .iter()
+        .filter(move |entry| kind.is_none_or(|wanted| entry.kind == wanted))
+        .map(|entry| {
+            PartRef::new(
+                entry.ldraw_id,
+                entry.name,
+                (entry.width, entry.depth),
+                entry.kind,
+            )
+        })
+}
+
+/// The catalogue parts of a shape closest to a size that is not in it.
+///
+/// `1x7 brick` is not a real element, and answering "I have 1x6 and 1x8" is
+/// far more use than a network round trip for something that cannot be found.
+/// Sizes are compared normalised, so `7x1` and `1x7` suggest the same things.
+#[must_use]
+pub fn suggest(kind: PartKind, width: u8, depth: u8, limit: usize) -> Vec<PartRef> {
+    let (small, large) = if width <= depth {
+        (width, depth)
+    } else {
+        (depth, width)
+    };
+
+    let mut scored: Vec<(u16, &Entry)> = CATALOG
+        .iter()
+        .filter(|entry| entry.kind == kind)
+        .map(|entry| {
+            let distance =
+                u16::from(entry.width.abs_diff(small)) + u16::from(entry.depth.abs_diff(large));
+            (distance, entry)
+        })
+        .collect();
+
+    // Nearest first; ties break on the smaller part, then on part number, so
+    // the same miss always suggests the same alternatives.
+    scored.sort_by_key(|(distance, entry)| (*distance, entry.width, entry.depth, entry.ldraw_id));
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, entry)| {
+            PartRef::new(
+                entry.ldraw_id,
+                entry.name,
+                (entry.width, entry.depth),
+                entry.kind,
+            )
+        })
+        .collect()
+}
+
 /// Resolves a described part.
 ///
 /// An explicit part number is taken at face value: the builder named a
@@ -233,6 +290,66 @@ pub fn kind_from_name(name: &str) -> Option<PartKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_size_that_does_not_exist_suggests_the_ones_that_do() {
+        // The case that sends people to a fruitless Rebrickable search: 1x7
+        // is not a brick, but 1x6 and 1x8 are.
+        let suggested = suggest(PartKind::Brick, 1, 7, 3);
+        let sizes: Vec<(u8, u8)> = suggested.iter().map(|p| p.footprint).collect();
+        assert!(sizes.contains(&(1, 6)), "got: {sizes:?}");
+        assert!(sizes.contains(&(1, 8)), "got: {sizes:?}");
+    }
+
+    #[test]
+    fn suggestions_keep_to_the_shape_that_was_asked_for() {
+        for part in suggest(PartKind::Plate, 3, 9, 5) {
+            assert_eq!(part.kind, PartKind::Plate, "got a {:?}", part.kind);
+        }
+        for part in suggest(PartKind::Tile, 5, 5, 5) {
+            assert_eq!(part.kind, PartKind::Tile);
+        }
+    }
+
+    #[test]
+    fn a_size_is_suggested_the_same_way_round_as_its_mirror() {
+        // 7x1 and 1x7 are the same request.
+        assert_eq!(
+            suggest(PartKind::Brick, 7, 1, 3),
+            suggest(PartKind::Brick, 1, 7, 3)
+        );
+    }
+
+    #[test]
+    fn the_nearest_size_comes_first_and_the_list_is_capped() {
+        // 2x5 sits between 2x4 and 2x6, and both are one step away; the
+        // smaller wins the tie so the answer never wobbles.
+        let suggested = suggest(PartKind::Brick, 2, 5, 2);
+        assert_eq!(suggested.len(), 2);
+        assert_eq!(suggested[0].footprint, (2, 4));
+        assert_eq!(suggested[1].footprint, (2, 6));
+        assert_eq!(suggest(PartKind::Brick, 2, 5, 2), suggested);
+    }
+
+    #[test]
+    fn the_catalogue_can_be_listed_whole_or_by_shape() {
+        let everything: Vec<_> = catalogue(None).collect();
+        assert_eq!(everything.len(), CATALOG.len());
+
+        let tiles: Vec<_> = catalogue(Some(PartKind::Tile)).collect();
+        assert!(!tiles.is_empty());
+        assert!(tiles.iter().all(|p| p.kind == PartKind::Tile));
+        assert!(tiles.len() < everything.len());
+
+        // Everything listed can actually be placed.
+        for part in everything {
+            assert!(
+                lookup(part.kind, part.footprint.0, part.footprint.1).is_some(),
+                "{} is listed but does not look up",
+                part.ldraw_id
+            );
+        }
+    }
 
     #[test]
     fn finds_everyday_bricks_in_the_catalogue() {

@@ -1,7 +1,9 @@
 use serde::Deserialize;
 use std::env;
 
-#[derive(Deserialize, Debug)]
+// Serialized as well as deserialized so the whole record can be kept in the
+// sticky part cache and answered from disk without a second round trip.
+#[derive(Deserialize, serde::Serialize, Debug)]
 pub struct RebrickablePart {
     pub part_num: String,
     pub name: String,

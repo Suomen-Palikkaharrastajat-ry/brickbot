@@ -31,6 +31,74 @@ pub struct Config {
     pub resource_limits: ResourceLimitsConfig,
     #[serde(default)]
     pub ldraw: LdrawConfig,
+    #[serde(default)]
+    pub parts_cache: PartsCacheConfig,
+}
+
+/// The sticky, on-disk cache of part lookups.
+///
+/// Discord fires autocomplete on every keystroke with a three-second deadline,
+/// so the network can never be on that path. Instead every lookup the bot
+/// performs is kept, building a local index that answers instantly and
+/// survives restarts. It lives in its own database because all of it is
+/// derived and disposable — deleting the file is a clean rebuild.
+#[derive(Deserialize, Debug, Clone)]
+pub struct PartsCacheConfig {
+    /// With this off, autocomplete falls back to the built-in catalogue alone.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Deliberately not `bot.db`: that holds sessions and revisions, which
+    /// cannot be regenerated.
+    #[serde(default = "default_parts_cache_path")]
+    pub path: String,
+    /// How long a search that found something stays good. Rebrickable does add
+    /// parts, so this is long rather than forever.
+    #[serde(default = "default_parts_cache_search_ttl_days")]
+    pub search_ttl_days: i64,
+    /// How long a search that found *nothing* stays good. Short, so a typo is
+    /// not pinned — but not zero, or every keystroke would re-ask.
+    #[serde(default = "default_parts_cache_miss_ttl_mins")]
+    pub miss_ttl_mins: i64,
+    /// How many background warms may run at once.
+    #[serde(default = "default_parts_cache_warm_concurrency")]
+    pub warm_concurrency: usize,
+    /// Gives up on a warm rather than holding a connection open. `src/http.rs`
+    /// has no timeout of its own.
+    #[serde(default = "default_parts_cache_warm_timeout_secs")]
+    pub warm_timeout_secs: u64,
+}
+
+impl Default for PartsCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: default_parts_cache_path(),
+            search_ttl_days: default_parts_cache_search_ttl_days(),
+            miss_ttl_mins: default_parts_cache_miss_ttl_mins(),
+            warm_concurrency: default_parts_cache_warm_concurrency(),
+            warm_timeout_secs: default_parts_cache_warm_timeout_secs(),
+        }
+    }
+}
+
+fn default_parts_cache_path() -> String {
+    "sqlite:data/cache.db".to_string()
+}
+
+const fn default_parts_cache_search_ttl_days() -> i64 {
+    30
+}
+
+const fn default_parts_cache_miss_ttl_mins() -> i64 {
+    60
+}
+
+const fn default_parts_cache_warm_concurrency() -> usize {
+    2
+}
+
+const fn default_parts_cache_warm_timeout_secs() -> u64 {
+    5
 }
 
 /// Where the `LDraw` part library lives and where to fetch it from.
