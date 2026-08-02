@@ -314,7 +314,7 @@ mod tests {
                 let embed_json = serde_json::to_value(*embed).unwrap();
                 assert_eq!(embed_json["title"], "Set: Bugatti (42083-1)");
             }
-            _ => panic!("Expected DirectMatch"),
+            SetInteractionResponse::SearchResults(_) => panic!("Expected DirectMatch"),
         }
     }
 
@@ -343,7 +343,7 @@ mod tests {
                 assert_eq!(json_0["value"], "42083-1");
                 assert_eq!(json_1["value"], "42083-2");
             }
-            _ => panic!("Expected SearchResults"),
+            SetInteractionResponse::DirectMatch(..) => panic!("Expected SearchResults"),
         }
     }
 }
