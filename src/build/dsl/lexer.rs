@@ -307,8 +307,22 @@ impl Sentence {
             Some(Token::Word(w)) => {
                 matches!(w.as_str(), "how" | "what" | "where" | "who" | "which")
             }
+            // Naming a part with no verb — "2x2 brick" — asks where it could
+            // go. A size or a kind has to be in there somewhere: a bare count
+            // or colour is how people talk ("2 beers", "red"), and swallowing
+            // those is what keeps a build thread liveable.
+            Some(Token::Dim(..) | Token::Kind(_) | Token::Number(_) | Token::Color(_)) => {
+                self.names_a_part()
+            }
             _ => false,
         }
+    }
+
+    /// True when some token in the sentence pins down an actual element.
+    fn names_a_part(&self) -> bool {
+        self.tokens
+            .iter()
+            .any(|t| matches!(t, Token::Dim(..) | Token::Kind(_)))
     }
 }
 

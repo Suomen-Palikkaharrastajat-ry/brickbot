@@ -202,7 +202,8 @@ pub async fn handle_component_interaction(
         "build_draft_edit"
         | "build_draft_apply"
         | "build_draft_discard"
-        | "build_draft_repreview" => {
+        | "build_draft_repreview"
+        | "build_draft_place" => {
             crate::build::session::handle_draft_button(
                 ctx,
                 &app_ctx,
@@ -221,6 +222,18 @@ pub async fn handle_component_interaction(
         | "build_insert_colour_pick"
         | "build_insert_part_pick" => {
             crate::build::session::handle_insert(
+                ctx,
+                &app_ctx,
+                interaction,
+                base_id,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
+        // Placement proposals. `build_place` carries a chosen index after the
+        // proposal id, so the handler splits what is left again.
+        "build_place" | "build_propose_cancel" | "build_propose_draw" => {
+            crate::build::session::handle_proposal_button(
                 ctx,
                 &app_ctx,
                 interaction,

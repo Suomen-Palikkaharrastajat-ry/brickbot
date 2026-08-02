@@ -83,6 +83,58 @@ pub fn describe_adjustment(adjustment: &Adjustment, locale: &str) -> Option<Stri
     )
 }
 
+/// Names what is about to be placed, the way the builder said it.
+#[must_use]
+pub fn describe_part(
+    part: &crate::build::PartRef,
+    color: u16,
+    quantity: u32,
+    locale: &str,
+) -> String {
+    let named = colors::name_of(color).map_or_else(
+        || t!("common.unknown_colour", locale = locale).to_string(),
+        str::to_string,
+    );
+    t!(
+        "command.build.propose_what",
+        locale = locale,
+        count = quantity,
+        colour = named,
+        part = part.name.clone()
+    )
+    .to_string()
+}
+
+/// Names a drawn block about to be placed.
+#[must_use]
+pub fn describe_drawing(parts: usize, locale: &str) -> String {
+    t!(
+        "command.build.propose_what_drawing",
+        locale = locale,
+        count = parts
+    )
+    .to_string()
+}
+
+/// Describes one proposed position, so the picture has a caption.
+#[must_use]
+pub fn describe_proposal(origin: crate::build::propose::Origin, locale: &str) -> String {
+    origin.direction().map_or_else(
+        || t!(origin.key(), locale = locale).to_string(),
+        |direction| {
+            t!(
+                origin.key(),
+                locale = locale,
+                direction = t!(
+                    format!("command.build.direction.{}", direction.as_str()),
+                    locale = locale
+                )
+            )
+            .to_string()
+        },
+    )
+}
+
 /// Describes why a well-formed sentence could not be carried out.
 #[must_use]
 pub fn describe_error(error: &LowerError, locale: &str) -> String {

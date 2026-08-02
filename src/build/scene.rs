@@ -184,6 +184,33 @@ pub async fn build_scene(
 /// The colour code used for a part whose own colour is unset.
 pub const FALLBACK_COLOR: u16 = COLOR_INHERIT;
 
+/// Repaints a soup of triangles in one flat colour.
+///
+/// Used to pick a proposed placement out of the model it would join.
+/// `SceneTriangle` carries a resolved [`Rgb`] rather than a colour code, so
+/// standing something out needs no new plumbing anywhere in the renderer.
+pub fn highlight(triangles: &mut [SceneTriangle], color: Rgb) {
+    for triangle in triangles {
+        triangle.color = color;
+    }
+}
+
+/// A candidate placement drawn slightly proud of the model.
+///
+/// The depth test is a strict `z <`, so a candidate whose face is exactly
+/// coplanar with an existing brick would z-fight into stripes. Growing it a
+/// fraction of a stud costs nothing visually and settles the argument.
+#[must_use]
+pub fn candidate_triangles(placement: &Placement, color: Rgb) -> Vec<SceneTriangle> {
+    const PROUD: f32 = 0.5;
+    let (min, max) = placement_bounds(placement);
+    cuboid(
+        Vec3::new(min.x - PROUD, min.y - PROUD, min.z - PROUD),
+        Vec3::new(max.x + PROUD, max.y + PROUD, max.z + PROUD),
+        color,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +233,29 @@ mod tests {
             std::env::temp_dir().join("brickbot-scene-no-library"),
             crate::ldraw::resolve::ResolveLimits::default(),
         )
+    }
+
+    #[test]
+    fn highlighting_repaints_every_triangle_it_is_given() {
+        let mut model = box_triangles(&placement(4, IVec3::ZERO));
+        let mut candidate = box_triangles(&placement(1, IVec3::new(0, -24, 0)));
+        let marker = Rgb::new(255, 0, 255);
+        highlight(&mut candidate, marker);
+
+        assert!(candidate.iter().all(|t| t.color == marker));
+        // And only what was handed over: the model keeps its own colours.
+        highlight(&mut model[..0], marker);
+        assert!(model.iter().all(|t| t.color == colors::resolve(4)));
+    }
+
+    #[test]
+    fn a_candidate_is_drawn_proud_so_it_cannot_z_fight() {
+        // Exactly coplanar faces would stripe against the depth test.
+        let p = placement(4, IVec3::ZERO);
+        let plain = crate::render::bounds_of(&box_triangles(&p));
+        let proud = crate::render::bounds_of(&candidate_triangles(&p, Rgb::new(255, 0, 255)));
+        assert!(proud.min.x < plain.min.x);
+        assert!(proud.max.y > plain.max.y);
     }
 
     #[test]

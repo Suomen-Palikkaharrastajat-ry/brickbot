@@ -15,8 +15,8 @@ pub mod shade;
 
 use crate::ldraw::colors::Rgb;
 use crate::math::{Aabb, Vec3};
-use camera::Camera;
-use raster::Framebuffer;
+pub use camera::Camera;
+pub use raster::Framebuffer;
 use shade::{Light, face_normal, shade};
 
 /// One world-space triangle with its final (unlit) colour.
@@ -69,14 +69,45 @@ pub fn bounds_of(triangles: &[SceneTriangle]) -> Aabb {
 /// Rasterizes a triangle soup into a framebuffer at the requested size.
 #[must_use]
 pub fn render_to_framebuffer(triangles: &[SceneTriangle], opts: &RenderOptions) -> Framebuffer {
+    let (width, height) = framebuffer_size(opts);
+    let camera = Camera::fit_default(bounds_of(triangles), width, height);
+    render_to_framebuffer_with(triangles, opts, camera)
+}
+
+/// The internal buffer size these options render at, before downsampling.
+///
+/// A camera passed to [`render_to_framebuffer_with`] must be fitted at these
+/// dimensions, not at `opts.width`/`opts.height`.
+#[must_use]
+pub const fn framebuffer_size(opts: &RenderOptions) -> (u32, u32) {
+    let factor = if opts.supersample > 1 {
+        opts.supersample
+    } else {
+        1
+    };
+    let width = if opts.width > 1 { opts.width } else { 1 };
+    let height = if opts.height > 1 { opts.height } else { 1 };
+    (width * factor, height * factor)
+}
+
+/// Renders with a camera the caller chose, rather than one fitted to this
+/// soup's own bounds.
+///
+/// Needed whenever several images have to be compared: framing each to its own
+/// contents makes the reframing read as the difference between them, which is
+/// exactly the wrong thing when the pictures are alternatives to choose from.
+#[must_use]
+pub fn render_to_framebuffer_with(
+    triangles: &[SceneTriangle],
+    opts: &RenderOptions,
+    camera: Camera,
+) -> Framebuffer {
     let factor = opts.supersample.max(1);
-    let width = opts.width.max(1) * factor;
-    let height = opts.height.max(1) * factor;
+    let (width, height) = framebuffer_size(opts);
 
     let mut fb = Framebuffer::new(width, height, opts.background_top);
     fb.fill_gradient(opts.background_top, opts.background_bottom);
 
-    let camera = Camera::fit_default(bounds_of(triangles), width, height);
     let view_dir = camera.forward();
 
     for tri in triangles.iter().take(opts.max_triangles) {
@@ -100,9 +131,78 @@ pub fn render_png(triangles: &[SceneTriangle], opts: &RenderOptions) -> anyhow::
     png::encode(&render_to_framebuffer(triangles, opts))
 }
 
+/// Encodes an already-composed framebuffer.
+pub fn encode_png(fb: &Framebuffer) -> anyhow::Result<Vec<u8>> {
+    png::encode(fb)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_scenes_share_a_camera_so_their_tiles_are_comparable() {
+        // A small model and a big one. Fitted separately they both fill their
+        // frame, which would make them look the same size side by side; shared,
+        // the big one really is bigger.
+        let opts = RenderOptions {
+            width: 40,
+            height: 40,
+            supersample: 1,
+            ..RenderOptions::default()
+        };
+        let small = quad_facing_camera(Rgb::new(255, 0, 0));
+        let big: Vec<SceneTriangle> = small
+            .iter()
+            .map(|t| SceneTriangle {
+                a: t.a * 3.0,
+                b: t.b * 3.0,
+                c: t.c * 3.0,
+                color: t.color,
+            })
+            .collect();
+
+        let count = |fb: &Framebuffer, want: Option<Rgb>| {
+            (0..fb.height)
+                .flat_map(|y| (0..fb.width).map(move |x| (x, y)))
+                .filter(|(x, y)| fb.pixel(*x, *y) == want)
+                .count()
+        };
+
+        // Fitted to itself, each fills the same share of its frame.
+        let alone_small = render_to_framebuffer(&small, &opts);
+        let alone_big = render_to_framebuffer(&big, &opts);
+        let centre_small = alone_small.pixel(20, 20);
+        let centre_big = alone_big.pixel(20, 20);
+        assert!(centre_small.is_some(), "the small model drew nothing");
+
+        // Sharing one camera fitted to the larger, the small one is smaller.
+        let (w, h) = framebuffer_size(&opts);
+        let shared = Camera::fit_default(bounds_of(&big), w, h);
+        let together_small = render_to_framebuffer_with(&small, &opts, shared);
+        let together_big = render_to_framebuffer_with(&big, &opts, shared);
+
+        let shaded_small = count(&together_small, centre_small);
+        let shaded_big = count(&together_big, centre_big);
+        assert!(
+            shaded_big > shaded_small * 2,
+            "the bigger model should cover far more of a shared frame: {shaded_big} vs {shaded_small}"
+        );
+    }
+
+    #[test]
+    fn a_shared_camera_leaves_an_ordinary_render_alone() {
+        // `render_to_framebuffer` must stay exactly what it was, since every
+        // existing picture goes through it.
+        let opts = RenderOptions::default();
+        let soup = quad_facing_camera(Rgb::new(0, 200, 0));
+        let (w, h) = framebuffer_size(&opts);
+        let fitted = Camera::fit_default(bounds_of(&soup), w, h);
+        assert_eq!(
+            render_to_framebuffer(&soup, &opts).color,
+            render_to_framebuffer_with(&soup, &opts, fitted).color
+        );
+    }
 
     fn quad_facing_camera(color: Rgb) -> Vec<SceneTriangle> {
         // A large square in the XY plane, comfortably filling the frame.

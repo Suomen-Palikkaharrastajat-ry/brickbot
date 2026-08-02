@@ -305,6 +305,25 @@ pub async fn handle_thread_message(
             offer_part_choices(ctx, config, msg.channel_id, pending, &session.id, &locale).await;
     }
 
+    if let Some(pending) = &outcome.pending_proposal {
+        // Something was named without saying where it goes: offer the places
+        // it could legally land and let whoever asked pick.
+        let _ = offer_proposals(
+            ctx,
+            &ProposalContext {
+                pool,
+                session: &session,
+                user_id: &msg.author.id.get().to_string(),
+                guild_id: msg.guild_id.unwrap_or_default().get(),
+                channel_id: msg.channel_id,
+                cfg: &cfg,
+                locale: &locale,
+            },
+            pending,
+        )
+        .await;
+    }
+
     if outcome.needs_render {
         // Debounced: four people building at once should produce one picture,
         // not four. An export or the end of a session is a deliberate act, so
@@ -994,7 +1013,219 @@ pub async fn handle_build_button(
 
 // --- Private drawing drafts ------------------------------------------------
 
-/// The workflow-session kind a private drawing draft is stored under.
+// --- Placement proposals ---------------------------------------------------
+
+/// `workflow_sessions` kind for a set of offered positions.
+const PROPOSAL_KIND: &str = "build_proposal";
+
+/// How long an offer stands. Short, because it is answered in a moment and a
+/// stale one is refused anyway.
+const PROPOSAL_TTL_MINS: u32 = 15;
+
+/// The colour a proposed placement is drawn in, so it stands out from the
+/// model it would join.
+const PROPOSAL_HIGHLIGHT: crate::ldraw::colors::Rgb = crate::ldraw::colors::Rgb::new(255, 0, 220);
+
+/// One tile of the proposal picture.
+const TILE_WIDTH: u32 = 320;
+const TILE_HEIGHT: u32 = 240;
+
+/// A set of offered positions, waiting on a choice.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct StoredProposal {
+    session_id: String,
+    /// The positions on offer, in the order they are numbered.
+    options: Vec<Vec<super::ops::Placed>>,
+    /// The revision they were worked out against. Anything built since and
+    /// they no longer mean what the builder was shown.
+    based_on: usize,
+}
+
+async fn load_proposal(
+    app_ctx: &crate::workflows::AppContext,
+    proposal_id: &str,
+    user_id: &str,
+) -> Option<StoredProposal> {
+    let payload = db::get_workflow_session_payload(&app_ctx.db, proposal_id, user_id)
+        .await
+        .ok()??;
+    serde_json::from_value(payload).ok()
+}
+
+/// Works out where the named parts could go and asks.
+///
+/// Posted publicly rather than ephemerally, and not by choice: this is
+/// triggered by a chat message, which carries no interaction token, and
+/// Discord will not send an ephemeral message without one. The part picker
+/// (`offer_part_choices`) posts publicly for exactly the same reason. In a
+/// thread where everyone is building together it is no great loss.
+struct ProposalContext<'a> {
+    pool: &'a sqlx::SqlitePool,
+    session: &'a db::build::BuildSession,
+    user_id: &'a str,
+    guild_id: u64,
+    channel_id: ChannelId,
+    cfg: &'a BuildCommandConfig,
+    locale: &'a str,
+}
+
+async fn offer_proposals(
+    ctx: &Context,
+    who: &ProposalContext<'_>,
+    pending: &dispatch::PendingProposal,
+) -> anyhow::Result<()> {
+    let ProposalContext {
+        pool,
+        session,
+        user_id,
+        guild_id,
+        channel_id,
+        cfg,
+        locale,
+    } = *who;
+    let history = db::build::load_history(pool, &session.id, &session.model_name).await?;
+    let model = history.materialize();
+
+    let candidates =
+        super::propose::propose_any(&model, &pending.batches, build_cmd::MAX_PROPOSALS);
+    if candidates.is_empty() {
+        channel_id
+            .say(
+                &ctx.http,
+                rust_i18n::t!("command.build.propose_none", locale = locale).to_string(),
+            )
+            .await?;
+        return Ok(());
+    }
+
+    let stored = StoredProposal {
+        session_id: session.id.clone(),
+        options: candidates.iter().map(|c| c.placements.clone()).collect(),
+        based_on: history.revision(),
+    };
+    let proposal_id = db::create_workflow_session(
+        pool,
+        PROPOSAL_KIND,
+        user_id,
+        &guild_id.to_string(),
+        &channel_id.to_string(),
+        serde_json::to_value(&stored)?,
+        PROPOSAL_TTL_MINS,
+    )
+    .await?;
+
+    let library = library_for(ctx).await;
+    let picture = render_proposals(&model, &candidates, &library, cfg).await;
+
+    let mut message = CreateMessage::new()
+        .content(build_cmd::proposal_message(
+            &pending.label,
+            &candidates,
+            locale,
+        ))
+        .components(build_cmd::build_proposal_buttons(
+            &proposal_id,
+            candidates.len(),
+            locale,
+        ));
+    if let Some(png) = picture {
+        message = message.add_file(serenity::all::CreateAttachment::bytes(png, "proposals.png"));
+    }
+    channel_id.send_message(&ctx.http, message).await?;
+    Ok(())
+}
+
+/// Draws every offer as one picture, tiled.
+///
+/// All the tiles share **one** camera, fitted to everything any of them
+/// contains. Framing each to its own bounds would rescale the model between
+/// tiles, and the eye would read that reframing as the difference — which is
+/// exactly wrong when the pictures are alternatives to compare.
+async fn render_proposals(
+    model: &super::Model,
+    candidates: &[super::propose::Candidate],
+    library: &LdrawLibrary,
+    cfg: &BuildCommandConfig,
+) -> Option<Vec<u8>> {
+    use crate::math::Aabb;
+    use crate::render::{bounds_of, framebuffer_size, render_to_framebuffer_with};
+
+    let mode = if library.is_available() {
+        SceneMode::Meshes
+    } else {
+        SceneMode::Boxes
+    };
+    let (base, _) = scene::build_scene(model, library, mode).await;
+
+    let soups: Vec<Vec<SceneTriangle>> = candidates
+        .iter()
+        .map(|candidate| {
+            let mut soup = base.clone();
+            for placed in &candidate.placements {
+                soup.extend(scene::candidate_triangles(
+                    &super::model::Placement {
+                        id: super::model::PlacementId::new(0, 0),
+                        part: placed.part.clone(),
+                        color: placed.color,
+                        pos: placed.pos,
+                        orientation: placed.orientation,
+                        group: None,
+                    },
+                    PROPOSAL_HIGHLIGHT,
+                ));
+            }
+            soup
+        })
+        .collect();
+    if soups.is_empty() {
+        return None;
+    }
+
+    let options = RenderOptions {
+        width: TILE_WIDTH,
+        height: TILE_HEIGHT,
+        // The tiles are small already; supersampling them costs four times as
+        // much for a picture nobody studies closely.
+        supersample: 1,
+        ..RenderOptions::default()
+    };
+    let union = soups
+        .iter()
+        .map(|soup| bounds_of(soup))
+        .reduce(|a: Aabb, b: Aabb| Aabb {
+            min: a.min.min(b.min),
+            max: a.max.max(b.max),
+        })?;
+    let (frame_w, frame_h) = framebuffer_size(&options);
+    let camera = crate::render::Camera::fit_default(union, frame_w, frame_h);
+    let background = options.background_top;
+    let _ = cfg;
+
+    // One permit for the whole sheet, not one per tile: the semaphore is
+    // process-wide with two slots, and four separate acquisitions would starve
+    // the live renders every other thread is waiting on.
+    let _permit = render_slots().acquire().await.ok()?;
+    tokio::task::spawn_blocking(move || {
+        let columns = 2u32;
+        let rows = u32::try_from(soups.len().div_ceil(2)).unwrap_or(1);
+        let mut sheet =
+            crate::render::Framebuffer::new(TILE_WIDTH * columns, TILE_HEIGHT * rows, background);
+        for (index, soup) in soups.iter().enumerate() {
+            let tile = render_to_framebuffer_with(soup, &options, camera);
+            let index = u32::try_from(index).unwrap_or(0);
+            sheet.blit(
+                &tile,
+                (index % columns) * TILE_WIDTH,
+                (index / columns) * TILE_HEIGHT,
+            );
+        }
+        crate::render::encode_png(&sheet)
+    })
+    .await
+    .ok()?
+    .ok()
+}
+
 const DRAFT_KIND: &str = "build_draft";
 
 /// How long a draft survives without being touched.
@@ -1684,6 +1915,20 @@ pub async fn handle_draft_button(
             )
             .await
         }
+        build_cmd::BUTTON_DRAFT_PLACE => {
+            // The drafted block, offered positions instead of taking the one
+            // written in the form. Same engine, same picture, bigger batch.
+            place_draft(
+                ctx,
+                app_ctx,
+                interaction,
+                draft_id,
+                &stored,
+                &locale,
+                &user_id,
+            )
+            .await
+        }
         build_cmd::BUTTON_DRAFT_DISCARD => {
             // Actually close it, or the next `[Draw…]` or `/build-legend`
             // would pick the discarded drawing straight back up.
@@ -1804,6 +2049,266 @@ async fn apply_draft(
         locale,
     )
     .await;
+    Ok(())
+}
+
+/// Handles the numbered buttons, the cancel, and the "draw this instead" menu
+/// under a set of placement proposals.
+pub async fn handle_proposal_button(
+    ctx: &Context,
+    app_ctx: &crate::workflows::AppContext,
+    interaction: &ComponentInteraction,
+    base_id: &str,
+    arg: &str,
+) -> anyhow::Result<()> {
+    let guild_id = interaction.guild_id.unwrap_or_default().get();
+    let locale = app_ctx.config.locale_or_default(guild_id).to_string();
+    let user_id = interaction.user.id.get().to_string();
+
+    // `build_place` carries the chosen index after the proposal id.
+    let (proposal_id, index_arg) = arg
+        .split_once(':')
+        .map_or((arg, None), |(id, rest)| (id, Some(rest.to_string())));
+
+    let Some(stored) = load_proposal(app_ctx, proposal_id, &user_id).await else {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_expired", locale = locale.as_str()),
+        )
+        .await;
+    };
+
+    if base_id == build_cmd::BUTTON_PROPOSE_CANCEL {
+        let _ = db::consume_workflow_session(&app_ctx.db, proposal_id, &user_id).await;
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_cancelled", locale = locale.as_str()),
+        )
+        .await;
+    }
+
+    // Which offer: from the button's own id, or from the menu's value.
+    let chosen: usize = match base_id {
+        build_cmd::SELECT_PROPOSE_DRAW => selected_value(interaction)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
+        _ => index_arg.and_then(|v| v.parse().ok()).unwrap_or(0),
+    };
+    let Some(placements) = stored.options.get(chosen).cloned() else {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_expired", locale = locale.as_str()),
+        )
+        .await;
+    };
+
+    let Some(session) = db::build::get_active_session_by_channel(
+        &app_ctx.db,
+        &interaction.channel_id.get().to_string(),
+    )
+    .await?
+    else {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_expired", locale = locale.as_str()),
+        )
+        .await;
+    };
+    let cfg = app_ctx.config.commands_for(guild_id).build;
+
+    // "Draw this instead" hands the position to the drawing form rather than
+    // building anything, so a proposed brick can grow into a whole block.
+    if base_id == build_cmd::SELECT_PROPOSE_DRAW {
+        let _ = db::consume_workflow_session(&app_ctx.db, proposal_id, &user_id).await;
+        return open_draft_at(
+            ctx,
+            app_ctx,
+            interaction,
+            &session,
+            &placements,
+            (guild_id, &locale, &user_id),
+        )
+        .await;
+    }
+
+    let lock = session_lock(&session.id).await;
+    let guard = lock.lock().await;
+    let history = db::build::load_history(&app_ctx.db, &session.id, &session.model_name).await?;
+
+    // Someone else building in between moves everything the offer was measured
+    // against, so what was shown is no longer what would land.
+    if stored.based_on != history.revision() {
+        drop(guard);
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_expired", locale = locale.as_str()),
+        )
+        .await;
+    }
+
+    // The placements are already legal — `propose` settled them through
+    // `legal` — so they go in as one ordinary operation.
+    let outcome = Outcome {
+        ops: vec![super::ops::Op::AddMany {
+            placements,
+            group: None,
+        }],
+        ops_start: Some(history.revision()),
+        cursor: Some(history.revision() + 1),
+        ..Outcome::default()
+    };
+    persist(&app_ctx.db, &session.id, &history, &outcome, &user_id).await?;
+    let _ = db::build::touch_session(&app_ctx.db, &session.id, cfg.session_ttl_hours).await;
+    drop(guard);
+
+    let _ = db::consume_workflow_session(&app_ctx.db, proposal_id, &user_id).await;
+    respond_ephemeral_component(
+        ctx,
+        interaction,
+        &rust_i18n::t!("command.build.propose_placed", locale = locale.as_str()),
+    )
+    .await?;
+
+    let history = db::build::load_history(&app_ctx.db, &session.id, &session.model_name).await?;
+    let library = library_for(ctx).await;
+    post_render(
+        ctx,
+        interaction.channel_id,
+        &history,
+        &library,
+        &cfg,
+        &session.id,
+        &locale,
+    )
+    .await;
+    Ok(())
+}
+
+/// Offers positions for the block currently being drafted.
+///
+/// The drawing is previewed with its own location stripped out, so what comes
+/// back is the block in local coordinates — a batch like any other.
+async fn place_draft(
+    ctx: &Context,
+    app_ctx: &crate::workflows::AppContext,
+    interaction: &ComponentInteraction,
+    draft_id: &str,
+    stored: &StoredDraft,
+    locale: &str,
+    user_id: &str,
+) -> anyhow::Result<()> {
+    let Some(session) = db::build::get_active_session_by_channel(
+        &app_ctx.db,
+        &interaction.channel_id.get().to_string(),
+    )
+    .await?
+    else {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.draft_expired", locale = locale),
+        )
+        .await;
+    };
+    let guild_id = interaction.guild_id.unwrap_or_default().get();
+    let cfg = app_ctx.config.commands_for(guild_id).build;
+
+    let history = db::build::load_history(&app_ctx.db, &session.id, &session.model_name).await?;
+    let builders = dispatch::Builders::new([(user_id.to_string(), user_id.to_string())]);
+    let mut fields = stored.fields();
+    fields.location = String::new();
+    let preview = draft::preview(&history, &fields, locale, &builders, user_id);
+
+    let Some(pending) = preview.outcome.pending_proposal.clone() else {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.draft_nothing_to_apply", locale = locale),
+        )
+        .await;
+    };
+
+    // The draft is done with; what happens next is an ordinary proposal.
+    finish_draft(app_ctx, draft_id, user_id).await;
+    respond_ephemeral_component(
+        ctx,
+        interaction,
+        &rust_i18n::t!("command.build.propose_pick", locale = locale),
+    )
+    .await?;
+    offer_proposals(
+        ctx,
+        &ProposalContext {
+            pool: &app_ctx.db,
+            session: &session,
+            user_id,
+            guild_id,
+            channel_id: interaction.channel_id,
+            cfg: &cfg,
+            locale,
+        },
+        &pending,
+    )
+    .await
+}
+
+/// Opens the drawing form prefilled with a proposed placement.
+async fn open_draft_at(
+    ctx: &Context,
+    app_ctx: &crate::workflows::AppContext,
+    interaction: &ComponentInteraction,
+    session: &db::build::BuildSession,
+    placements: &[super::ops::Placed],
+    who: (u64, &str, &str),
+) -> anyhow::Result<()> {
+    let (guild_id, locale, user_id) = who;
+    let channel = interaction.channel_id.get().to_string();
+    let (draft_id, mut stored) = match open_draft(app_ctx, user_id, &channel).await {
+        Some(found) => found,
+        None => create_draft(app_ctx, session, user_id, guild_id, &channel).await?,
+    };
+
+    // Start the drawing from the proposal itself: its parts, at the position
+    // that was picked, so nothing has to be typed twice.
+    let mut sketch = super::Model::new(&session.model_name);
+    for (seq, placed) in placements.iter().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        sketch.placements.push(super::model::Placement {
+            id: super::model::PlacementId::new(0, seq as u32),
+            part: placed.part.clone(),
+            color: placed.color,
+            pos: placed.pos,
+            orientation: placed.orientation,
+            group: None,
+        });
+    }
+    if let Some(view) = super::textview::render(&sketch, super::units::GridView::Top, None) {
+        let fields = draft::split_fields(&view);
+        stored.view = fields.view;
+        stored.legend = fields.legend;
+        stored.grid = fields.grid;
+    }
+    // The drawing lands where the proposal was going to.
+    if let Some(first) = placements.first() {
+        stored.location = format!("at {} {} {}", first.pos.x, first.pos.y, first.pos.z);
+    }
+    save_draft(app_ctx, &draft_id, user_id, &stored).await;
+
+    interaction
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Modal(build_cmd::build_draw_modal(
+                &draft_id,
+                &stored.fields(),
+                locale,
+            )),
+        )
+        .await?;
     Ok(())
 }
 

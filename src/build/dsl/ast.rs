@@ -324,8 +324,44 @@ pub enum Statement {
     Command(Box<Command>),
     Query(Query),
     Meta(Meta),
+    /// A part named with no verb — `2x2 brick` — which asks where it could go
+    /// rather than saying. Answered with proposals, not with an operation.
+    Propose {
+        spec: PartSpec,
+        /// How several of them should sit relative to each other, when the
+        /// sentence bothered to say. `None` offers every arrangement.
+        arrangement: Option<Arrangement>,
+    },
     /// `Note:` / `TODO:` — acknowledged but never acted on.
     Comment,
+}
+
+/// How a handful of identical parts sit relative to each other.
+///
+/// Deliberately tiny: these are the shapes two or three bricks are put in
+/// without thinking about it, not a general layout language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arrangement {
+    /// One on top of the next.
+    Stacked,
+    /// Side by side, running east.
+    RowEast,
+    /// Side by side, running south.
+    RowSouth,
+}
+
+impl Arrangement {
+    /// Reads an arrangement from a word, if it names one.
+    #[must_use]
+    pub fn parse(word: &str) -> Option<Self> {
+        match word.trim().to_lowercase().as_str() {
+            "stacked" | "stack" | "vertically" | "vertical" | "up" | "top" => Some(Self::Stacked),
+            "row" | "line" | "horizontally" | "horizontal" | "beside" | "side" => {
+                Some(Self::RowEast)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

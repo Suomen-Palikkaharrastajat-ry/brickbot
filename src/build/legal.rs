@@ -172,6 +172,47 @@ fn settle(rest: &[Box3], batch: &[Box3], policy: SupportPolicy) -> Result<i32, L
     fallback.ok_or(LowerError::Unsupported(Unsupported::NoLegalSpot))
 }
 
+/// Puts a batch of not-yet-placed parts somewhere legal: on the grid, out of
+/// anything already built, and resting on something.
+///
+/// The batch keeps its shape — every part moves by the same vertical delta —
+/// so a structure stays a structure. This is the entry point for anything
+/// weighing up a placement it has not committed to, such as a proposal.
+pub fn settle_placements(
+    model: &Model,
+    batch: &[Placed],
+    policy: SupportPolicy,
+) -> Result<Vec<Placed>, LowerError> {
+    let snapped: Vec<Placed> = batch
+        .iter()
+        .map(|placed| Placed {
+            pos: snap_to_lattice(placed.pos, &placed.part, placed.orientation),
+            ..placed.clone()
+        })
+        .collect();
+    let boxes: Vec<Box3> = snapped.iter().map(placed_box).collect();
+    let rest: Vec<Box3> = model
+        .placements
+        .iter()
+        .map(Placement::occupied_box)
+        .collect();
+
+    let delta = settle(&rest, &boxes, policy)?;
+    Ok(snapped
+        .into_iter()
+        .map(|placed| Placed {
+            pos: placed.pos.add(IVec3::new(0, delta, 0)),
+            ..placed
+        })
+        .collect())
+}
+
+/// The box a batch member occupies where it currently sits.
+#[must_use]
+pub fn placed_box(placed: &Placed) -> Box3 {
+    super::model::part_box(&placed.part, placed.orientation, placed.pos)
+}
+
 /// True when this box rests on the ground, on something already in the model,
 /// or on one of its own batch-mates.
 fn is_supported(b: Box3, rest: &[Box3], batch: &[Box3]) -> bool {

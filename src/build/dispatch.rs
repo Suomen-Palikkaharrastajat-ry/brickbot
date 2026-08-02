@@ -8,11 +8,13 @@
 
 #![allow(clippy::doc_markdown)]
 
-use super::dsl::ast::{Meta, Statement};
+use super::dsl::ast::{Meta, ObjectExpr, Statement};
 use super::dsl::parser::{SentenceOutcome, parse_message};
 use super::lower::{LowerError, lower_command_with};
 use super::model::{PartKind, PartRef};
-use super::ops::{History, Op, apply};
+use super::ops::{History, Op, Placed, apply};
+use super::parts;
+use super::propose;
 use super::{legal, queries, report};
 
 /// A part the bot could not resolve, which the `/part` picker will answer.
@@ -22,6 +24,19 @@ pub struct PendingLookup {
     pub kind: PartKind,
     /// The sentence to retry once a part has been chosen.
     pub sentence: String,
+}
+
+/// Something the builder named without saying where it goes, waiting on a
+/// choice of position.
+///
+/// Carries shapes rather than positions: working out *where* needs the model,
+/// which the Discord layer has to reload under the session lock anyway.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingProposal {
+    /// The shapes on offer — several when nothing said how they should sit.
+    pub batches: Vec<Vec<Placed>>,
+    /// What is being placed, as the builder would recognise it.
+    pub label: String,
 }
 
 /// The people building in a session, so a sentence can name one of them.
@@ -108,6 +123,9 @@ pub struct Outcome {
     pub finished: bool,
     /// Set when a part must be looked up before the sentence can be finished.
     pub pending_lookup: Option<PendingLookup>,
+    /// Set when the builder named something but not where it goes, so the
+    /// choice is offered rather than guessed.
+    pub pending_proposal: Option<PendingProposal>,
     /// The revision index `ops[0]` must be written at, and from which any redo
     /// tail must be discarded.
     ///
@@ -137,6 +155,7 @@ impl Outcome {
             && !self.needs_export
             && !self.finished
             && self.pending_lookup.is_none()
+            && self.pending_proposal.is_none()
             && self.ops_start.is_none()
             && self.cursor.is_none()
             && self.skip_last_by.is_none()
@@ -246,6 +265,37 @@ fn run_sentences(
                 }
             }
 
+            // A part named with no verb asks where it could go, so the answer
+            // is a set of choices rather than an operation. Nothing is applied
+            // and nothing is recorded until the builder picks one.
+            Statement::Propose { spec, arrangement } => {
+                let part = match parts::resolve(&spec) {
+                    parts::Resolution::Known(part) => part,
+                    // An unusual part still has to be identified first; the
+                    // existing picker does that, and the sentence is replayed.
+                    parts::Resolution::NeedsLookup { query, kind } => {
+                        outcome.pending_lookup = Some(PendingLookup {
+                            query,
+                            kind,
+                            sentence: nth_sentence(text, index),
+                        });
+                        stopped = true;
+                        break 'sentences;
+                    }
+                };
+                let color = spec.color.unwrap_or(super::lower::DEFAULT_COLOR);
+                let label = report::describe_part(&part, color, spec.quantity, locale);
+                outcome.pending_proposal = Some(PendingProposal {
+                    batches: propose::arrangements(&part, color, spec.quantity, arrangement)
+                        .into_iter()
+                        .map(|(_, placements)| placements)
+                        .collect(),
+                    label,
+                });
+                stopped = true;
+                break 'sentences;
+            }
+
             Statement::Meta(meta) => {
                 if !apply_meta(&mut outcome, &mut working, &meta, locale, builders) {
                     stopped = true;
@@ -282,6 +332,22 @@ fn run_sentences(
             Statement::Command(command) => {
                 match lower_command_with(&model, &command, chosen) {
                     Ok(ops) => {
+                        // A drawing that never says where it goes used to land
+                        // on whatever was last touched. Offer the choice
+                        // instead — it is the same question a bare part asks,
+                        // and the block is just a bigger batch.
+                        if matches!(command.object, ObjectExpr::Grid(_))
+                            && command.location.is_none()
+                        {
+                            if let Some(Op::AddMany { placements, .. }) = ops.first() {
+                                outcome.pending_proposal = Some(PendingProposal {
+                                    batches: vec![placements.clone()],
+                                    label: report::describe_drawing(placements.len(), locale),
+                                });
+                                stopped = true;
+                                break 'sentences;
+                            }
+                        }
                         for op in ops {
                             // Correct the operation *before* it is applied or
                             // recorded, so the revision log is legal by
@@ -1105,6 +1171,116 @@ mod tests {
         assert!(model.height_in_bricks() > 4);
         // The painted brick is the top one.
         assert_eq!(model.highest().unwrap().color, 4);
+    }
+
+    // --- Placement proposals -----------------------------------------------
+
+    #[test]
+    fn a_part_on_its_own_asks_where_it_should_go() {
+        let outcome = interpret(&empty(), "2x2 brick", "en-US");
+        let pending = outcome
+            .pending_proposal
+            .as_ref()
+            .expect("naming a part should ask where it goes");
+        assert_eq!(pending.batches.len(), 1, "one brick has one shape");
+        assert_eq!(pending.batches[0].len(), 1);
+        assert_eq!(pending.batches[0][0].part.footprint, (2, 2));
+    }
+
+    #[test]
+    fn a_proposal_applies_nothing_until_it_is_chosen() {
+        // The whole point of asking: nothing is built and nothing is recorded
+        // while the question is still open.
+        let outcome = interpret(&empty(), "2x2 brick", "en-US");
+        assert!(outcome.ops.is_empty());
+        assert!(outcome.ops_start.is_none());
+        assert!(!outcome.needs_render);
+    }
+
+    #[test]
+    fn a_pending_proposal_is_not_silence() {
+        // A proposal the session never notices would be worse than not asking.
+        let outcome = interpret(&empty(), "2x2 brick", "en-US");
+        assert!(!outcome.is_silent());
+    }
+
+    #[test]
+    fn several_of_a_part_offer_every_way_they_could_sit() {
+        let outcome = interpret(&empty(), "3 2x2 bricks", "en-US");
+        let pending = outcome.pending_proposal.expect("should ask");
+        assert_eq!(pending.batches.len(), 3, "stacked, and two ways along");
+        assert!(pending.batches.iter().all(|b| b.len() == 3));
+    }
+
+    #[test]
+    fn saying_how_they_sit_leaves_only_that_shape_to_place() {
+        let outcome = interpret(&empty(), "3 2x2 bricks stacked", "en-US");
+        let pending = outcome.pending_proposal.expect("should ask");
+        assert_eq!(pending.batches.len(), 1);
+        // Really stacked: a brick height apart.
+        assert_eq!(pending.batches[0][1].pos.y, -24);
+    }
+
+    #[test]
+    fn an_unusual_part_is_identified_before_it_is_placed() {
+        // The part picker answers first; only then is there something whose
+        // position could be proposed.
+        let outcome = interpret(&empty(), "1x7 brick", "en-US");
+        assert!(outcome.pending_proposal.is_none());
+        assert!(outcome.pending_lookup.is_some());
+    }
+
+    #[test]
+    fn a_drawing_with_no_location_asks_where_it_goes() {
+        let text = "Build from top:\n```\nb = red 1x1 brick\n\nbb\n```";
+        let outcome = interpret(&empty(), text, "en-US");
+        let pending = outcome
+            .pending_proposal
+            .as_ref()
+            .expect("a drawing that never says where should ask");
+        assert_eq!(pending.batches.len(), 1, "a drawing is one shape");
+        assert_eq!(pending.batches[0].len(), 2, "two 1x1 bricks");
+        assert!(outcome.ops.is_empty(), "nothing built until it is placed");
+    }
+
+    #[test]
+    fn a_drawing_that_says_where_it_goes_is_unchanged() {
+        let text = "Build from top at origin:\n```\nb = red 1x1 brick\n\nbb\n```";
+        let outcome = interpret(&empty(), text, "en-US");
+        assert!(outcome.pending_proposal.is_none());
+        assert_eq!(outcome.ops.len(), 1);
+    }
+
+    #[test]
+    fn a_verb_still_places_directly_without_asking() {
+        // Saying it in full must keep working exactly as it did: the proposal
+        // path is for the sentences that used to do nothing at all.
+        let outcome = interpret(&empty(), "Add a red 2x4 brick at origin.", "en-US");
+        assert!(outcome.pending_proposal.is_none());
+        assert_eq!(outcome.ops.len(), 1);
+    }
+
+    #[test]
+    fn a_proposal_offers_only_legal_places_to_put_it() {
+        // The engine and the dialog meet here: whatever the batch, every offer
+        // has to be somewhere the part could really go.
+        let history = run(&["Add a red 2x4 brick at origin."]);
+        let model = history.materialize();
+        let pending = interpret(&history, "2x2 brick", "en-US")
+            .pending_proposal
+            .expect("should ask");
+        let candidates = crate::build::propose::propose_any(&model, &pending.batches, 4);
+        assert!(!candidates.is_empty());
+        for candidate in candidates {
+            for placed in &candidate.placements {
+                assert!(crate::build::legal::is_on_lattice(
+                    placed.pos,
+                    &placed.part,
+                    placed.orientation
+                ));
+                assert!(placed.pos.y <= 0);
+            }
+        }
     }
 
     // --- Legal geometry ----------------------------------------------------

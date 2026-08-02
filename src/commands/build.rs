@@ -14,7 +14,8 @@ use crate::discord_limits::{MAX_BUTTON_LABEL, MAX_SELECT_OPTION_LABEL, truncate}
 use rust_i18n::t;
 use serenity::all::{
     ButtonStyle, CommandOptionType, CreateActionRow, CreateButton, CreateCommand,
-    CreateCommandOption, CreateEmbed,
+    CreateCommandOption, CreateEmbed, CreateSelectMenu, CreateSelectMenuKind,
+    CreateSelectMenuOption,
 };
 
 /// Prefix for every `/build` component id. The router in
@@ -46,8 +47,104 @@ pub const PAGE_INSERT_PART: &str = "build_insert_part";
 pub const PICK_INSERT_COLOUR: &str = "build_insert_colour_pick";
 pub const PICK_INSERT_PART: &str = "build_insert_part_pick";
 
+/// Placing a part that was named without a position.
+pub const BUTTON_PLACE: &str = "build_place";
+pub const BUTTON_PROPOSE_CANCEL: &str = "build_propose_cancel";
+/// Turning a proposal into a drawing instead of placing it as-is.
+pub const SELECT_PROPOSE_DRAW: &str = "build_propose_draw";
+/// Offers positions for whatever is being drafted.
+pub const BUTTON_DRAFT_PLACE: &str = "build_draft_place";
+
+/// How many positions to offer at once.
+///
+/// Four fits a 2x2 picture and one row of buttons with room to spare. More
+/// than that is not a choice, it is a search.
+pub const MAX_PROPOSALS: usize = 4;
+
 /// Discord shows at most this many options in one select menu.
 pub const PAGE_SIZE: usize = 25;
+
+/// The caption for a set of placement proposals.
+///
+/// Names each offer by where it sits in the picture, since the tiles
+/// themselves cannot be labelled — the renderer has no font.
+#[must_use]
+pub fn proposal_message(
+    what: &str,
+    candidates: &[crate::build::propose::Candidate],
+    locale: &str,
+) -> String {
+    // Reading order of a two-column grid.
+    const WHERE: [&str; 4] = ["top-left", "top-right", "bottom-left", "bottom-right"];
+
+    use std::fmt::Write as _;
+
+    let mut out = what.to_string();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let corner = WHERE.get(index).copied().unwrap_or("");
+        let _ = write!(
+            out,
+            "\n**{}** {} — {}",
+            index + 1,
+            corner,
+            crate::build::report::describe_proposal(candidate.origin, locale)
+        );
+    }
+    out.push('\n');
+    out.push_str(&t!("command.build.propose_pick", locale = locale));
+    crate::discord_limits::truncate(&out, crate::discord_limits::MAX_MESSAGE_CONTENT)
+}
+
+/// The row of buttons under a set of placement proposals.
+///
+/// Numbered, because the tiles in the picture cannot be: there is no text
+/// rendering anywhere in the bot, so the caption names them by grid position
+/// and the numbers here line up with it.
+#[must_use]
+pub fn build_proposal_buttons(
+    proposal_id: &str,
+    count: usize,
+    locale: &str,
+) -> Vec<CreateActionRow> {
+    let mut rows = Vec::new();
+
+    let mut numbered: Vec<CreateButton> = (0..count.min(MAX_PROPOSALS))
+        .map(|index| {
+            CreateButton::new(format!("{BUTTON_PLACE}:{proposal_id}:{index}"))
+                .label((index + 1).to_string())
+                .style(ButtonStyle::Primary)
+        })
+        .collect();
+    numbered.push(
+        CreateButton::new(format!("{BUTTON_PROPOSE_CANCEL}:{proposal_id}"))
+            .label(truncate(
+                &t!("command.build.propose_cancel", locale = locale),
+                MAX_BUTTON_LABEL,
+            ))
+            .style(ButtonStyle::Secondary),
+    );
+    rows.push(CreateActionRow::Buttons(numbered));
+
+    // Drawing from a proposal needs to know which one, so it is a menu rather
+    // than another row of buttons.
+    let options: Vec<CreateSelectMenuOption> = (0..count.min(MAX_PROPOSALS))
+        .map(|index| CreateSelectMenuOption::new((index + 1).to_string(), index.to_string()))
+        .collect();
+    if !options.is_empty() {
+        rows.push(CreateActionRow::SelectMenu(
+            CreateSelectMenu::new(
+                format!("{SELECT_PROPOSE_DRAW}:{proposal_id}"),
+                CreateSelectMenuKind::String { options },
+            )
+            .placeholder(truncate(
+                &t!("command.build.propose_draw", locale = locale),
+                MAX_SELECT_OPTION_LABEL,
+            )),
+        ));
+    }
+
+    rows
+}
 
 /// The value standing for "no colour", which is a real answer: a legend line
 /// without one is valid and takes the drawing's default.
@@ -293,6 +390,13 @@ pub fn build_draft_buttons(draft_id: &str, locale: &str, stale: bool) -> Vec<Cre
     first.push(
         CreateButton::new(format!("{BUTTON_INSERT}:{draft_id}"))
             .label(label("command.build.insert_button"))
+            .style(ButtonStyle::Secondary),
+    );
+    // Offers where the drafted block could go, for a drawing whose position
+    // has not been decided.
+    first.push(
+        CreateButton::new(format!("{BUTTON_DRAFT_PLACE}:{draft_id}"))
+            .label(label("command.build.draft_place"))
             .style(ButtonStyle::Secondary),
     );
     first.push(
@@ -917,6 +1021,7 @@ mod tests {
                 "build_draft_edit:d",
                 "build_draft_apply:d",
                 "build_insert:d",
+                "build_draft_place:d",
                 "build_draft_discard:d"
             ]
         );
@@ -930,6 +1035,7 @@ mod tests {
                 "build_draft_edit:d",
                 "build_draft_repreview:d",
                 "build_insert:d",
+                "build_draft_place:d",
                 "build_draft_discard:d"
             ]
         );

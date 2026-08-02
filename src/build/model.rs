@@ -175,19 +175,7 @@ impl Placement {
     /// stud rather than dropping out of geometry altogether.
     #[must_use]
     pub fn occupied_box(&self) -> (IVec3, IVec3) {
-        let (w, d) = self.part.footprint_or_default();
-        let (w, d) = self.orientation.apply_footprint(i32::from(w), i32::from(d));
-        let half_w = w * LDU_STUD / 2;
-        let half_d = d * LDU_STUD / 2;
-        let height = self.part.kind.height_ldu();
-        (
-            IVec3::new(
-                self.pos.x - half_w,
-                self.pos.y - height,
-                self.pos.z - half_d,
-            ),
-            IVec3::new(self.pos.x + half_w, self.pos.y, self.pos.z + half_d),
-        )
+        part_box(&self.part, self.orientation, self.pos)
     }
 
     /// The Y coordinate of this placement's top surface. Smaller is higher,
@@ -428,6 +416,25 @@ impl Model {
     pub fn touch(&mut self, ids: Vec<PlacementId>) {
         self.last_ref = ids;
     }
+}
+
+/// The axis-aligned box a part of this shape occupies at `pos`, as
+/// `(min, max)` in LDraw units.
+///
+/// Free-standing because geometry is asked about parts that are not placements
+/// yet — a proposal being weighed up, a drawing being previewed — and those
+/// have no id to hang a method on.
+#[must_use]
+pub fn part_box(part: &PartRef, orientation: Orientation, pos: IVec3) -> (IVec3, IVec3) {
+    let (w, d) = part.footprint_or_default();
+    let (w, d) = orientation.apply_footprint(i32::from(w), i32::from(d));
+    let half_w = w * LDU_STUD / 2;
+    let half_d = d * LDU_STUD / 2;
+    let height = part.kind.height_ldu();
+    (
+        IVec3::new(pos.x - half_w, pos.y - height, pos.z - half_d),
+        IVec3::new(pos.x + half_w, pos.y, pos.z + half_d),
+    )
 }
 
 /// Strict overlap of two axis-aligned boxes: shared faces do not count.

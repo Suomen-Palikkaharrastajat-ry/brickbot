@@ -17,6 +17,7 @@ pub mod lower;
 pub mod model;
 pub mod ops;
 pub mod parts;
+pub mod propose;
 pub mod queries;
 pub mod report;
 pub mod scene;

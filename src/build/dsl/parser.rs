@@ -14,8 +14,8 @@
 #![allow(clippy::doc_markdown, clippy::too_many_lines)]
 
 use super::ast::{
-    Command, ExtentAxis, GridLayer, GridSpec, LegendEntry, Location, Meta, Modifier, ObjectExpr,
-    PartSpec, Place, Query, Ref, Statement, Structure,
+    Arrangement, Command, ExtentAxis, GridLayer, GridSpec, LegendEntry, Location, Meta, Modifier,
+    ObjectExpr, PartSpec, Place, Query, Ref, Statement, Structure,
 };
 use super::block::{self, CodeBlock};
 use super::lexer::{Keyword, Sentence, Token, Verb};
@@ -758,6 +758,52 @@ impl<'a> Parser<'a> {
 }
 
 /// Parses one sentence.
+/// Reads a verbless sentence that names a part, e.g. `2 2x2 bricks stacked`.
+///
+/// Returns nothing unless the *whole* sentence is accounted for. A sentence we
+/// only half understand has to stay silent rather than guess at it: this runs
+/// on every message a build thread receives, and most of them are chat.
+fn parse_proposal(parser: &mut Parser) -> Option<Statement> {
+    let spec = parser.part_spec();
+    // The gate lets a bare count or colour through; only a size, a kind or a
+    // part number actually names an element.
+    if spec.size.is_none() && spec.kind.is_none() && spec.part_num.is_none() {
+        return None;
+    }
+
+    // Whatever follows may only say how they sit relative to each other.
+    let mut arrangement = None;
+    while let Some(token) = parser.peek() {
+        match token {
+            Token::Word(word) => match Arrangement::parse(word) {
+                Some(found) => arrangement = Some(found),
+                // Filler people put around an arrangement: "on top of each
+                // other", "side by side", "stacked together".
+                None if matches!(
+                    word.as_str(),
+                    "the" | "and" | "together" | "each" | "other" | "another"
+                ) => {}
+                None => return None,
+            },
+            // "in a row", "side by side", "on top of each other".
+            // ... and "a" in "in a row", which lexes as the number 1.
+            Token::Keyword(Keyword::In | Keyword::By | Keyword::On | Keyword::Of)
+            | Token::Number(1) => {}
+            Token::Direction(direction) => {
+                arrangement = Some(match direction {
+                    Direction::Up | Direction::Down => Arrangement::Stacked,
+                    Direction::North | Direction::South => Arrangement::RowSouth,
+                    Direction::East | Direction::West => Arrangement::RowEast,
+                });
+            }
+            _ => return None,
+        }
+        parser.pos += 1;
+    }
+
+    Some(Statement::Propose { spec, arrangement })
+}
+
 #[must_use]
 pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
     if sentence.is_comment {
@@ -776,6 +822,11 @@ pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
     }
 
     let Some(Token::Verb(verb)) = parser.peek().copied_verb() else {
+        // A part named with no verb — "2x2 brick" — is not a command but is
+        // plainly about building, so it asks where the part could go.
+        if let Some(statement) = parse_proposal(&mut Parser::new(sentence)) {
+            return SentenceOutcome::Statement(statement);
+        }
         // Nothing but a question word got this sentence past the gate, and it
         // is not a question we understand — so it is ordinary curiosity
         // ("what do you think?"), not a mistyped command. Reporting it would
@@ -1275,6 +1326,74 @@ mod tests {
 
     fn parse(text: &str) -> SentenceOutcome {
         parse_sentence(&tokenize_sentence(text))
+    }
+
+    fn proposal(text: &str) -> (PartSpec, Option<Arrangement>) {
+        match parse(text) {
+            SentenceOutcome::Statement(Statement::Propose { spec, arrangement }) => {
+                (spec, arrangement)
+            }
+            other => panic!("expected a proposal from {text:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bare_part_phrase_is_a_proposal_not_chat() {
+        let (spec, arrangement) = proposal("2x2 brick");
+        assert_eq!(spec.size, Some((2, 2)));
+        assert_eq!(spec.kind, Some(PartKind::Brick));
+        assert_eq!(spec.quantity, 1);
+        assert_eq!(arrangement, None);
+    }
+
+    #[test]
+    fn a_part_phrase_carries_its_count_and_colour() {
+        let (spec, _) = proposal("2 red 2x4 bricks");
+        assert_eq!(spec.quantity, 2);
+        assert_eq!(spec.color, Some(4));
+        assert_eq!(spec.size, Some((2, 4)));
+    }
+
+    #[test]
+    fn a_part_phrase_needs_a_size_or_a_kind_to_count() {
+        // A bare colour or count is how people talk, not a part.
+        assert!(matches!(parse("red"), SentenceOutcome::Ignored));
+        assert!(matches!(parse("2 beers"), SentenceOutcome::Ignored));
+        assert!(matches!(parse("blue is nicer"), SentenceOutcome::Ignored));
+    }
+
+    #[test]
+    fn a_part_phrase_with_words_left_over_stays_silent() {
+        // Half-understanding a sentence is the one thing the silence policy
+        // cannot afford: say nothing rather than guess.
+        assert!(matches!(
+            parse("2x4 bricks are my favourite"),
+            SentenceOutcome::Ignored
+        ));
+        assert!(matches!(
+            parse("that 2x2 brick looks wrong"),
+            SentenceOutcome::Ignored
+        ));
+    }
+
+    #[test]
+    fn saying_how_they_sit_is_read_as_an_arrangement() {
+        assert_eq!(
+            proposal("2 2x2 bricks stacked vertically").1,
+            Some(Arrangement::Stacked)
+        );
+        assert_eq!(
+            proposal("3 2x2 bricks in a row").1,
+            Some(Arrangement::RowEast)
+        );
+        assert_eq!(
+            proposal("2 2x4 plates side by side").1,
+            Some(Arrangement::RowEast)
+        );
+        assert_eq!(
+            proposal("2 2x2 bricks north").1,
+            Some(Arrangement::RowSouth)
+        );
     }
 
     #[test]

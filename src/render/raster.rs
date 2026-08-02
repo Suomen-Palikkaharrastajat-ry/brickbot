@@ -130,6 +130,29 @@ impl Framebuffer {
         }
     }
 
+    /// Copies `src` into this buffer with its top-left corner at `(x, y)`,
+    /// clipping anything that falls outside.
+    ///
+    /// Colour only: a composite of finished images has no depth to merge, and
+    /// tiles never overlap.
+    pub fn blit(&mut self, src: &Self, x: u32, y: u32) {
+        for row in 0..src.height {
+            let target_y = y + row;
+            if target_y >= self.height {
+                break;
+            }
+            for col in 0..src.width {
+                let target_x = x + col;
+                if target_x >= self.width {
+                    break;
+                }
+                let from = (row as usize) * (src.width as usize) + (col as usize);
+                let to = (target_y as usize) * (self.width as usize) + (target_x as usize);
+                self.color[to] = src.color[from];
+            }
+        }
+    }
+
     /// Averages each `factor` x `factor` block into one pixel, which is how
     /// supersampled renders are brought back down to their output size.
     #[must_use]
@@ -183,6 +206,33 @@ mod tests {
     use super::*;
 
     const RED: Rgb = Rgb::new(255, 0, 0);
+
+    #[test]
+    fn a_blitted_tile_lands_where_it_was_put() {
+        let black = Rgb::new(0, 0, 0);
+        let mut sheet = Framebuffer::new(4, 4, black);
+        let tile = Framebuffer::new(2, 2, RED);
+        sheet.blit(&tile, 2, 1);
+
+        // The tile occupies exactly its own corner and nothing else.
+        for y in 0..4 {
+            for x in 0..4 {
+                let inside = (2..4).contains(&x) && (1..3).contains(&y);
+                let expected = if inside { RED } else { black };
+                assert_eq!(sheet.pixel(x, y), Some(expected), "at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn a_tile_hanging_off_the_edge_is_clipped_rather_than_wrapped() {
+        let mut sheet = Framebuffer::new(4, 4, Rgb::new(0, 0, 0));
+        sheet.blit(&Framebuffer::new(3, 3, RED), 3, 3);
+        // Only the one overlapping pixel is painted; nothing wraps around.
+        assert_eq!(sheet.pixel(3, 3), Some(RED));
+        assert_eq!(sheet.pixel(0, 0), Some(Rgb::new(0, 0, 0)));
+        assert_eq!(sheet.pixel(0, 3), Some(Rgb::new(0, 0, 0)));
+    }
     const BLUE: Rgb = Rgb::new(0, 0, 255);
     const BLACK: Rgb = Rgb::new(0, 0, 0);
 
