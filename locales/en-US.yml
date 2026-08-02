@@ -272,6 +272,10 @@ command:
     named_point: "Noted that spot."
     renamed: "Renamed the model."
     nothing_happened: "That didn't change anything."
+    # Corrections made so a part actually connects to something.
+    adjusted_snapped: "Nudged %{count} part(s) onto the stud grid."
+    adjusted_settled_down: "Dropped %{count} part(s) %{plates} plate(s) onto what's below."
+    adjusted_settled_up: "Lifted %{count} part(s) %{plates} plate(s) so nothing overlaps."
     undone: "Undone."
     redone: "Redone."
     nothing_to_undo: "There's nothing to undo."
@@ -366,6 +370,8 @@ command:
       selection: "I can't select that yet."
       name: "What should I call it?"
       too_large: "That would be %{total} parts and I can place at most %{limit} at a time. Try building it in smaller pieces."
+      no_legal_spot: "There's nowhere legal to put that — everywhere it could rest is already taken."
+      nothing_below: "That's already on the ground, so nothing can go under it."
     # Problems reading a drawing. Positions count from one, the way people do.
     grid:
       no_legend: "That drawing has no legend. Add a line like `b = blue 1x1 brick` above it."

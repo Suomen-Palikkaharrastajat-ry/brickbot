@@ -93,8 +93,9 @@ pub struct PartRef {
     pub rebrickable_id: Option<String>,
     /// Human-readable name, e.g. `Brick 2 x 4`.
     pub name: String,
-    /// Footprint in studs, width by depth. `(0, 0)` means unknown, which
-    /// excludes the part from collision detection.
+    /// Footprint in studs, width by depth. `(0, 0)` means unknown, in which
+    /// case geometry falls back to a single stud — see
+    /// [`Self::footprint_or_default`].
     pub footprint: (u8, u8),
     pub kind: PartKind,
 }
@@ -116,10 +117,24 @@ impl PartRef {
         }
     }
 
-    /// True when the footprint is known well enough to test for collisions.
+    /// True when we actually know how big this part is, rather than having
+    /// fallen back to a nominal stud. Worth saying out loud to a builder; not
+    /// a reason to skip any geometry check.
     #[must_use]
     pub const fn has_footprint(&self) -> bool {
         self.footprint.0 > 0 && self.footprint.1 > 0
+    }
+
+    /// The footprint to do geometry with: the real one, or a single stud when
+    /// we do not know.
+    ///
+    /// Guessing small keeps an unmeasured part inside collision detection and
+    /// on the stud grid. Guessing nothing — which is what returning no box
+    /// used to mean — let it overlap anything at all.
+    #[must_use]
+    pub const fn footprint_or_default(&self) -> (u8, u8) {
+        let (w, d) = self.footprint;
+        (if w == 0 { 1 } else { w }, if d == 0 { 1 } else { d })
     }
 
     /// The LDraw file name this part refers to.
@@ -156,27 +171,23 @@ impl Placement {
     /// The axis-aligned box this placement occupies, as `(min, max)` in LDraw
     /// units.
     ///
-    /// Returns `None` when the part's footprint is unknown.
+    /// Every placement has one: a part of unknown size falls back to a single
+    /// stud rather than dropping out of geometry altogether.
     #[must_use]
-    pub fn occupied_box(&self) -> Option<(IVec3, IVec3)> {
-        if !self.part.has_footprint() {
-            return None;
-        }
-        let (w, d) = self.orientation.apply_footprint(
-            i32::from(self.part.footprint.0),
-            i32::from(self.part.footprint.1),
-        );
+    pub fn occupied_box(&self) -> (IVec3, IVec3) {
+        let (w, d) = self.part.footprint_or_default();
+        let (w, d) = self.orientation.apply_footprint(i32::from(w), i32::from(d));
         let half_w = w * LDU_STUD / 2;
         let half_d = d * LDU_STUD / 2;
         let height = self.part.kind.height_ldu();
-        Some((
+        (
             IVec3::new(
                 self.pos.x - half_w,
                 self.pos.y - height,
                 self.pos.z - half_d,
             ),
             IVec3::new(self.pos.x + half_w, self.pos.y, self.pos.z + half_d),
-        ))
+        )
     }
 
     /// The Y coordinate of this placement's top surface. Smaller is higher,
@@ -279,10 +290,7 @@ impl Model {
     pub fn bounds(&self) -> Option<(IVec3, IVec3)> {
         let mut result: Option<(IVec3, IVec3)> = None;
         for placement in &self.placements {
-            // A part with no footprint still contributes its origin.
-            let (min, max) = placement
-                .occupied_box()
-                .unwrap_or((placement.pos, placement.pos));
+            let (min, max) = placement.occupied_box();
             result = Some(match result {
                 None => (min, max),
                 Some((lo, hi)) => (
@@ -304,10 +312,7 @@ impl Model {
     pub fn subset_bounds(&self, ids: &[PlacementId]) -> Option<(IVec3, IVec3)> {
         let mut result: Option<(IVec3, IVec3)> = None;
         for placement in ids.iter().filter_map(|id| self.get(*id)) {
-            // A part with no footprint still contributes its origin.
-            let (min, max) = placement
-                .occupied_box()
-                .unwrap_or((placement.pos, placement.pos));
+            let (min, max) = placement.occupied_box();
             result = Some(match result {
                 None => (min, max),
                 Some((lo, hi)) => (
@@ -352,14 +357,9 @@ impl Model {
     pub fn collisions(&self) -> Vec<(PlacementId, PlacementId)> {
         let mut found = Vec::new();
         for (i, a) in self.placements.iter().enumerate() {
-            let Some(box_a) = a.occupied_box() else {
-                continue;
-            };
+            let box_a = a.occupied_box();
             for b in self.placements.iter().skip(i + 1) {
-                let Some(box_b) = b.occupied_box() else {
-                    continue;
-                };
-                if boxes_overlap(box_a, box_b) {
+                if boxes_overlap(box_a, b.occupied_box()) {
                     found.push((a.id, b.id));
                 }
             }
@@ -371,30 +371,32 @@ impl Model {
     /// ground plane.
     ///
     /// The ground is `y == 0`, which is where `at origin` puts the first part.
+    /// A placement below it is reported too: larger Y is lower, so a positive
+    /// Y means buried, and nothing down there can hold a part up.
     #[must_use]
     pub fn unsupported(&self) -> Vec<PlacementId> {
         self.placements
             .iter()
             .filter(|p| {
-                if p.pos.y >= 0 {
-                    return false; // Resting on or below the ground plane.
+                if p.pos.y == 0 {
+                    return false; // Resting on the ground plane.
                 }
-                let Some((min_a, max_a)) = p.occupied_box() else {
-                    return false;
-                };
+                if p.pos.y > 0 {
+                    return true; // Buried beneath it.
+                }
+                let (min_a, max_a) = p.occupied_box();
                 // Something must have its top exactly at our bottom, and
                 // overlap us horizontally.
                 !self.placements.iter().any(|other| {
                     if other.id == p.id {
                         return false;
                     }
+                    let (min_b, max_b) = other.occupied_box();
                     other.top_y() == max_a.y
-                        && other.occupied_box().is_some_and(|(min_b, max_b)| {
-                            min_a.x < max_b.x
-                                && max_a.x > min_b.x
-                                && min_a.z < max_b.z
-                                && max_a.z > min_b.z
-                        })
+                        && min_a.x < max_b.x
+                        && max_a.x > min_b.x
+                        && min_a.z < max_b.z
+                        && max_a.z > min_b.z
                 })
             })
             .map(|p| p.id)
@@ -429,8 +431,12 @@ impl Model {
 }
 
 /// Strict overlap of two axis-aligned boxes: shared faces do not count.
+///
+/// That is the whole basis of legal stacking — a brick resting exactly on
+/// another shares a face and must not read as a collision — so
+/// [`super::legal`] settles against this same predicate rather than its own.
 #[must_use]
-const fn boxes_overlap(a: (IVec3, IVec3), b: (IVec3, IVec3)) -> bool {
+pub(super) const fn boxes_overlap(a: (IVec3, IVec3), b: (IVec3, IVec3)) -> bool {
     let (min_a, max_a) = a;
     let (min_b, max_b) = b;
     min_a.x < max_b.x
@@ -492,7 +498,7 @@ mod tests {
     fn a_placement_occupies_a_box_below_its_origin() {
         // LDraw part origins sit at the bottom face and extend upward in -Y.
         let p = place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO);
-        let (min, max) = p.occupied_box().unwrap();
+        let (min, max) = p.occupied_box();
         assert_eq!(min, IVec3::new(-20, -24, -40));
         assert_eq!(max, IVec3::new(20, 0, 40));
         assert_eq!(p.top_y(), -24);
@@ -502,21 +508,74 @@ mod tests {
     fn rotating_a_placement_swaps_its_footprint() {
         let mut p = place(PlacementId::new(0, 0), brick_2x4(), 4, IVec3::ZERO);
         p.orientation = Orientation::new(1, false);
-        let (min, max) = p.occupied_box().unwrap();
+        let (min, max) = p.occupied_box();
         assert_eq!(min.x, -40);
         assert_eq!(max.x, 40);
         assert_eq!(min.z, -20);
     }
 
+    fn unknown_part() -> PartRef {
+        PartRef::new("99999", "Mystery", (0, 0), PartKind::Other)
+    }
+
     #[test]
-    fn a_part_with_no_footprint_has_no_box() {
-        let unknown = PartRef::new("99999", "Mystery", (0, 0), PartKind::Other);
+    fn a_part_with_no_footprint_is_treated_as_one_stud() {
+        // We still do not know how big it is, but guessing one stud keeps it
+        // inside collision detection. Guessing nothing let it overlap anything.
+        let unknown = unknown_part();
         assert!(!unknown.has_footprint());
-        assert!(
-            place(PlacementId::new(0, 0), unknown, 4, IVec3::ZERO)
-                .occupied_box()
-                .is_none()
+        assert_eq!(unknown.footprint_or_default(), (1, 1));
+
+        let (min, max) = place(PlacementId::new(0, 0), unknown, 4, IVec3::ZERO).occupied_box();
+        assert_eq!(min, IVec3::new(-10, -24, -10));
+        assert_eq!(max, IVec3::new(10, 0, 10));
+    }
+
+    #[test]
+    fn two_unknown_parts_in_the_same_place_collide() {
+        let mut model = Model::new("t");
+        model.placements.push(place(
+            PlacementId::new(0, 0),
+            unknown_part(),
+            4,
+            IVec3::ZERO,
+        ));
+        model.placements.push(place(
+            PlacementId::new(1, 0),
+            unknown_part(),
+            1,
+            IVec3::ZERO,
+        ));
+        assert_eq!(model.collisions().len(), 1);
+    }
+
+    #[test]
+    fn an_unknown_part_can_hold_another_part_up() {
+        let mut model = Model::new("t");
+        let base = place(PlacementId::new(0, 0), unknown_part(), 4, IVec3::ZERO);
+        let on_top = place(
+            PlacementId::new(1, 0),
+            plate_2x4(),
+            14,
+            base.stack_position(),
         );
+        model.placements.push(base);
+        model.placements.push(on_top);
+        assert!(model.unsupported().is_empty());
+    }
+
+    #[test]
+    fn a_part_buried_below_the_ground_plane_is_unsupported() {
+        // Larger Y is lower, so a positive Y is underground. Nothing can hold
+        // it up down there, which is exactly what makes it worth reporting.
+        let mut model = Model::new("t");
+        model.placements.push(place(
+            PlacementId::new(0, 0),
+            brick_2x4(),
+            4,
+            IVec3::new(0, 24, 0),
+        ));
+        assert_eq!(model.unsupported(), vec![PlacementId::new(0, 0)]);
     }
 
     #[test]

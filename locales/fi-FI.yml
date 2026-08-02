@@ -272,6 +272,10 @@ command:
     named_point: "Merkitsin tuon kohdan."
     renamed: "Malli nimettiin uudelleen."
     nothing_happened: "Tuo ei muuttanut mitään."
+    # Korjaukset, joilla osa saadaan oikeasti kiinni johonkin.
+    adjusted_snapped: "Siirsin %{count} osaa nappiruudukkoon."
+    adjusted_settled_down: "Laskin %{count} osaa %{plates} laattaa alemmas alla olevan päälle."
+    adjusted_settled_up: "Nostin %{count} osaa %{plates} laattaa ylemmäs, jottei mikään mene päällekkäin."
     undone: "Kumottu."
     redone: "Tehty uudelleen."
     nothing_to_undo: "Kumottavaa ei ole."
@@ -366,6 +370,8 @@ command:
       selection: "En osaa valita tuota vielä."
       name: "Minkä nimen annan sille?"
       too_large: "Siitä tulisi %{total} osaa, ja pystyn asettamaan kerralla enintään %{limit}. Kokeile rakentaa se pienemmissä osissa."
+      no_legal_spot: "Tuolle ei ole laillista paikkaa — kaikki tuet, joille se voisi asettua, ovat jo varattuja."
+      nothing_below: "Se on jo maassa, joten sen alle ei mahdu mitään."
     # Piirroksen lukemisen ongelmat. Sijainnit lasketaan ykkösestä, kuten ihmiset laskevat.
     grid:
       no_legend: "Piirroksessa ei ole selitettä. Lisää sen yläpuolelle rivi kuten `b = blue 1x1 brick`."

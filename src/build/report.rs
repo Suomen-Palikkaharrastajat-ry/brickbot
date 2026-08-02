@@ -8,10 +8,12 @@
 use super::dsl::lexer::Verb;
 use super::dsl::parser::ParseError;
 use super::grid::GridError;
+use super::legal::Adjustment;
 use super::lower::{LowerError, Unsupported};
 use super::model::Model;
 use super::ops::{Effect, Op};
 use super::queries::QueryAnswer;
+use super::units::LDU_PLATE;
 use crate::ldraw::colors;
 use rust_i18n::t;
 
@@ -42,6 +44,43 @@ pub fn describe_effect(op: &Op, effect: &Effect, locale: &str) -> String {
     };
 
     t!(key, locale = locale, count = count).to_string()
+}
+
+/// Describes a correction made to keep a placement legal, or nothing at all
+/// when the command was already legal as written.
+///
+/// Silence is the common case and the important one: a builder who says
+/// something buildable must not be told about geometry they never got wrong.
+#[must_use]
+pub fn describe_adjustment(adjustment: &Adjustment, locale: &str) -> Option<String> {
+    if adjustment.is_none() {
+        return None;
+    }
+    if adjustment.settled == 0 {
+        return Some(
+            t!(
+                "command.build.adjusted_snapped",
+                locale = locale,
+                count = adjustment.snapped
+            )
+            .to_string(),
+        );
+    }
+    // Positive is downward, because LDraw's Y axis points down.
+    let key = if adjustment.settled > 0 {
+        "command.build.adjusted_settled_down"
+    } else {
+        "command.build.adjusted_settled_up"
+    };
+    Some(
+        t!(
+            key,
+            locale = locale,
+            count = adjustment.settled_count,
+            plates = adjustment.settled.abs() / LDU_PLATE
+        )
+        .to_string(),
+    )
 }
 
 /// Describes why a well-formed sentence could not be carried out.

@@ -62,6 +62,13 @@ pub enum Unsupported {
     Name,
     /// The structure asked for would exceed the per-command placement cap.
     TooLarge { total: u32, limit: u32 },
+    /// There is no legal position anywhere for the part: every resting place
+    /// it could snap to is already occupied.
+    NoLegalSpot,
+    /// `under` something that is already on the ground. Settling it onto the
+    /// anchor's *top* instead would reverse what the builder asked for, so we
+    /// say so rather than guess.
+    NothingBelow,
 }
 
 impl Unsupported {
@@ -77,6 +84,8 @@ impl Unsupported {
             Self::Selection => "command.build.unsupported.selection",
             Self::Name => "command.build.unsupported.name",
             Self::TooLarge { .. } => "command.build.unsupported.too_large",
+            Self::NoLegalSpot => "command.build.unsupported.no_legal_spot",
+            Self::NothingBelow => "command.build.unsupported.nothing_below",
         }
     }
 }
@@ -237,13 +246,7 @@ fn resolve_location(
                 .filter_map(|id| model.get(*id))
                 .max_by_key(|p| p.pos.y)
                 .ok_or(LowerError::NothingToActOn)?;
-            // Directly beneath: the new part's own height puts its origin
-            // one part-height below the anchor's base.
-            Ok(IVec3::new(
-                anchor.pos.x,
-                anchor.pos.y + part.kind.height_ldu(),
-                anchor.pos.z,
-            ))
+            under(anchor, part)
         }
         Location::Direction { direction, of } => {
             let ids = resolve_ref(model, of)?;
@@ -251,6 +254,15 @@ fn resolve_location(
                 .iter()
                 .find_map(|id| model.get(*id))
                 .ok_or(LowerError::NothingToActOn)?;
+            // Up and down are not compass points: there is no "step clear
+            // sideways" to compute, and doing the arithmetic anyway used to
+            // fall through to a one-stud gap — 20 LDU, which is neither a
+            // plate nor a brick and so attaches to nothing.
+            match direction {
+                Direction::Up => return Ok(anchor.stack_position()),
+                Direction::Down => return under(anchor, part),
+                _ => {}
+            }
             // Step clear of the anchor by half of each part's extent, so the
             // two sit side by side rather than overlapping.
             let anchor_span = span_along(anchor.part.footprint, anchor.orientation, *direction);
@@ -261,11 +273,28 @@ fn resolve_location(
     }
 }
 
-/// How far a footprint reaches along a direction, in LDraw units.
-fn span_along(footprint: (u8, u8), orientation: Orientation, direction: Direction) -> i32 {
-    if direction.is_vertical() {
-        return 0;
+/// Directly beneath a placement: the new part's own height puts its origin one
+/// part-height below the anchor's base.
+///
+/// Refused when the anchor is already on the ground. Quietly settling the part
+/// onto the anchor's *top* instead would reverse what was asked for, which is
+/// worse than saying there is no room.
+const fn under(anchor: &super::model::Placement, part: &PartRef) -> Result<IVec3, LowerError> {
+    if anchor.pos.y >= 0 {
+        return Err(LowerError::Unsupported(Unsupported::NothingBelow));
     }
+    Ok(IVec3::new(
+        anchor.pos.x,
+        anchor.pos.y + part.kind.height_ldu(),
+        anchor.pos.z,
+    ))
+}
+
+/// How far a footprint reaches along a direction, in LDraw units.
+///
+/// Only ever asked about compass directions: [`resolve_location`] handles up
+/// and down before it gets here, because a footprint says nothing about them.
+fn span_along(footprint: (u8, u8), orientation: Orientation, direction: Direction) -> i32 {
     let (w, d) = orientation.apply_footprint(i32::from(footprint.0), i32::from(footprint.1));
     match direction {
         Direction::East | Direction::West => w * LDU_STUD,
@@ -660,12 +689,40 @@ mod tests {
 
     #[test]
     fn under_places_a_part_beneath_the_anchor() {
+        // The anchor has to be off the ground for there to be an under at all.
         let model = run(&[
             "Add a red 2x4 brick at origin",
+            "Add a red 2x4 brick on that",
             "Add a black 2x4 tile under that",
         ]);
         // Below means larger Y, since LDraw's Y points down.
-        assert!(model.placements[1].pos.y > model.placements[0].pos.y);
+        assert!(model.placements[2].pos.y > model.placements[1].pos.y);
+    }
+
+    #[test]
+    fn putting_something_under_a_part_on_the_ground_is_reported() {
+        // There is no room below the ground plane, and quietly putting the
+        // tile on top instead would be the opposite of what was asked.
+        let model = run(&["Add a red 2x4 brick at origin"]);
+        let command = command_of("Add a black 2x4 tile under that");
+        assert_eq!(
+            lower_command(&model, &command),
+            Err(LowerError::Unsupported(Unsupported::NothingBelow))
+        );
+    }
+
+    #[test]
+    fn a_vertical_relative_location_stacks_instead_of_stepping_one_stud() {
+        // "above of that" is the one phrasing that reaches the compass-point
+        // code with a vertical direction. It used to step a stud — 20 LDU,
+        // which is neither a plate nor a brick, so it attached to nothing and
+        // sank four units into the brick below it.
+        let model = run(&[
+            "Add a red 2x4 brick at origin",
+            "Add a blue 2x4 brick above of that",
+        ]);
+        assert_eq!(model.placements[1].pos, IVec3::new(0, -24, 0));
+        assert!(model.collisions().is_empty());
     }
 
     #[test]

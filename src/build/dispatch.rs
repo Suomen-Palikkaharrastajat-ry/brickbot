@@ -13,7 +13,7 @@ use super::dsl::parser::{SentenceOutcome, parse_message};
 use super::lower::{LowerError, lower_command_with};
 use super::model::{PartKind, PartRef};
 use super::ops::{History, Op, apply};
-use super::{queries, report};
+use super::{legal, queries, report};
 
 /// A part the bot could not resolve, which the `/part` picker will answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,19 +283,45 @@ fn run_sentences(
                 match lower_command_with(&model, &command, chosen) {
                     Ok(ops) => {
                         for op in ops {
+                            // Correct the operation *before* it is applied or
+                            // recorded, so the revision log is legal by
+                            // construction. Fixing only the model would put
+                            // the illegal position straight back on reload.
                             let rev = working.next_rev();
-                            let effect = apply(&mut model, rev, &op);
-                            outcome
-                                .replies
-                                .push(report::describe_effect(&op, &effect, locale));
-                            // The first operation fixes where the whole batch
-                            // is written, which is not the loaded cursor when
-                            // an undo came earlier in the same message.
-                            if outcome.ops_start.is_none() {
-                                outcome.ops_start = Some(rev as usize);
+                            let legalized = match legal::legalize(&model, rev, &op) {
+                                Ok(legalized) => legalized,
+                                Err(error) => {
+                                    outcome.problem(report::describe_error(&error, locale));
+                                    stopped = true;
+                                    break 'sentences;
+                                }
+                            };
+
+                            let note = report::describe_adjustment(&legalized.adjustment, locale);
+                            for (index, op) in legalized.ops().enumerate() {
+                                let rev = working.next_rev();
+                                let effect = apply(&mut model, rev, op);
+                                // Only the operation the builder asked for is
+                                // worth narrating; the follow-up shifts a
+                                // rotate needs are what the note is for.
+                                if index == 0 {
+                                    outcome
+                                        .replies
+                                        .push(report::describe_effect(op, &effect, locale));
+                                }
+                                // The first operation fixes where the whole
+                                // batch is written, which is not the loaded
+                                // cursor when an undo came earlier in the same
+                                // message.
+                                if outcome.ops_start.is_none() {
+                                    outcome.ops_start = Some(rev as usize);
+                                }
+                                working.push(op.clone(), author);
+                                outcome.ops.push(op.clone());
                             }
-                            working.push(op.clone(), author);
-                            outcome.ops.push(op);
+                            if let Some(note) = note {
+                                outcome.replies.push(note);
+                            }
                         }
                         outcome.applied();
                         outcome.needs_render = true;
@@ -459,6 +485,8 @@ fn nth_sentence(text: &str, index: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The default `max_model_size` — most tests aren't exercising the cap
 
     fn empty() -> History {
         History::new("Castle")
@@ -994,10 +1022,11 @@ mod tests {
         );
         assert!(select.replies[0].to_lowercase().contains("select"));
 
-        // An unrecognised or synonym-only topic falls back to the general
-        // text rather than erroring.
+        // An unrecognised topic falls back to the general text rather than
+        // erroring.
         let unknown = interpret(&empty(), "Help wobble.", "en-US");
         assert!(unknown.reactions.is_empty(), "got: {unknown:?}");
+        assert_eq!(unknown.replies, general.replies);
     }
 
     #[test]
@@ -1062,9 +1091,9 @@ mod tests {
     #[test]
     fn the_design_documents_example_session_runs_end_to_end() {
         let history = run(&[
-            "Add a light bluish gray 8x8 plate at origin.",
-            "Build a wall 8 studs long 4 bricks high.",
-            "Build a tower 6 bricks high.",
+            "Add a light bluish gray 6x6 plate at origin.",
+            "Build a wall 6 studs long 2 bricks high.",
+            "Build a tower 4 bricks high.",
             "Paint the highest brick red.",
         ]);
         let model = history.materialize();
@@ -1076,6 +1105,182 @@ mod tests {
         assert!(model.height_in_bricks() > 4);
         // The painted brick is the top one.
         assert_eq!(model.highest().unwrap().color, 4);
+    }
+
+    // --- Legal geometry ----------------------------------------------------
+
+    /// The invariants a model must hold after any command.
+    ///
+    /// Deliberately not "nothing floats": an overhang is a real thing people
+    /// build, and the documented example session has one — its 6-stud wall
+    /// runs off the edge of the 6x6 plate underneath it. What must never
+    /// happen is a part off the grid, inside another, or below the ground.
+    fn assert_legal(model: &crate::build::Model) {
+        assert!(model.collisions().is_empty(), "parts overlap");
+        for p in &model.placements {
+            assert!(
+                crate::build::legal::is_on_lattice(p.pos, &p.part, p.orientation),
+                "{} is off the stud grid at {:?}",
+                p.part.name,
+                p.pos
+            );
+            assert!(
+                p.pos.y <= 0,
+                "{} is underground at {:?}",
+                p.part.name,
+                p.pos
+            );
+        }
+    }
+
+    #[test]
+    fn an_off_grid_coordinate_is_nudged_onto_the_stud_grid() {
+        // Bare coordinates used to be taken completely literally, so a typo
+        // put down a brick that connected to nothing at all.
+        let model = run(&["Add a red 2x4 brick at 3 5 7."]).materialize();
+        assert_eq!(model.placements[0].pos, crate::build::IVec3::ZERO);
+        assert_legal(&model);
+    }
+
+    #[test]
+    fn a_move_measured_in_the_wrong_unit_lands_back_on_the_grid() {
+        // A plate is a vertical measure; sideways it is 16 LDU, which is not
+        // a stud and leaves the brick attached to nothing.
+        let model =
+            run(&["Add a red 2x4 brick at origin.", "Move it east 2 plates."]).materialize();
+        assert_eq!(model.placements[0].pos.x, 20);
+        assert_legal(&model);
+    }
+
+    #[test]
+    fn a_second_brick_in_the_same_place_is_stacked_rather_than_buried() {
+        let model = run(&[
+            "Add a red 2x4 brick at origin.",
+            "Add a blue 2x4 brick at origin.",
+        ])
+        .materialize();
+        assert_eq!(model.len(), 2);
+        assert_eq!(model.placements[1].pos, crate::build::IVec3::new(0, -24, 0));
+        assert_legal(&model);
+    }
+
+    #[test]
+    fn a_brick_added_in_mid_air_comes_down_to_rest() {
+        let model = run(&["Add a red 2x4 brick at 0 -96 0."]).materialize();
+        assert_eq!(model.placements[0].pos.y, 0, "it should have landed");
+        assert_legal(&model);
+    }
+
+    #[test]
+    fn a_part_of_unknown_size_obeys_the_grid_like_any_other() {
+        // A part whose name carries no size used to drop out of every check,
+        // so it could sit anywhere at all and overlap anything.
+        let chosen = crate::build::PartRef::new("99999", "Mystery Thing", (0, 0), PartKind::Other);
+        let history = empty();
+        let paused = interpret(&history, "Add a red 3x12 brick at 3 5 7.", "en-US");
+        let pending = paused.pending_lookup.expect("expected a pending lookup");
+
+        let outcome = process_message_with_part(
+            &history,
+            &pending.sentence,
+            "en-US",
+            &builders(),
+            "111",
+            &chosen,
+        );
+        let mut history = empty();
+        for op in outcome.ops {
+            history.push(op, "111");
+        }
+        let model = history.materialize();
+        assert_eq!(model.len(), 1);
+        assert!(!model.placements[0].part.has_footprint());
+        assert_legal(&model);
+    }
+
+    #[test]
+    fn the_operation_written_to_the_history_is_the_corrected_one() {
+        // Correcting only the model would leave the log wrong, and the next
+        // reload would replay the illegal position straight back in.
+        let outcome = interpret(&empty(), "Add a red 2x4 brick at 3 5 7.", "en-US");
+        match outcome.ops.first().expect("an operation") {
+            Op::Add { pos, .. } => assert_eq!(*pos, crate::build::IVec3::ZERO),
+            other => panic!("not an add: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_corrected_placement_is_reported_to_the_builder() {
+        // Sideways off the grid, at a legal height: the nudge is all there is
+        // to say about it.
+        let nudged = interpret(&empty(), "Add a red 2x4 brick at 3 0 7.", "en-US");
+        assert_eq!(nudged.replies.len(), 2, "{:?}", nudged.replies);
+        assert!(
+            nudged.replies[1].contains("stud grid"),
+            "{:?}",
+            nudged.replies
+        );
+
+        // Dropped onto what was already there.
+        let stacked = interpret(
+            &run(&["Add a red 2x4 brick at origin."]),
+            "Add a blue 2x4 brick at origin.",
+            "en-US",
+        );
+        assert!(
+            stacked.replies[1].contains("Lifted"),
+            "{:?}",
+            stacked.replies
+        );
+
+        // And a command that was legal to begin with says nothing extra.
+        let clean = interpret(&empty(), "Add a red 2x4 brick at origin.", "en-US");
+        assert_eq!(clean.replies.len(), 1, "{:?}", clean.replies);
+    }
+
+    #[test]
+    fn replaying_a_history_never_moves_anything() {
+        // Sessions recorded before any of this existed still hold illegal
+        // geometry. Replay must reproduce them exactly, or every old thread
+        // would redraw itself the first time someone opened it.
+        let mut history = empty();
+        history.push(
+            Op::Add {
+                part: crate::build::PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick),
+                color: 4,
+                pos: crate::build::IVec3::new(3, 5, 7),
+                orientation: crate::build::Orientation::DEFAULT,
+                repeat: None,
+                group: None,
+            },
+            "111",
+        );
+        let model = history.materialize();
+        assert_eq!(model.placements[0].pos, crate::build::IVec3::new(3, 5, 7));
+    }
+
+    #[test]
+    fn every_sentence_of_the_example_session_leaves_a_legal_model() {
+        // The session from the docs, checked sentence by sentence: a model
+        // that is legal at the end but was illegal along the way would still
+        // have been rendered and shown to the thread that way.
+        let script = [
+            "Add a light bluish gray 6x6 plate at origin.",
+            "Build a wall 6 studs long 2 bricks high.",
+            "Build a tower 4 bricks high.",
+            "Paint the highest brick red.",
+        ];
+        let mut history = empty();
+        for text in script {
+            let outcome = interpret(&history, text, "en-US");
+            for op in outcome.ops {
+                history.push(op, "111");
+            }
+            if let Some(cursor) = outcome.cursor {
+                history.cursor = cursor;
+            }
+            assert_legal(&history.materialize());
+        }
     }
 
     #[test]
@@ -1173,7 +1378,10 @@ mod tests {
     #[test]
     fn a_drawing_needing_one_part_lookup_pauses_with_its_block_intact() {
         // 1x7 is not in the built-in catalogue, so it has to be looked up.
-        let text = "Build from top:\n```\nq = 1x7 brick\n\nqqqqqqq\n```";
+        // Says where it goes, so the replay applies it rather than asking —
+        // a drawing with no location is offered choices instead, which
+        // `a_drawing_with_no_location_asks_where_it_goes` covers.
+        let text = "Build from top at origin:\n```\nq = 1x7 brick\n\nqqqqqqq\n```";
         let outcome = interpret(&empty(), text, "en-US");
 
         let pending = outcome

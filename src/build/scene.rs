@@ -94,19 +94,10 @@ fn cuboid(min: Vec3, max: Vec3, color: Rgb) -> Vec<SceneTriangle> {
 /// so Y is negated here exactly as [`crate::ldraw::geometry::flatten`] does for
 /// real meshes. That keeps box mode and mesh mode in the same space.
 fn placement_bounds(placement: &Placement) -> (Vec3, Vec3) {
-    let (min, max) = placement.occupied_box().unwrap_or_else(|| {
-        // A part with no known footprint still gets a nominal one-stud cube so
-        // it is visible rather than silently missing.
-        let stud = super::units::LDU_STUD;
-        (
-            placement
-                .pos
-                .sub(super::units::IVec3::new(stud / 2, stud, stud / 2)),
-            placement
-                .pos
-                .add(super::units::IVec3::new(stud / 2, 0, stud / 2)),
-        )
-    });
+    // A part of unknown size gets its nominal one-stud box from `occupied_box`
+    // itself now, so it is drawn one brick tall rather than one stud tall as
+    // the fallback here used to make it.
+    let (min, max) = placement.occupied_box();
 
     let a = Vec3::new(min.to_vec3().x, -max.to_vec3().y, min.to_vec3().z);
     let b = Vec3::new(max.to_vec3().x, -min.to_vec3().y, max.to_vec3().z);
@@ -267,7 +258,12 @@ mod tests {
     fn a_part_with_no_footprint_still_gets_visible_geometry() {
         let mut p = placement(4, IVec3::ZERO);
         p.part = PartRef::new("99999", "Mystery", (0, 0), PartKind::Other);
-        assert!(p.occupied_box().is_none());
+        // One nominal stud wide, and a full brick tall — the same box every
+        // other unmeasured part gets, so it collides and stacks like one.
+        assert_eq!(
+            p.occupied_box(),
+            (IVec3::new(-10, -24, -10), IVec3::new(10, 0, 10))
+        );
 
         let triangles = box_triangles(&p);
         assert_eq!(triangles.len(), 12);
@@ -326,9 +322,9 @@ mod visual_check {
     #[ignore = "writes a PNG for manual inspection"]
     async fn render_example_session() {
         let script = [
-            "Add a light bluish gray 8x8 plate at origin.",
-            "Build a wall 8 studs long 4 bricks high.",
-            "Build a tower 6 bricks high.",
+            "Add a light bluish gray 6x6 plate at origin.",
+            "Build a wall 6 studs long 2 bricks high.",
+            "Build a tower 4 bricks high.",
             "Paint the highest brick red.",
         ];
 

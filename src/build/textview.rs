@@ -46,9 +46,7 @@ const fn along(point: IVec3, direction: Direction) -> i32 {
 
 /// A placement's extent along a direction, as `(near, far)` in LDraw units.
 fn extent(placement: &Placement, direction: Direction) -> (i32, i32) {
-    let (lo, hi) = placement
-        .occupied_box()
-        .unwrap_or((placement.pos, placement.pos));
+    let (lo, hi) = placement.occupied_box();
     let a = along(lo, direction);
     let b = along(hi, direction);
     (a.min(b), a.max(b))

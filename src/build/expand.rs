@@ -114,14 +114,23 @@ pub fn expand(
             let per_course = studs_to_count(length_studs, &part, direction);
             checked_total(per_course * height)?;
 
+            // Running bond: alternate courses shift half a part along, which
+            // is how a real wall is laid and stops the seams lining up. Half a
+            // part has to come out as whole studs, though — a course shifted
+            // half a stud has no studs under it at all. A part only one stud
+            // long the way the wall runs simply cannot be bonded, so those
+            // courses line up.
+            let bond = if (step / 2) % LDU_STUD == 0 {
+                step / 2
+            } else {
+                0
+            };
+
             let mut ops = Vec::new();
             for course in 0..height {
                 for i in 0..per_course {
-                    // Running bond: alternate courses shift half a part along,
-                    // which is how a real wall is laid and stops the seams
-                    // lining up.
                     #[allow(clippy::cast_possible_wrap)]
-                    let along = step * i as i32 + if course % 2 == 1 { step / 2 } else { 0 };
+                    let along = step * i as i32 + if course % 2 == 1 { bond } else { 0 };
                     #[allow(clippy::cast_possible_wrap)]
                     let up = IVec3::new(0, -course_height * course as i32, 0);
                     let pos = start.add(direction.step().scale(along)).add(up);
@@ -221,11 +230,18 @@ pub fn expand(
                 .quantity()
                 .unwrap_or_else(|| extent_count(command, ExtentAxis::Height, 5));
             let steps = checked_total(steps)?;
+            // A tread has to sit *on* the one below it, so the run is one stud
+            // shorter than the part: stepping clear by a whole part leaves the
+            // two merely touching at the edge, which holds nothing up. A part
+            // only one stud long the way we are going cannot overlap at all,
+            // so it falls back to a stud and the caller's settling deals with
+            // what is left.
+            let run = (step - LDU_STUD).max(LDU_STUD);
             Ok(finish(
                 (0..steps)
                     .map(|i| {
                         #[allow(clippy::cast_possible_wrap)]
-                        let along = direction.step().scale(step * i as i32);
+                        let along = direction.step().scale(run * i as i32);
                         #[allow(clippy::cast_possible_wrap)]
                         let up = IVec3::new(0, -course_height * i as i32, 0);
                         make(start.add(along).add(up), Orientation::DEFAULT)
@@ -502,6 +518,39 @@ mod tests {
         sorted.sort_by_key(|p| p.pos.x);
         // Each step is higher (smaller Y) than the one before it.
         assert!(sorted.windows(2).all(|w| w[1].pos.y <= w[0].pos.y));
+    }
+
+    #[test]
+    fn a_wall_of_one_wide_bricks_still_bonds_on_whole_studs() {
+        // Half of a two-stud part is one stud, which bonds. Half of a one-stud
+        // part is half a stud, which is not a thing you can build: the course
+        // above would have no studs under it.
+        // Where the wall as a whole sits is the caller's business; that its
+        // own bricks line up with each other is this expander's.
+        let model = run(&["Build a wall 6 studs long 2 bricks high using 1x2 bricks"]);
+        assert!(model.collisions().is_empty());
+        let base = model.placements[0].pos.x;
+        for p in &model.placements {
+            assert_eq!(
+                (p.pos.x - base).rem_euclid(LDU_STUD),
+                0,
+                "{:?} is bonded half a stud off the rest of the wall",
+                p.pos
+            );
+        }
+    }
+
+    #[test]
+    fn every_step_of_a_staircase_rests_on_the_one_below_it() {
+        // Stepping clear by a whole part left each tread merely touching the
+        // edge of its predecessor, which holds nothing up: every tread above
+        // the first was floating in mid-air.
+        let model = run(&["Build stairs 4 steps"]);
+        assert!(
+            model.unsupported().is_empty(),
+            "a staircase must be climbable"
+        );
+        assert!(model.collisions().is_empty());
     }
 
     #[test]

@@ -466,6 +466,9 @@ mod tests {
             group: None,
         });
         let bounds = model.subset_bounds(&[PlacementId::new(0, 0)]).unwrap();
-        assert_eq!(bounds.0, IVec3::new(60, 0, 0));
+        // It contributes its nominal one-stud box rather than a bare point,
+        // so a group containing it still measures as something you could hold.
+        assert_eq!(bounds.0, IVec3::new(50, -24, -10));
+        assert_eq!(bounds.1, IVec3::new(70, 0, 10));
     }
 }

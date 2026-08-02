@@ -12,6 +12,7 @@ pub mod dsl;
 pub mod expand;
 pub mod export;
 pub mod grid;
+pub mod legal;
 pub mod lower;
 pub mod model;
 pub mod ops;
