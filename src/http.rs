@@ -53,6 +53,10 @@ fn get_cache() -> Cache<CacheKey, Bytes> {
 
 use async_trait::async_trait;
 
+// The mock automock generates takes its matcher arguments by reference, which
+// turns our `Option<&str>` parameters into `&Option<&str>`. Nothing we can fix
+// from this side, so the lint is silenced over the generated code only.
+#[cfg_attr(test, allow(clippy::ref_option_ref))]
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait HttpProvider: Send + Sync {
