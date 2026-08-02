@@ -1225,6 +1225,88 @@ mod tests {
         assert_eq!(model.highest().unwrap().color, 4);
     }
 
+    // --- Max model size ------------------------------------------------
+
+    #[test]
+    fn a_command_that_would_exceed_the_configured_max_size_is_rejected() {
+        let outcome = process_message(
+            &empty(),
+            "Add a red 2x4 brick at origin.",
+            "en-US",
+            &builders(),
+            "111",
+            MaxModelSize::cube(1),
+        );
+        assert!(outcome.ops.is_empty(), "nothing should have been placed");
+        assert!(
+            outcome.replies.iter().any(|r| r.contains("1x1x1")),
+            "expected the size-limit message, got {:?}",
+            outcome.replies
+        );
+    }
+
+    #[test]
+    fn a_command_that_fits_the_configured_max_size_is_applied() {
+        let outcome = process_message(
+            &empty(),
+            "Add a red 1x1 brick at origin.",
+            "en-US",
+            &builders(),
+            "111",
+            MaxModelSize::cube(1),
+        );
+        assert_eq!(outcome.ops.len(), 1);
+    }
+
+    #[test]
+    fn many_small_commands_cannot_creep_a_model_past_the_limit_either() {
+        // The cap looks at the whole model, not just what one command adds,
+        // so a second small brick placed far from the first is refused even
+        // though neither command alone looks oversized.
+        let history = run(&["Add a red 1x1 brick at origin."]);
+        let outcome = process_message(
+            &history,
+            "Add a blue 1x1 brick east 5.",
+            "en-US",
+            &builders(),
+            "111",
+            MaxModelSize::cube(1),
+        );
+        assert!(outcome.ops.is_empty(), "nothing should have been placed");
+    }
+
+    #[test]
+    fn an_already_oversized_model_is_not_punished_for_edits_that_dont_grow_it() {
+        // A model built before the limit existed — or under a looser guild
+        // override — must not have every future edit rejected just because
+        // it is already bigger than the box. Only growing past the limit is
+        // refused.
+        let history = process_message(
+            &empty(),
+            "Add a red 2x4 brick at origin.",
+            "en-US",
+            &builders(),
+            "111",
+            MaxModelSize::cube(100),
+        )
+        .ops
+        .into_iter()
+        .fold(empty(), |mut h, op| {
+            h.push(op, "111");
+            h
+        });
+
+        let outcome = process_message(
+            &history,
+            "Paint it blue.",
+            "en-US",
+            &builders(),
+            "111",
+            MaxModelSize::cube(1),
+        );
+        assert_eq!(outcome.ops.len(), 1, "a repaint does not grow the model");
+    }
+
     // --- Placement proposals -----------------------------------------------
 
     #[test]
