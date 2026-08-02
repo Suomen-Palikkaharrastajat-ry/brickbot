@@ -145,6 +145,33 @@ fn mesh_triangles(placement: &Placement, mesh: &crate::ldraw::Mesh) -> Vec<Scene
         .collect()
 }
 
+/// Triangles for one placement: its real mesh when the library has it,
+/// otherwise a box. `true` means it came out boxed.
+///
+/// Pulled out of [`build_scene`] so that anything drawing a placement that
+/// is not (yet) part of the model — a proposal candidate, say — renders it
+/// exactly the way the model itself will once the placement joins it. Two
+/// separate ways of drawing "the same part" is how a preview and the model
+/// it becomes end up looking different from each other.
+pub(super) async fn placement_triangles(
+    placement: &Placement,
+    library: &LdrawLibrary,
+    use_meshes: bool,
+) -> (Vec<SceneTriangle>, bool) {
+    if use_meshes {
+        match library.mesh(&placement.part.file_name()).await {
+            Ok(mesh) => return (mesh_triangles(placement, &mesh), false),
+            Err(e) => {
+                tracing::debug!(
+                    "ldraw: {} unavailable, drawing a box instead: {e}",
+                    placement.part.ldraw_id
+                );
+            }
+        }
+    }
+    (box_triangles(placement), true)
+}
+
 /// Builds the triangle soup for a model.
 pub async fn build_scene(
     model: &Model,
@@ -159,23 +186,13 @@ pub async fn build_scene(
     let use_meshes = mode == SceneMode::Meshes && library.is_available();
 
     for placement in &model.placements {
-        if use_meshes {
-            match library.mesh(&placement.part.file_name()).await {
-                Ok(mesh) => {
-                    triangles.extend(mesh_triangles(placement, &mesh));
-                    report.meshed += 1;
-                    continue;
-                }
-                Err(e) => {
-                    tracing::debug!(
-                        "ldraw: {} unavailable, drawing a box instead: {e}",
-                        placement.part.ldraw_id
-                    );
-                }
-            }
+        let (tris, boxed) = placement_triangles(placement, library, use_meshes).await;
+        triangles.extend(tris);
+        if boxed {
+            report.boxed += 1;
+        } else {
+            report.meshed += 1;
         }
-        triangles.extend(box_triangles(placement));
-        report.boxed += 1;
     }
 
     (triangles, report)
@@ -195,19 +212,26 @@ pub fn highlight(triangles: &mut [SceneTriangle], color: Rgb) {
     }
 }
 
-/// A candidate placement drawn slightly proud of the model.
+/// Nudges a colour toward another by `amount` — `0.0` is `color` unchanged,
+/// `1.0` is `toward` outright.
 ///
-/// The depth test is a strict `z <`, so a candidate whose face is exactly
-/// coplanar with an existing brick would z-fight into stripes. Growing it a
-/// fraction of a stud costs nothing visually and settles the argument.
+/// Used to mark a proposal candidate as new without hiding what colour it
+/// actually is: a flat repaint (what [`highlight`] does) reads as "this part
+/// is magenta", which is exactly the wrong answer to "what colour would this
+/// be".
 #[must_use]
-pub fn candidate_triangles(placement: &Placement, color: Rgb) -> Vec<SceneTriangle> {
-    const PROUD: f32 = 0.5;
-    let (min, max) = placement_bounds(placement);
-    cuboid(
-        Vec3::new(min.x - PROUD, min.y - PROUD, min.z - PROUD),
-        Vec3::new(max.x + PROUD, max.y + PROUD, max.z + PROUD),
-        color,
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn blend(color: Rgb, toward: Rgb, amount: f32) -> Rgb {
+    let amount = amount.clamp(0.0, 1.0);
+    let mix = |a: u8, b: u8| {
+        (f32::from(b) - f32::from(a))
+            .mul_add(amount, f32::from(a))
+            .round() as u8
+    };
+    Rgb::new(
+        mix(color.r, toward.r),
+        mix(color.g, toward.g),
+        mix(color.b, toward.b),
     )
 }
 
@@ -249,13 +273,21 @@ mod tests {
     }
 
     #[test]
-    fn a_candidate_is_drawn_proud_so_it_cannot_z_fight() {
-        // Exactly coplanar faces would stripe against the depth test.
-        let p = placement(4, IVec3::ZERO);
-        let plain = crate::render::bounds_of(&box_triangles(&p));
-        let proud = crate::render::bounds_of(&candidate_triangles(&p, Rgb::new(255, 0, 255)));
-        assert!(proud.min.x < plain.min.x);
-        assert!(proud.max.y > plain.max.y);
+    fn blending_moves_a_colour_toward_another_by_the_given_amount() {
+        let red = Rgb::new(200, 0, 0);
+        let marker = Rgb::new(0, 0, 200);
+        assert_eq!(blend(red, marker, 0.0), red);
+        assert_eq!(blend(red, marker, 1.0), marker);
+        let half = blend(red, marker, 0.5);
+        assert_eq!(half, Rgb::new(100, 0, 100));
+    }
+
+    #[test]
+    fn blending_clamps_the_amount_rather_than_overshooting() {
+        let red = Rgb::new(200, 0, 0);
+        let marker = Rgb::new(0, 0, 200);
+        assert_eq!(blend(red, marker, 5.0), marker);
+        assert_eq!(blend(red, marker, -5.0), red);
     }
 
     #[test]

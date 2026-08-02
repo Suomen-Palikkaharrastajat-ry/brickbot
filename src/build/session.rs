@@ -622,7 +622,7 @@ async fn persist(
         outcome
             .pending_lookup
             .as_ref()
-            .map(|pending| pending.sentence.as_str()),
+            .map(|pending| (pending.sentence.as_str(), pending.kind)),
     )
     .await?;
 
@@ -936,6 +936,13 @@ pub async fn handle_part_choice(
             .await;
         return Ok(());
     };
+    // What the paused sentence actually asked for, e.g. `Add a plate...`,
+    // so the chosen element keeps that shape's height rather than always
+    // becoming a brick. `kind_from_name` still gets the last word if the
+    // Rebrickable result's own name disagrees.
+    let asked_kind = session
+        .pending_kind
+        .unwrap_or(super::model::PartKind::Brick);
 
     let http = crate::http::HttpClient::new();
     let part = crate::parts_cache::warm::detail(
@@ -945,12 +952,8 @@ pub async fn handle_part_choice(
         app_ctx.config.resource_limits.max_http_body_bytes,
     )
     .await?;
-    let chosen = super::parts::from_rebrickable(
-        &part.part_num,
-        &part.name,
-        &part.external_ids,
-        super::model::PartKind::Brick,
-    );
+    let chosen =
+        super::parts::from_rebrickable(&part.part_num, &part.name, &part.external_ids, asked_kind);
 
     let lock = session_lock(&session.id).await;
     let guard = lock.lock().await;
@@ -1089,9 +1092,14 @@ const PROPOSAL_KIND: &str = "build_proposal";
 /// stale one is refused anyway.
 const PROPOSAL_TTL_MINS: u32 = 15;
 
-/// The colour a proposed placement is drawn in, so it stands out from the
-/// model it would join.
+/// The colour a proposed placement is nudged toward, so it stands out from
+/// the model it would join without hiding what colour it actually is.
 const PROPOSAL_HIGHLIGHT: crate::ldraw::colors::Rgb = crate::ldraw::colors::Rgb::new(255, 0, 220);
+
+/// How far toward [`PROPOSAL_HIGHLIGHT`] a candidate's real colour is
+/// nudged. High enough to read as "this one is new" at a glance; low enough
+/// that a white part still looks white and a black one still looks black.
+const PROPOSAL_TINT: f32 = 0.35;
 
 /// One tile of the proposal picture.
 const TILE_WIDTH: u32 = 320;
@@ -1202,6 +1210,41 @@ async fn offer_proposals(
     Ok(())
 }
 
+/// One proposal tile's triangles: the model as `base` left it, plus this
+/// candidate's own parts.
+///
+/// The candidate's parts are drawn with exactly the geometry `build_scene`
+/// would give them once they actually join the model — a real mesh when the
+/// library has one, never a stand-in box — so a tile can never show a
+/// placement that turns out to sit differently once it is committed. Tinting
+/// their colour toward [`PROPOSAL_HIGHLIGHT`] rather than repainting it flat
+/// keeps their real colour recognisable while still marking them as the part
+/// on offer.
+async fn candidate_soup(
+    base: &[SceneTriangle],
+    library: &LdrawLibrary,
+    use_meshes: bool,
+    candidate: &super::propose::Candidate,
+) -> Vec<SceneTriangle> {
+    let mut soup = base.to_vec();
+    for placed in &candidate.placements {
+        let placement = super::model::Placement {
+            id: super::model::PlacementId::new(0, 0),
+            part: placed.part.clone(),
+            color: placed.color,
+            pos: placed.pos,
+            orientation: placed.orientation,
+            group: None,
+        };
+        let (mut tris, _boxed) = scene::placement_triangles(&placement, library, use_meshes).await;
+        for triangle in &mut tris {
+            triangle.color = scene::blend(triangle.color, PROPOSAL_HIGHLIGHT, PROPOSAL_TINT);
+        }
+        soup.extend(tris);
+    }
+    soup
+}
+
 /// Draws every offer as one picture, tiled.
 ///
 /// All the tiles share **one** camera, fitted to everything any of them
@@ -1222,28 +1265,13 @@ async fn render_proposals(
     } else {
         SceneMode::Boxes
     };
+    let use_meshes = mode == SceneMode::Meshes;
     let (base, _) = scene::build_scene(model, library, mode).await;
 
-    let soups: Vec<Vec<SceneTriangle>> = candidates
-        .iter()
-        .map(|candidate| {
-            let mut soup = base.clone();
-            for placed in &candidate.placements {
-                soup.extend(scene::candidate_triangles(
-                    &super::model::Placement {
-                        id: super::model::PlacementId::new(0, 0),
-                        part: placed.part.clone(),
-                        color: placed.color,
-                        pos: placed.pos,
-                        orientation: placed.orientation,
-                        group: None,
-                    },
-                    PROPOSAL_HIGHLIGHT,
-                ));
-            }
-            soup
-        })
-        .collect();
+    let mut soups: Vec<Vec<SceneTriangle>> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        soups.push(candidate_soup(&base, library, use_meshes, candidate).await);
+    }
     if soups.is_empty() {
         return None;
     }
@@ -1903,6 +1931,30 @@ async fn show_preview<R: Respondable>(
         max_size_for(&session, &cfg),
     );
 
+    // A drawing with nowhere said to put it is the same question a bare part
+    // name asks — answer it the same way, rather than showing a preview that
+    // looks like nothing happened and leaving the `[Place]` button to be
+    // discovered separately.
+    if let Some(pending) = preview.outcome.pending_proposal.clone() {
+        return offer_draft_positions(
+            ctx,
+            app_ctx,
+            interaction,
+            draft_id,
+            &ProposalContext {
+                pool: &app_ctx.db,
+                session: &session,
+                user_id,
+                guild_id: who.guild_id,
+                channel_id: who.channel_id,
+                cfg: &cfg,
+                locale,
+            },
+            pending,
+        )
+        .await;
+    }
+
     stored.based_on = preview.based_on;
     stored.preview_seq = stored.preview_seq.saturating_add(1);
     save_draft(app_ctx, draft_id, user_id, stored).await;
@@ -2170,13 +2222,22 @@ pub async fn handle_proposal_button(
         .await;
     }
 
-    // Which offer: from the button's own id, or from the menu's value.
-    let chosen: usize = match base_id {
-        build_cmd::SELECT_PROPOSE_DRAW => selected_value(interaction)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0),
-        _ => index_arg.and_then(|v| v.parse().ok()).unwrap_or(0),
-    };
+    // Opening a modal has to be the *first* response to the interaction, so
+    // this has to happen before anything below acknowledges it.
+    if base_id == build_cmd::BUTTON_PROPOSE_OTHER {
+        return interaction
+            .create_response(
+                &ctx.http,
+                CreateInteractionResponse::Modal(build_cmd::build_propose_location_modal(
+                    proposal_id,
+                    &locale,
+                )),
+            )
+            .await
+            .map_err(Into::into);
+    }
+
+    let chosen: usize = index_arg.and_then(|v| v.parse().ok()).unwrap_or(0);
     let Some(placements) = stored.options.get(chosen).cloned() else {
         return respond_ephemeral_component(
             ctx,
@@ -2200,21 +2261,6 @@ pub async fn handle_proposal_button(
         .await;
     };
     let cfg = app_ctx.config.commands_for(guild_id).build;
-
-    // "Draw this instead" hands the position to the drawing form rather than
-    // building anything, so a proposed brick can grow into a whole block.
-    if base_id == build_cmd::SELECT_PROPOSE_DRAW {
-        let _ = db::consume_workflow_session(&app_ctx.db, proposal_id, &user_id).await;
-        return open_draft_at(
-            ctx,
-            app_ctx,
-            interaction,
-            &session,
-            &placements,
-            (guild_id, &locale, &user_id),
-        )
-        .await;
-    }
 
     let lock = session_lock(&session.id).await;
     let guard = lock.lock().await;
@@ -2321,16 +2367,11 @@ async fn place_draft(
         .await;
     };
 
-    // The draft is done with; what happens next is an ordinary proposal.
-    finish_draft(app_ctx, draft_id, user_id).await;
-    respond_ephemeral_component(
+    offer_draft_positions(
         ctx,
+        app_ctx,
         interaction,
-        &rust_i18n::t!("command.build.propose_pick", locale = locale),
-    )
-    .await?;
-    offer_proposals(
-        ctx,
+        draft_id,
         &ProposalContext {
             pool: &app_ctx.db,
             session: &session,
@@ -2340,29 +2381,103 @@ async fn place_draft(
             cfg: &cfg,
             locale,
         },
-        &pending,
+        pending,
     )
     .await
 }
 
-/// Opens the drawing form prefilled with a proposed placement.
-async fn open_draft_at(
+/// Turns a location-less drawing into an ordinary position proposal: ends the
+/// draft, then hands the batch to the same ranked-position picker a bare part
+/// name gets.
+///
+/// Shared by the explicit `[Place]` button and by [`show_preview`] itself —
+/// a drawing left without a location is exactly the question a bare part name
+/// asks, so leaving the form's `location` field blank should reach the same
+/// answer without the builder needing to know a second button exists.
+async fn offer_draft_positions<R: Respondable>(
     ctx: &Context,
     app_ctx: &crate::workflows::AppContext,
-    interaction: &ComponentInteraction,
-    session: &db::build::BuildSession,
-    placements: &[super::ops::Placed],
-    who: (u64, &str, &str),
+    interaction: &R,
+    draft_id: &str,
+    who: &ProposalContext<'_>,
+    pending: dispatch::PendingProposal,
 ) -> anyhow::Result<()> {
-    let (guild_id, locale, user_id) = who;
+    // The draft is done with; what happens next is an ordinary proposal.
+    finish_draft(app_ctx, draft_id, who.user_id).await;
+    respond_ephemeral_component(
+        ctx,
+        interaction,
+        &rust_i18n::t!("command.build.propose_pick", locale = who.locale),
+    )
+    .await?;
+    offer_proposals(ctx, who, &pending).await
+}
+
+/// Handles the `[Type a position…]` modal: previews the proposal's own
+/// shape at whatever was typed, exactly the way any other drawing is.
+///
+/// Reuses the drawing form's machinery rather than parsing the typed phrase
+/// itself — the location grammar, its legalisation and its preview are
+/// already `show_preview`'s job, and a hand-rolled second parser would only
+/// be another place for the two to drift apart.
+pub async fn handle_propose_location_modal(
+    ctx: &Context,
+    app_ctx: &crate::workflows::AppContext,
+    interaction: &serenity::all::ModalInteraction,
+    proposal_id: &str,
+) -> anyhow::Result<()> {
+    let guild_id = interaction.guild_id.unwrap_or_default().get();
+    let locale = app_ctx.config.locale_or_default(guild_id).to_string();
+    let user_id = interaction.user.id.get().to_string();
+
+    let Some(stored) = load_proposal(app_ctx, proposal_id, &user_id).await else {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_expired", locale = locale.as_str()),
+        )
+        .await;
+    };
+    let Some(placements) = stored.options.first().cloned() else {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_expired", locale = locale.as_str()),
+        )
+        .await;
+    };
+    let Some(session) = db::build::get_active_session_by_channel(
+        &app_ctx.db,
+        &interaction.channel_id.get().to_string(),
+    )
+    .await?
+    else {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_expired", locale = locale.as_str()),
+        )
+        .await;
+    };
+    let history = db::build::load_history(&app_ctx.db, &session.id, &session.model_name).await?;
+    if stored.based_on != history.revision() {
+        return respond_ephemeral_component(
+            ctx,
+            interaction,
+            &rust_i18n::t!("command.build.propose_expired", locale = locale.as_str()),
+        )
+        .await;
+    }
+
     let channel = interaction.channel_id.get().to_string();
-    let (draft_id, mut stored) = match open_draft(app_ctx, user_id, &channel).await {
+    let (draft_id, mut stored_draft) = match open_draft(app_ctx, &user_id, &channel).await {
         Some(found) => found,
-        None => create_draft(app_ctx, session, user_id, guild_id, &channel).await?,
+        None => create_draft(app_ctx, &session, &user_id, guild_id, &channel).await?,
     };
 
-    // Start the drawing from the proposal itself: its parts, at the position
-    // that was picked, so nothing has to be typed twice.
+    // The proposal's own parts, in their own relative shape — `textview`
+    // always anchors a rendered drawing at the origin, so what the builder
+    // typed is the only thing deciding where this actually lands.
     let mut sketch = super::Model::new(&session.model_name);
     for (seq, placed) in placements.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]
@@ -2376,28 +2491,44 @@ async fn open_draft_at(
         });
     }
     if let Some(view) = super::textview::render(&sketch, super::units::GridView::Top, None) {
-        let fields = draft::split_fields(&view);
-        stored.view = fields.view;
-        stored.legend = fields.legend;
-        stored.grid = fields.grid;
+        let sketch_fields = draft::split_fields(&view);
+        stored_draft.view = sketch_fields.view;
+        stored_draft.legend = sketch_fields.legend;
+        stored_draft.grid = sketch_fields.grid;
     }
-    // The drawing lands where the proposal was going to.
-    if let Some(first) = placements.first() {
-        stored.location = format!("at {} {} {}", first.pos.x, first.pos.y, first.pos.z);
-    }
-    save_draft(app_ctx, &draft_id, user_id, &stored).await;
+    stored_draft.location = read_location_modal(interaction);
+    save_draft(app_ctx, &draft_id, &user_id, &stored_draft).await;
 
+    let _ = db::consume_workflow_session(&app_ctx.db, proposal_id, &user_id).await;
+
+    show_preview(
+        ctx,
+        app_ctx,
+        interaction,
+        &mut stored_draft,
+        &DraftContext {
+            draft_id: &draft_id,
+            user_id: &user_id,
+            locale: &locale,
+            guild_id,
+            channel_id: interaction.channel_id,
+        },
+    )
+    .await
+}
+
+/// Reads the typed position back out of the `[Type a position…]` modal.
+fn read_location_modal(interaction: &serenity::all::ModalInteraction) -> String {
     interaction
-        .create_response(
-            &ctx.http,
-            CreateInteractionResponse::Modal(build_cmd::build_draw_modal(
-                &draft_id,
-                &stored.fields(),
-                locale,
-            )),
-        )
-        .await?;
-    Ok(())
+        .data
+        .components
+        .first()
+        .and_then(|row| row.components.first())
+        .and_then(|component| match component {
+            serenity::all::ActionRowComponent::InputText(input) => input.value.clone(),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 async fn respond_ephemeral_command(
@@ -2488,6 +2619,53 @@ pub const fn debounce_delay(cfg: &BuildCommandConfig) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_library() -> LdrawLibrary {
+        LdrawLibrary::new(
+            std::env::temp_dir().join("brickbot-session-no-library"),
+            crate::ldraw::resolve::ResolveLimits::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_candidate_tile_keeps_the_parts_real_colour_not_a_flat_highlight() {
+        use crate::build::model::{PartKind, PartRef};
+        use crate::build::ops::Placed;
+        use crate::build::propose::{Candidate, Origin};
+        use crate::build::units::{IVec3, Orientation};
+
+        let white = 15;
+        let candidate = Candidate {
+            placements: vec![Placed {
+                part: PartRef::new("3005", "Brick 1 x 1", (1, 1), PartKind::Brick),
+                color: white,
+                pos: IVec3::ZERO,
+                orientation: Orientation::DEFAULT,
+            }],
+            origin: Origin::Ground,
+            score: 100,
+        };
+
+        // No library, so this is box mode — deterministic, no filesystem
+        // dependency, and exactly what `build_scene` gives the same
+        // placement once it is actually part of the model.
+        let library = empty_library();
+        let soup = candidate_soup(&[], &library, false, &candidate).await;
+        assert!(!soup.is_empty());
+
+        let expected = scene::blend(
+            crate::ldraw::colors::resolve(white),
+            PROPOSAL_HIGHLIGHT,
+            PROPOSAL_TINT,
+        );
+        assert!(
+            soup.iter().all(|t| t.color == expected),
+            "a white brick's tile must still read as white, tinted — not the flat highlight colour"
+        );
+        // And never the flat highlight on its own: white nudged toward
+        // magenta is not magenta.
+        assert!(soup.iter().all(|t| t.color != PROPOSAL_HIGHLIGHT));
+    }
 
     #[test]
     fn a_render_waits_until_the_debounce_window_has_passed() {
@@ -2670,6 +2848,13 @@ mod tests {
         assert_eq!(
             parked.pending_sentence.as_deref(),
             Some("Add a red 3x12 brick at origin")
+        );
+        // The shape it asked for travels with it, so the part chosen from
+        // the dropdown keeps brick height rather than falling back to it by
+        // coincidence.
+        assert_eq!(
+            parked.pending_kind,
+            Some(super::super::model::PartKind::Brick)
         );
         assert!(
             model_of(&pool, &s.id).await.is_empty(),

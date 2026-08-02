@@ -93,15 +93,42 @@ static PALETTE: &[Entry] = &[
     e(78,  "light nougat",         0xF6, 0xD7, 0xB3),
     e(84,  "medium nougat",        0xCC, 0x70, 0x2A),
     e(85,  "dark purple",          0x3F, 0x36, 0x91),
+    e(86,  "medium brown",         0x7B, 0x5D, 0x41),
+    e(89,  "blue violet",          0x1C, 0x58, 0xA7),
+    // Plain "Nougat": the skin-tone brown LEGO used to call "Flesh", distinct
+    // from the lighter/pinker Light Nougat (78) above.
+    e(92,  "nougat",               0xBB, 0x80, 0x5A),
+    e(100, "light salmon",         0xF9, 0xB7, 0xA5),
+    // Plain "Violet", distinct from the paler Light Violet (20) above.
+    e(110, "violet",               0x26, 0x46, 0x9A),
+    e(112, "medium violet",        0x48, 0x61, 0xAC),
+    e(115, "medium lime",          0xB7, 0xD4, 0x25),
+    e(118, "aqua",                 0x9C, 0xD6, 0xCC),
+    e(120, "light lime",           0xDE, 0xEA, 0x92),
+    e(125, "light orange",         0xF9, 0xA7, 0x77),
+    e(128, "dark nougat",          0xAD, 0x61, 0x40),
+    e(151, "very light bluish grey", 0xC8, 0xC8, 0xC8),
+    e(191, "bright light orange",  0xFC, 0xAC, 0x00),
+    e(212, "bright light blue",    0x9D, 0xC3, 0xF7),
+    e(216, "rust",                 0x87, 0x2B, 0x17),
+    e(218, "reddish lilac",        0x8E, 0x55, 0x97),
+    e(219, "lilac",                0x56, 0x4E, 0x9D),
+    e(226, "bright light yellow",  0xFF, 0xEC, 0x6C),
+    e(232, "sky blue",             0x77, 0xC9, 0xD8),
     e(272, "dark blue",            0x0A, 0x34, 0x63),
     e(288, "dark green",           0x18, 0x46, 0x32),
+    e(295, "flamingo pink",        0xFF, 0x94, 0xC2),
+    e(308, "dark brown",           0x35, 0x21, 0x00),
+    e(313, "maersk blue",          0xAB, 0xD9, 0xFF),
     e(320, "dark red",             0x72, 0x0E, 0x0F),
     e(321, "dark azure",           0x14, 0x98, 0xD7),
     e(322, "medium azure",         0x3E, 0xC2, 0xDD),
     e(323, "light aqua",           0xBD, 0xDC, 0xD8),
     e(326, "yellowish green",      0xDF, 0xEE, 0xA5),
+    e(330, "olive green",          0x77, 0x77, 0x4E),
     e(335, "sand red",             0xD6, 0x75, 0x72),
     e(351, "medium dark pink",     0xF7, 0x85, 0xB1),
+    e(353, "coral",                0xFF, 0x6D, 0x77),
     e(366, "earth orange",         0xFA, 0x9C, 0x1C),
     e(373, "sand purple",          0x75, 0x65, 0x7D),
     e(378, "sand green",           0x70, 0x8E, 0x7C),
@@ -110,6 +137,10 @@ static PALETTE: &[Entry] = &[
     e(462, "medium orange",        0xF5, 0x86, 0x24),
     e(484, "dark orange",          0x91, 0x50, 0x1C),
     e(503, "very light grey",      0xBC, 0xB4, 0xA5),
+    e(507, "light orange brown",   0xFA, 0x9C, 0x1C),
+    e(508, "fabuland red",         0xFF, 0x80, 0x14),
+    e(509, "fabuland orange",      0xCF, 0x8A, 0x47),
+    e(510, "fabuland pastel green",0x78, 0xFC, 0x78),
     // Transparent colours. Rendered opaque for now; the alpha channel is not
     // part of the framebuffer.
     e(33,  "trans dark blue",      0x00, 0x20, 0xA0),
@@ -123,12 +154,18 @@ static PALETTE: &[Entry] = &[
     e(41,  "trans medium blue",    0x55, 0x9A, 0xB7),
     e(42,  "trans neon green",     0xC0, 0xFF, 0x00),
     e(43,  "trans light blue",     0xAE, 0xE9, 0xEF),
+    e(44,  "trans bright reddish lilac", 0x96, 0x70, 0x9F),
     e(45,  "trans pink",           0xFC, 0x97, 0xAC),
     e(46,  "trans yellow",         0xF5, 0xCD, 0x2F),
     e(47,  "trans clear",          0xFC, 0xFC, 0xFC),
     e(52,  "trans purple",         0xA5, 0xA5, 0xCB),
     e(54,  "trans neon yellow",    0xDA, 0xB0, 0x00),
     e(57,  "trans orange",         0xF0, 0x8F, 0x1C),
+    e(231, "trans bright light orange", 0xFC, 0xB7, 0x6D),
+    e(234, "trans fire yellow",    0xFB, 0xE8, 0x90),
+    e(284, "trans reddish lilac",  0xC2, 0x81, 0xA5),
+    e(285, "trans light green",    0x7D, 0xC2, 0x91),
+    e(293, "trans light blue violet", 0x6B, 0xAB, 0xE4),
 ];
 
 /// Aliases accepted by the build language on top of the canonical names.
@@ -143,13 +180,14 @@ static ALIASES: &[(&str, u16)] = &[
     ("old light grey",      7),
     ("old dark grey",       8),
     ("silver",              71),
-    ("nougat",              78),
-    ("flesh",               78),
+    // LEGO's old name for what LDraw now calls plain Nougat (92) — not Light
+    // Nougat (78), which "nougat" on its own resolves to directly now that
+    // it is its own palette entry.
+    ("flesh",               92),
     ("clear",               47),
     ("transparent",         47),
     ("azure",               321),
     ("turquoise",           3),
-    ("violet",              20),
     ("gold",                14),
 ];
 
@@ -419,6 +457,27 @@ mod tests {
         assert_eq!(code_from_name("  YELLOW  "), Some(14));
         assert_eq!(code_from_name("not a colour"), None);
         assert_eq!(code_from_name(""), None);
+    }
+
+    #[test]
+    fn dark_nougat_is_recognised() {
+        // The colour that started this: previously only Light Nougat and
+        // Medium Nougat existed, so a real, common LEGO colour had no way in.
+        assert_eq!(code_from_name("dark nougat"), Some(128));
+        assert_eq!(name_of(128), Some("dark nougat"));
+    }
+
+    #[test]
+    fn plain_nougat_and_violet_resolve_to_their_own_colour_not_the_light_one() {
+        // "nougat" and "violet" name real LDraw colours of their own (92 and
+        // 110) — a plain word must not quietly mean the *light* shade just
+        // because that used to be the only one in the palette.
+        assert_eq!(code_from_name("nougat"), Some(92));
+        assert_eq!(code_from_name("light nougat"), Some(78));
+        assert_eq!(code_from_name("violet"), Some(110));
+        assert_eq!(code_from_name("light violet"), Some(20));
+        // "Flesh" was LEGO's old name for Nougat, not Light Nougat.
+        assert_eq!(code_from_name("flesh"), Some(92));
     }
 
     #[test]

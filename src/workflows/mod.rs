@@ -232,7 +232,7 @@ pub async fn handle_component_interaction(
         }
         // Placement proposals. `build_place` carries a chosen index after the
         // proposal id, so the handler splits what is left again.
-        "build_place" | "build_propose_cancel" | "build_propose_draw" => {
+        "build_place" | "build_propose_cancel" | "build_propose_other" => {
             crate::build::session::handle_proposal_button(
                 ctx,
                 &app_ctx,
@@ -360,6 +360,14 @@ pub async fn handle_modal_submit(
         locations::handle_modal_edit_location(ctx, &app_ctx, interaction, sid).await?;
     } else if let Some(draft_id) = custom_id.strip_prefix("build_draw_modal:") {
         crate::build::session::handle_draw_modal(ctx, &app_ctx, interaction, draft_id).await?;
+    } else if let Some(proposal_id) = custom_id.strip_prefix("build_propose_location_modal:") {
+        crate::build::session::handle_propose_location_modal(
+            ctx,
+            &app_ctx,
+            interaction,
+            proposal_id,
+        )
+        .await?;
     }
 
     Ok(())

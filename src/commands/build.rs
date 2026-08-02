@@ -14,8 +14,7 @@ use crate::discord_limits::{MAX_BUTTON_LABEL, MAX_SELECT_OPTION_LABEL, truncate}
 use rust_i18n::t;
 use serenity::all::{
     ButtonStyle, CommandOptionType, CreateActionRow, CreateButton, CreateCommand,
-    CreateCommandOption, CreateEmbed, CreateSelectMenu, CreateSelectMenuKind,
-    CreateSelectMenuOption,
+    CreateCommandOption, CreateEmbed,
 };
 
 /// Prefix for every `/build` component id. The router in
@@ -50,8 +49,10 @@ pub const PICK_INSERT_PART: &str = "build_insert_part_pick";
 /// Placing a part that was named without a position.
 pub const BUTTON_PLACE: &str = "build_place";
 pub const BUTTON_PROPOSE_CANCEL: &str = "build_propose_cancel";
-/// Turning a proposal into a drawing instead of placing it as-is.
-pub const SELECT_PROPOSE_DRAW: &str = "build_propose_draw";
+/// Typing a position none of the offered candidates matched.
+pub const BUTTON_PROPOSE_OTHER: &str = "build_propose_other";
+/// The single-field modal `BUTTON_PROPOSE_OTHER` opens.
+pub const MODAL_PROPOSE_LOCATION: &str = "build_propose_location_modal";
 /// Offers positions for whatever is being drafted.
 pub const BUTTON_DRAFT_PLACE: &str = "build_draft_place";
 
@@ -125,25 +126,46 @@ pub fn build_proposal_buttons(
     );
     rows.push(CreateActionRow::Buttons(numbered));
 
-    // Drawing from a proposal needs to know which one, so it is a menu rather
-    // than another row of buttons.
-    let options: Vec<CreateSelectMenuOption> = (0..count.min(MAX_PROPOSALS))
-        .map(|index| CreateSelectMenuOption::new((index + 1).to_string(), index.to_string()))
-        .collect();
-    if !options.is_empty() {
-        rows.push(CreateActionRow::SelectMenu(
-            CreateSelectMenu::new(
-                format!("{SELECT_PROPOSE_DRAW}:{proposal_id}"),
-                CreateSelectMenuKind::String { options },
-            )
-            .placeholder(truncate(
-                &t!("command.build.propose_draw", locale = locale),
-                MAX_SELECT_OPTION_LABEL,
-            )),
-        ));
+    // None of the ranked offers has to be the answer — this opens a one-field
+    // form for a position typed by hand, previewed the same way any other
+    // drawing is.
+    if count > 0 {
+        rows.push(CreateActionRow::Buttons(vec![
+            CreateButton::new(format!("{BUTTON_PROPOSE_OTHER}:{proposal_id}"))
+                .label(truncate(
+                    &t!("command.build.propose_other", locale = locale),
+                    MAX_BUTTON_LABEL,
+                ))
+                .style(ButtonStyle::Secondary),
+        ]));
     }
 
     rows
+}
+
+/// The one-field form for a position none of the offered candidates matched.
+pub fn build_propose_location_modal(proposal_id: &str, locale: &str) -> serenity::all::CreateModal {
+    use serenity::all::{CreateInputText, CreateModal, InputTextStyle};
+
+    CreateModal::new(
+        format!("{MODAL_PROPOSE_LOCATION}:{proposal_id}"),
+        truncate(
+            &t!("command.build.propose_location_title", locale = locale),
+            45,
+        ),
+    )
+    .components(vec![CreateActionRow::InputText(
+        CreateInputText::new(
+            InputTextStyle::Short,
+            truncate(
+                &t!("command.build.draw_field_location", locale = locale),
+                45,
+            ),
+            "location",
+        )
+        .placeholder("at 3 5 7")
+        .required(true),
+    )])
 }
 
 /// The value standing for "no colour", which is a real answer: a legend line
@@ -1110,6 +1132,50 @@ mod tests {
                 "build_draft_discard:d"
             ]
         );
+    }
+
+    #[test]
+    fn proposal_buttons_offer_a_free_text_position_not_a_repeat_of_the_numbers() {
+        // The dropdown this replaced just repeated the numbered buttons —
+        // this row must carry a different id, and there must be no select
+        // menu left in the response at all.
+        let json = serde_json::to_value(build_proposal_buttons("p", 3, "en-US")).unwrap();
+        let rows = json.as_array().unwrap();
+        assert_eq!(rows.len(), 2, "a button row and the numbers, nothing else");
+        for row in rows {
+            for component in row["components"].as_array().unwrap() {
+                // A select menu serialises with an `options` array; a button
+                // never does. None of these rows may be a select menu.
+                assert!(component.get("options").is_none(), "got: {component}");
+            }
+        }
+        let other_row_ids: Vec<&str> = rows[1]["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["custom_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(other_row_ids, vec!["build_propose_other:p"]);
+    }
+
+    #[test]
+    fn no_proposals_means_no_free_text_position_button_either() {
+        let json = serde_json::to_value(build_proposal_buttons("p", 0, "en-US")).unwrap();
+        assert_eq!(json.as_array().unwrap().len(), 1, "just the cancel button");
+    }
+
+    #[test]
+    fn the_location_modal_asks_for_exactly_one_field() {
+        for locale in ["en-US", "fi-FI"] {
+            let json = serde_json::to_value(build_propose_location_modal("p", locale)).unwrap();
+            assert_eq!(json["custom_id"], "build_propose_location_modal:p");
+            let rows = json["components"].as_array().unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0]["components"][0]["custom_id"], "location");
+            let title = json["title"].as_str().unwrap();
+            assert!(title.chars().count() <= crate::discord_limits::MAX_MODAL_TITLE);
+            assert!(!title.contains("%{"));
+        }
     }
 
     #[test]

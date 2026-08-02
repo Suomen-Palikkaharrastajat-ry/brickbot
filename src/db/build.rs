@@ -10,6 +10,7 @@
 
 #![allow(clippy::doc_markdown)]
 
+use crate::build::model::PartKind;
 use crate::build::ops::{AppliedOp, History, Op};
 use crate::build::units::MaxModelSize;
 use sqlx::SqlitePool;
@@ -28,6 +29,10 @@ pub struct BuildSession {
     /// A sentence waiting on a part the catalogue could not resolve, to be
     /// retried once the builder picks one from the dropdown.
     pub pending_sentence: Option<String>,
+    /// The shape that sentence asked for, so the part the builder eventually
+    /// picks keeps the height (and everything else `PartKind` decides) the
+    /// sentence actually meant, rather than always becoming a brick.
+    pub pending_kind: Option<PartKind>,
     /// The `size` this session was opened with, if the builder gave one.
     /// Set together or not at all; `None` on any of the three means no
     /// override, so the session falls back to the guild's config default.
@@ -90,6 +95,7 @@ pub async fn create_build_session(
         model_name: model_name.to_string(),
         cursor: None,
         pending_sentence: None,
+        pending_kind: None,
         max_size_x: max_size.map(|s| s.x),
         max_size_y: max_size.map(|s| s.y),
         max_size_z: max_size.map(|s| s.z),
@@ -97,8 +103,8 @@ pub async fn create_build_session(
 }
 
 /// One `build_sessions` row as selected, before it becomes a [`BuildSession`]:
-/// id, guild, channel, owner, model name, cursor, pending sentence, size cap
-/// on X, Y and Z.
+/// id, guild, channel, owner, model name, cursor, pending sentence, pending
+/// kind, size cap on X, Y and Z.
 type SessionRow = (
     String,
     String,
@@ -106,6 +112,7 @@ type SessionRow = (
     String,
     String,
     Option<i64>,
+    Option<String>,
     Option<String>,
     Option<i64>,
     Option<i64>,
@@ -122,7 +129,7 @@ pub async fn get_active_session_by_channel(
 ) -> Result<Option<BuildSession>, sqlx::Error> {
     let row: Option<SessionRow> = sqlx::query_as(
         "SELECT id, guild_id, channel_id, owner_user_id, model_name, cursor, pending_sentence,
-                max_size_x, max_size_y, max_size_z
+                pending_kind, max_size_x, max_size_y, max_size_z
          FROM build_sessions
          WHERE channel_id = ? AND status = 'active' AND expires_at > CURRENT_TIMESTAMP",
     )
@@ -139,6 +146,7 @@ pub async fn get_active_session_by_channel(
             model_name,
             cursor,
             pending_sentence,
+            pending_kind,
             max_size_x,
             max_size_y,
             max_size_z,
@@ -151,6 +159,12 @@ pub async fn get_active_session_by_channel(
                 model_name,
                 cursor: cursor.and_then(|c| usize::try_from(c).ok()),
                 pending_sentence,
+                // A row from before this column meant anything, or one that
+                // failed to parse, is just "no kind on record" — the picker
+                // falls back to guessing from the chosen part's own name.
+                pending_kind: pending_kind
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str(raw).ok()),
                 max_size_x: max_size_x.and_then(|n| u32::try_from(n).ok()),
                 max_size_y: max_size_y.and_then(|n| u32::try_from(n).ok()),
                 max_size_z: max_size_z.and_then(|n| u32::try_from(n).ok()),
@@ -305,21 +319,33 @@ fn parse_created_at(raw: &str) -> chrono::DateTime<chrono::Utc> {
         .map_or_else(|_| chrono::Utc::now(), |naive| naive.and_utc())
 }
 
-/// Records the sentence waiting on a part choice, or clears it.
+/// Records the sentence (and the shape it named) waiting on a part choice, or
+/// clears both.
 ///
 /// Cleared on every message that resolves without a pending lookup, so a
 /// dropdown left unanswered days ago cannot replay a sentence into a model
-/// that has moved on since.
+/// that has moved on since. The kind travels with the sentence because it is
+/// what the sentence actually asked for — `Add a plate...` must stay a plate
+/// once the builder picks an element, not fall back to brick height because
+/// the round trip through the dropdown lost track of it.
 pub async fn set_pending_sentence<'e, E>(
     db: E,
     session_id: &str,
-    sentence: Option<&str>,
+    pending: Option<(&str, PartKind)>,
 ) -> Result<(), sqlx::Error>
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
-    sqlx::query("UPDATE build_sessions SET pending_sentence = ? WHERE id = ?")
+    let (sentence, kind) = match pending {
+        Some((sentence, kind)) => (
+            Some(sentence),
+            Some(serde_json::to_string(&kind).map_err(|e| sqlx::Error::Encode(Box::new(e)))?),
+        ),
+        None => (None, None),
+    };
+    sqlx::query("UPDATE build_sessions SET pending_sentence = ?, pending_kind = ? WHERE id = ?")
         .bind(sentence)
+        .bind(kind)
         .bind(session_id)
         .execute(db)
         .await?;
@@ -701,28 +727,32 @@ mod tests {
         let db = setup_db().await;
         let s = session(&db).await;
         assert!(s.pending_sentence.is_none());
+        assert!(s.pending_kind.is_none());
 
-        set_pending_sentence(&db, &s.id, Some("Add a red 3x12 brick at origin"))
-            .await
-            .unwrap();
+        set_pending_sentence(
+            &db,
+            &s.id,
+            Some(("Add a red 3x12 plate at origin", PartKind::Plate)),
+        )
+        .await
+        .unwrap();
         let found = get_active_session_by_channel(&db, "thread1")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
             found.pending_sentence.as_deref(),
-            Some("Add a red 3x12 brick at origin")
+            Some("Add a red 3x12 plate at origin")
         );
+        assert_eq!(found.pending_kind, Some(PartKind::Plate));
 
         set_pending_sentence(&db, &s.id, None).await.unwrap();
-        assert!(
-            get_active_session_by_channel(&db, "thread1")
-                .await
-                .unwrap()
-                .unwrap()
-                .pending_sentence
-                .is_none()
-        );
+        let cleared = get_active_session_by_channel(&db, "thread1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cleared.pending_sentence.is_none());
+        assert!(cleared.pending_kind.is_none());
     }
 
     #[tokio::test]
