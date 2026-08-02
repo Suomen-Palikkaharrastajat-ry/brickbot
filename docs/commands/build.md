@@ -8,12 +8,40 @@ The language it understands is a controlled natural language — English-like, q
 ## Trigger
 - Triggered as `/build` (or `/rakenna` depending on the `locale` defined in `config.toml`).
 - The command takes one **required** argument: `name` (what to call the model, e.g. `Castle`).
+- It also takes one **optional** argument: `size`, overriding how big *this* model may grow —
+  see [Sizing a model](#sizing-a-model). Without it, the session falls back to the guild's
+  configured `max_model_size`.
 - Everything afterwards is triggered by **ordinary chat messages inside the thread**. There is no prefix and no mention: the bot recognises building instructions by their grammar.
+
+## Sizing a model
+
+Every model is capped to a box, checked after each command against the model's whole
+bounding box — not just what one command adds, so many small edits cannot creep a model past
+the limit any more easily than one big one. A command that would push the model past its box is
+rejected with a message rather than silently clamped or repositioned. Editing an
+already-oversized model (say, one opened under a looser `size`) is still allowed, as long as the
+edit does not make the model any bigger.
+
+The `size` argument on `/build` sets this box for the session, in three shapes:
+
+- `10` — a cube: 10 studs on X and Z, 10 bricks on Y.
+- `8x12` — a footprint, 8 studs by 12 studs, with the height set to the larger of the two
+  (12 bricks here) since a rectangle names nothing to be tall by.
+- `8x12x6` — width, depth and height given outright: 8 studs, 12 studs, 6 bricks.
+
+Left out, the session uses the guild's configured `max_model_size` (a cube, default 10). The
+size is fixed for the life of the session — it cannot be changed after `/build` opens the
+thread, since a shrink would leave earlier revisions validated against a limit that no longer
+applies.
 
 ## Features
 
 1. **Threaded Sessions**:
    - The command posts a short introduction and opens a public thread from it, named after the model.
+   - The thread opens with a starter message carrying **the same button row every picture
+     carries**, so `[Draw…]` is there before anything has been built. Without it the buttons
+     arrived only under a render, and a builder whose first sentence did not land never learned
+     that drawing was an option at all. Every handler copes with an empty model.
    - Anyone who can see the thread can build in it. The session belongs to the thread, not to the person who started it.
    - Sessions expire after `session_ttl_hours` of inactivity, and are extended whenever someone builds.
 
@@ -106,12 +134,17 @@ render_height = 600
 supersample = 2
 render_debounce_ms = 1200
 enable_io_export = true
+max_model_size = 10
 
 [[guilds]]
 guild_id = 123456789
 [guilds.commands.build]
 enabled = false # Disables /build for this specific guild
 ```
+
+`max_model_size` is the size cap a session gets when `/build` is not given its own `size`
+argument: a cube of this many studs on X/Z and bricks on Y. See
+[Sizing a model](#sizing-a-model) for how a session can override it.
 
 The LDraw part library is configured separately, and is shared by every guild:
 
@@ -206,6 +239,96 @@ Colours are LDraw colour names: `red`, `dark tan`, `light bluish gray`, `trans c
 | `<direction> of` | `Add a white 1x2 plate north of the window.` |
 
 With no location, a part rests on top of whatever was last touched — which is how a conversation naturally stacks bricks.
+
+`under` needs somewhere to go: asking for something under a part that is already on the ground is
+answered rather than silently turned into "on top of", which would be the opposite of what was said.
+
+### Help
+
+`Help.` shows the overview: how to say it, how to draw it, how to ask and fix, and the list of
+topics. `Help <topic>.` (e.g. `Help select.`) shows one topic's syntax and examples, localized
+like everything else the bot says.
+
+**A topic is not always a verb.** Alongside every verb in the table above there are four named
+topics — `drawings`, `locations`, `parts` and `buttons` — because those are the things a builder
+asks about by name, and drawings in particular are the one thing nobody can guess the shape of.
+`Help drawings.` carries a complete legend and grid meant to be copied straight out of Discord.
+
+- Synonyms resolve to their canonical verb, so `Help put.` answers the same as `Help add.`.
+  `Attach`, `Fill` and `Repeat` are lexer-level aliases rather than verbs with syntax of their
+  own and fold into `add` and `duplicate`.
+- Named topics are resolved **before** verbs, which is the point of them: `draw` is a synonym of
+  `render` and `colour` of `paint`, so `Help draw.` used to answer "render the model again" and
+  `Help colour.` used to answer with paint's syntax. Both now answer the question that was asked,
+  while `Help render.` and `Help paint.` still reach the verbs.
+- The topic is read from the **sentence as typed** rather than from the token stream, since
+  tokenizing has already collapsed `draw` into `Verb::Render`. The first word after `help` that
+  names a topic wins, so `Help me with drawings.` lands where it was meant to.
+- A word that is not a topic at all falls back to the general overview instead of erroring:
+  asking for help wrong is still asking for help.
+- The topic list itself lives in one place, `command.build.help_topics`, which the general help
+  interpolates. A test round-trips every word on that list through `HelpTopic::parse` and checks
+  the general help names it, so what `Help.` advertises and what `Help <topic>.` answers cannot
+  drift apart.
+
+### Naming a part without saying where
+
+Typing just a part — `2x2 brick`, `2 red 2x4 bricks`, `3 2x2 bricks stacked vertically` — asks
+where it could go rather than saying. The bot works out up to four legal positions, draws them as
+one picture, and puts a numbered button under each: one click places it.
+
+- A size (`2x2`) or a kind (`brick`, `plate`, `tile`, `slope`) has to be in there. A bare colour or
+  count is how people talk — `red`, `2 beers` — and stays silent, as does anything with words left
+  over. Half-understanding a sentence is the one thing the silence policy cannot afford.
+- Several of a part with nothing said about how they sit offers the arrangements too, so `2 2x2
+  bricks` competes "stacked" against "side by side" in the same list of four. Saying `stacked` or
+  `in a row` settles it.
+- The positions offered are: on top of whatever was last touched (which is what a full sentence
+  does today, and is always offered first), alongside it, on top of another exposed surface, and on
+  the ground clear of everything — where a second structure would start.
+- **Nothing is built until a number is pressed.** If someone else builds in the meantime the offer
+  is refused rather than misplaced, because what you were shown is no longer what would land.
+- `Draw one of these instead…` opens the drawing form at the chosen position, so a proposed brick
+  can grow into a whole block without retyping where it goes.
+
+Every offer is legal by the rules below — the proposals are put on the grid and settled by the same
+code a typed-out sentence goes through, so the dialog cannot offer somewhere a part could not go.
+
+A **drawing that never says where it goes** asks the same question: `Build from top:` with a legend
+and a grid, and no `at …`, offers positions for the whole block. A drawing that does say where it
+goes is unaffected. Inside the private drawing form, `[Place…]` does the same for whatever is being
+drafted.
+
+Because a chat message carries no interaction token, the proposal is posted **in the thread** rather
+than privately — the same reason the part-disambiguation dropdown is public. Only the person who
+asked can act on it.
+
+### Legal connections
+
+Every command is corrected before it is carried out, so the model can only ever contain parts that
+would really go together. Three rules, all in `src/build/legal.rs`:
+
+- **On the grid.** A part's edges land on whole studs (20 LDU) and its base on a whole plate (8 LDU).
+  `Add a brick at 3 5 7.` is a brick at the origin; `Move it east 2 plates.` moves it a stud, because
+  a plate is a vertical measure and 16 LDU sideways attaches to nothing. Note that an odd-width part
+  is centred *half* a stud off the grid lines, since it is the edges that have to line up.
+- **Nothing inside anything else.** A part put where another already is comes to rest on top of it
+  instead of sharing its volume. Parts may touch face to face; that is what stacking is.
+- **Nothing floating, and nothing underground.** A part in mid-air comes down to the nearest thing
+  below it, or to the ground. A whole structure settles as one body and keeps its shape, so it may
+  overhang what it rests on — real builds do.
+
+The bot says what it corrected (`Nudged 1 part onto the stud grid.`) and stays quiet when there was
+nothing to correct, which is the usual case. Very rarely there is nowhere legal for a part at all,
+and then it says so instead of guessing.
+
+`Raise` and `Lower` are the deliberate exception: they are corrected onto the grid and out of
+collisions, but a part you lifted on purpose stays lifted rather than dropping straight back down.
+`Show unsupported bricks.` still finds it.
+
+Corrections apply to *new* commands only. A session recorded before any of this existed replays
+exactly as it always did, so old threads redraw unchanged.
+
 
 ### Drawings
 

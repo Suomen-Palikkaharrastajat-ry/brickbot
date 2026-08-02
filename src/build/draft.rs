@@ -206,9 +206,10 @@ pub fn preview(
     locale: &str,
     builders: &Builders,
     author: &str,
+    max_size: crate::build::units::MaxModelSize,
 ) -> Preview {
     let text = assemble(fields);
-    let outcome = dispatch::process_message(history, &text, locale, builders, author);
+    let outcome = dispatch::process_message(history, &text, locale, builders, author, max_size);
 
     // The model as it would stand, built the same way the session builds it.
     let mut projected = history.clone();
@@ -256,6 +257,9 @@ mod tests {
         Builders::new([("Alice".to_string(), "111".to_string())])
     }
 
+    const MAX_MODEL_SIZE: crate::build::units::MaxModelSize =
+        crate::build::units::MaxModelSize::cube(10);
+
     fn empty() -> History {
         History::new("Castle")
     }
@@ -293,7 +297,14 @@ mod tests {
     fn an_assembled_draft_builds_the_model() {
         // The point of the whole module: what the form assembles is ordinary
         // BrickTalk, so the ordinary interpreter handles it.
-        let preview = preview(&empty(), &fields(), "en-US", &builders(), "111");
+        let preview = preview(
+            &empty(),
+            &fields(),
+            "en-US",
+            &builders(),
+            "111",
+            MAX_MODEL_SIZE,
+        );
         assert!(!preview.failed(), "got: {:?}", preview.outcome);
         assert_eq!(preview.model.len(), 6);
         assert_eq!(preview.model.count_matching(|p| p.color == 1), 4);
@@ -304,7 +315,14 @@ mod tests {
     fn a_preview_never_touches_the_history_it_was_given() {
         let history = empty();
         let before = history.clone();
-        let _ = preview(&history, &fields(), "en-US", &builders(), "111");
+        let _ = preview(
+            &history,
+            &fields(),
+            "en-US",
+            &builders(),
+            "111",
+            MAX_MODEL_SIZE,
+        );
         assert_eq!(history, before, "preview must not mutate the session");
     }
 
@@ -314,7 +332,14 @@ mod tests {
             grid: ".bz.".to_string(),
             ..fields()
         };
-        let preview = preview(&empty(), &broken, "en-US", &builders(), "111");
+        let preview = preview(
+            &empty(),
+            &broken,
+            "en-US",
+            &builders(),
+            "111",
+            MAX_MODEL_SIZE,
+        );
         assert!(preview.failed());
         assert_eq!(preview.outcome.replies.len(), 1);
         assert!(
@@ -327,7 +352,14 @@ mod tests {
     #[test]
     fn a_preview_is_stale_once_anything_else_lands() {
         let history = empty();
-        let preview = preview(&history, &fields(), "en-US", &builders(), "111");
+        let preview = preview(
+            &history,
+            &fields(),
+            "en-US",
+            &builders(),
+            "111",
+            MAX_MODEL_SIZE,
+        );
         assert!(!is_stale(&preview, &history));
 
         // Someone else builds meanwhile.
@@ -342,7 +374,14 @@ mod tests {
     fn the_form_can_be_filled_from_what_is_already_built() {
         // Build something, draw it back, and the form holds it — which is the
         // easiest way to pick parts that certainly exist.
-        let preview = preview(&empty(), &fields(), "en-US", &builders(), "111");
+        let preview = preview(
+            &empty(),
+            &fields(),
+            "en-US",
+            &builders(),
+            "111",
+            MAX_MODEL_SIZE,
+        );
         let drawn = textview::render(&preview.model, GridView::Top, None).unwrap();
         let refilled = split_fields(&drawn);
 
@@ -358,9 +397,23 @@ mod tests {
     #[test]
     fn a_form_filled_from_a_drawing_rebuilds_the_same_model() {
         // The round trip that makes the prefill trustworthy.
-        let first = preview(&empty(), &fields(), "en-US", &builders(), "111");
+        let first = preview(
+            &empty(),
+            &fields(),
+            "en-US",
+            &builders(),
+            "111",
+            MAX_MODEL_SIZE,
+        );
         let drawn = textview::render(&first.model, GridView::Top, None).unwrap();
-        let second = preview(&empty(), &split_fields(&drawn), "en-US", &builders(), "111");
+        let second = preview(
+            &empty(),
+            &split_fields(&drawn),
+            "en-US",
+            &builders(),
+            "111",
+            MAX_MODEL_SIZE,
+        );
 
         let describe = |model: &crate::build::Model| {
             let mut rows: Vec<_> = model
@@ -448,7 +501,14 @@ mod tests {
         let symbol = next_symbol(&fields.legend, Some("tan"));
         append_legend_line(&mut fields, symbol, Some("tan"), "1x1 tile");
 
-        let preview = preview(&empty(), &fields, "en-US", &builders(), "111");
+        let preview = preview(
+            &empty(),
+            &fields,
+            "en-US",
+            &builders(),
+            "111",
+            MAX_MODEL_SIZE,
+        );
         // The drawing still uses only b and r, so adding a legend entry alone
         // changes nothing — but it must not break the parse either.
         assert!(!preview.failed(), "got: {:?}", preview.outcome);

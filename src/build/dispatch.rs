@@ -10,11 +10,12 @@
 
 use super::dsl::ast::{Meta, ObjectExpr, Statement};
 use super::dsl::parser::{SentenceOutcome, parse_message};
-use super::lower::{LowerError, lower_command_with};
+use super::lower::{LowerError, Unsupported, lower_command_with};
 use super::model::{PartKind, PartRef};
 use super::ops::{History, Op, Placed, apply};
 use super::parts;
 use super::propose;
+use super::units::MaxModelSize;
 use super::{legal, queries, report};
 
 /// A part the bot could not resolve, which the `/part` picker will answer.
@@ -200,8 +201,9 @@ pub fn process_message(
     locale: &str,
     builders: &Builders,
     author: &str,
+    max_size: MaxModelSize,
 ) -> Outcome {
-    run_sentences(history, text, locale, builders, author, None)
+    run_sentences(history, text, locale, builders, author, None, max_size)
 }
 
 /// Interprets a message with a part the builder has just chosen.
@@ -219,8 +221,25 @@ pub fn process_message_with_part(
     builders: &Builders,
     author: &str,
     chosen: &PartRef,
+    max_size: MaxModelSize,
 ) -> Outcome {
-    run_sentences(history, text, locale, builders, author, Some(chosen))
+    run_sentences(
+        history,
+        text,
+        locale,
+        builders,
+        author,
+        Some(chosen),
+        max_size,
+    )
+}
+
+/// A model's extent on each axis, in LDU — what the max-size check compares
+/// against its configured limit. `(x, y, z)`, zero for an empty model.
+fn span(bounds: Option<(super::units::IVec3, super::units::IVec3)>) -> (i32, i32, i32) {
+    bounds.map_or((0, 0, 0), |(lo, hi)| {
+        (hi.x - lo.x, hi.y - lo.y, hi.z - lo.z)
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -233,6 +252,7 @@ fn run_sentences(
     // attributed correctly to later sentences of the same message.
     author: &str,
     chosen: Option<&PartRef>,
+    max_size: MaxModelSize,
 ) -> Outcome {
     let mut outcome = Outcome::default();
     // A working copy, so each sentence sees the effect of the previous one.
@@ -362,6 +382,33 @@ fn run_sentences(
                                     break 'sentences;
                                 }
                             };
+
+                            // A cap on the model's own footprint, not on what
+                            // one command may place — many small commands
+                            // could otherwise creep a model past its box just
+                            // as easily as one big one. Compared against the
+                            // model *before* this op, so an already-oversized
+                            // model (built before the limit existed, or under
+                            // a looser session size) isn't punished for edits
+                            // that don't make it any bigger.
+                            let before = span(model.bounds());
+                            let mut probe = model.clone();
+                            for op in legalized.ops() {
+                                apply(&mut probe, rev, op);
+                            }
+                            let after = span(probe.bounds());
+                            if max_size.exceeded_by(before, after) {
+                                outcome.problem(report::describe_error(
+                                    &LowerError::Unsupported(Unsupported::ExceedsMaxSize {
+                                        x: max_size.x,
+                                        y: max_size.y,
+                                        z: max_size.z,
+                                    }),
+                                    locale,
+                                ));
+                                stopped = true;
+                                break 'sentences;
+                            }
 
                             let note = report::describe_adjustment(&legalized.adjustment, locale);
                             for (index, op) in legalized.ops().enumerate() {
@@ -553,6 +600,8 @@ mod tests {
     use super::*;
 
     /// The default `max_model_size` — most tests aren't exercising the cap
+    /// and just want the ordinary limit out of the way.
+    const MAX_MODEL_SIZE: MaxModelSize = MaxModelSize::cube(10);
 
     fn empty() -> History {
         History::new("Castle")
@@ -568,7 +617,7 @@ mod tests {
     }
 
     fn interpret(history: &History, text: &str, locale: &str) -> Outcome {
-        process_message(history, text, locale, &builders(), "111")
+        process_message(history, text, locale, &builders(), "111", MAX_MODEL_SIZE)
     }
 
     fn add_brick(color: u16) -> Op {
@@ -824,6 +873,7 @@ mod tests {
             &builders(),
             "111",
             &chosen_part(),
+            MAX_MODEL_SIZE,
         );
         assert_eq!(outcome.ops.len(), 1);
         assert!(outcome.needs_render);
@@ -848,6 +898,7 @@ mod tests {
             &builders(),
             "111",
             &chosen_part(),
+            MAX_MODEL_SIZE,
         );
         assert_eq!(outcome.ops.len(), 1);
         let mut applied = history;
@@ -872,6 +923,7 @@ mod tests {
             &builders(),
             "111",
             &chosen_part(),
+            MAX_MODEL_SIZE,
         );
         let mut applied = history;
         for op in &outcome.ops {
@@ -1363,6 +1415,7 @@ mod tests {
             &builders(),
             "111",
             &chosen,
+            MAX_MODEL_SIZE,
         );
         let mut history = empty();
         for op in outcome.ops {
@@ -1578,6 +1631,7 @@ mod tests {
             &builders(),
             "111",
             &chosen,
+            MAX_MODEL_SIZE,
         );
         assert_eq!(resumed.ops.len(), 1);
         let mut history = empty();

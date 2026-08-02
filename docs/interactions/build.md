@@ -8,7 +8,8 @@ That makes its silence policy the most important thing about it. A build thread 
 ## Trigger
 - The session is created by the `/build` slash command, which opens a public thread and records a row in `build_sessions` keyed by the thread's channel id.
 - Afterwards there is **no** trigger word, prefix or mention: every message in the thread is parsed.
-- Render messages carry three buttons, whose `custom_id`s each end in the 12-character session id: `build_export:<id>`, `build_undo:<id>` and `build_finish:<id>`.
+- Render messages carry four buttons, whose `custom_id`s each end in the 12-character session id: `build_export:<id>`, `build_draw:<id>`, `build_undo:<id>` and `build_finish:<id>`.
+- The **starter message posted inside the thread** carries that same row, so `[Draw…]` exists before the first render. Nothing about the handlers changes: they are keyed by session id and each already answers sensibly against an empty model (nothing to undo, nothing to export, an empty drawing form).
 - When a part cannot be resolved, a `build_part_pick:<id>` select menu is posted, reusing the `/part` search results. It carries the session id the same way the buttons do, so the router can find the session and the handler can check the choice still belongs to it.
 
 ## Features
@@ -31,6 +32,8 @@ That makes its silence policy the most important thing about it. A build thread 
 - `src/build/dsl/block.rs` — fence capture, and sorting a block into its legend and layers.
 - `src/build/grid.rs` — gathers a drawing's cells into whole parts, greedily from the top left, and maps them into LDraw coordinates for each of the six views.
 - `src/build/textview.rs` — the inverse: the model drawn back as a grid, in the syntax it is typed in. Pure, and needs neither the LDraw library nor the rasterizer, so it works in box mode too.
+- `src/build/propose.rs` — where a part could plausibly go, when the builder named one without saying. Enumerates and ranks anchors; every candidate is put on the grid and settled by `legal`, so a proposal cannot be somewhere illegal. A *batch* is the unit — one brick, an arrangement of several, or a whole drawn block — which is why one engine answers the bare-part sentence, the location-less drawing and the `[Place…]` button in the drafting loop alike. The dialog itself is `session::offer_proposals`, backed by a `workflow_sessions` row; it is **public** rather than ephemeral because a chat message carries no interaction token, exactly as `offer_part_choices` is.
+- `src/build/legal.rs` — what counts as a legal connection, and how to correct one that is not: the stud/plate lattice, and settling a batch onto the nearest free resting place. `dispatch` calls `legalize` between lowering and applying, and records the *corrected* operation, so the revision log is legal by construction and replay never has to re-check anything. There is no stud-and-anti-stud model to consult — legality is expressed in the same integer boxes as everything else, which is enough for System parts.
 - `src/build/report.rs` — every user-facing string, in both locale files.
 - `src/build/session.rs` — the Discord shell: thread creation, persistence, the render loop and the buttons. Its only decisions are about pacing and locking, both of which are separated into pure helpers (`plan_render`, `should_render_now`).
 - `src/commands/build.rs` — the command declaration and the pure message builders.

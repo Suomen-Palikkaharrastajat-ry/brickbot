@@ -123,6 +123,58 @@ impl Verb {
     }
 }
 
+/// A topic `Help <topic>.` can name.
+///
+/// Not every topic is a verb. Drawings, locations, parts and the session
+/// buttons are things a builder asks about by name, and drawings are the whole
+/// reason this type exists: `draw` lexes as a synonym of [`Verb::Render`], so a
+/// verb-only topic list answers `Help draw.` with "render the model again" —
+/// the opposite of what was asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HelpTopic {
+    Verb(Verb),
+    Drawings,
+    Locations,
+    Parts,
+    Buttons,
+}
+
+impl HelpTopic {
+    /// Every topic that is not a verb, in the order `Help.` lists them.
+    pub const NAMED: [Self; 4] = [Self::Drawings, Self::Locations, Self::Parts, Self::Buttons];
+
+    /// Resolves the word after `help` to a topic.
+    ///
+    /// Named topics are tried **before** verbs, so a word that is both — `draw`
+    /// (also `render`) and `colour` (also `paint`) — answers the question that
+    /// was actually asked. The verbs themselves are still reachable by their
+    /// canonical names: `Help render.` and `Help paint.` are unaffected.
+    #[must_use]
+    pub fn parse(word: &str) -> Option<Self> {
+        Some(match word {
+            "drawing" | "drawings" | "draw" | "grid" | "grids" => Self::Drawings,
+            "location" | "locations" | "landmark" | "landmarks" => Self::Locations,
+            "part" | "parts" | "colour" | "colours" | "color" | "colors" | "size" | "sizes" => {
+                Self::Parts
+            }
+            "button" | "buttons" | "draft" | "drafts" | "private" => Self::Buttons,
+            _ => Self::Verb(Verb::parse(word)?),
+        })
+    }
+
+    /// Localization key for this topic's syntax and examples.
+    #[must_use]
+    pub const fn help_key(self) -> Option<&'static str> {
+        match self {
+            Self::Verb(verb) => verb.help_key(),
+            Self::Drawings => Some("command.build.help_topic.drawings"),
+            Self::Locations => Some("command.build.help_topic.locations"),
+            Self::Parts => Some("command.build.help_topic.parts"),
+            Self::Buttons => Some("command.build.help_topic.buttons"),
+        }
+    }
+}
+
 /// Prepositions and other function words the grammar branches on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Keyword {
@@ -295,8 +347,8 @@ impl Sentence {
     /// True when the sentence opens with something the grammar could act on.
     ///
     /// This is the gate that keeps ordinary conversation out of the parser: a
-    /// message that does not start with a verb or a question word is never
-    /// reported as a parse error, it is simply ignored.
+    /// message that does not start with a verb, a question word or the name of
+    /// a part is never reported as a parse error, it is simply ignored.
     #[must_use]
     pub fn looks_like_command(&self) -> bool {
         if self.is_comment {
@@ -884,10 +936,35 @@ mod tests {
             "the roof is my favourite bit",
             "lol",
             "brb",
+            // Counts and colours on their own are how people talk about LEGO,
+            // and none of them names a part.
+            "2 beers",
+            "3 people",
+            "red",
+            "blue is nicer",
+            "42",
         ] {
             assert!(
                 !tokenize_sentence(chat).looks_like_command(),
                 "{chat:?} should have been ignored"
+            );
+        }
+    }
+
+    #[test]
+    fn naming_a_part_on_its_own_is_something_to_act_on() {
+        // Not a command yet — the parser decides that — but it must get past
+        // the gate, because "2x2 brick" is plainly about building.
+        for phrase in [
+            "2x2 brick",
+            "2 2x2 bricks stacked vertically",
+            "red 2x4 brick",
+            "3 plates",
+            "brick",
+        ] {
+            assert!(
+                tokenize_sentence(phrase).looks_like_command(),
+                "{phrase:?} names a part and should have got through"
             );
         }
     }

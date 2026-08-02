@@ -7,7 +7,7 @@
 
 #![allow(clippy::doc_markdown)]
 
-use super::lexer::Verb;
+use super::lexer::{HelpTopic, Verb};
 use crate::build::model::PartKind;
 use crate::build::units::{Direction, GridView, IVec3, Unit};
 
@@ -295,11 +295,11 @@ pub enum Meta {
     RevertTo(u32),
     Export,
     Render,
-    /// `Help.` for the general text, `Help select.` for one verb's syntax and
-    /// examples. `None` when the topic named isn't one [`Verb::help_key`]
-    /// covers, which falls back to the general text rather than reporting an
-    /// error — a builder asking for help should never be met with one.
-    Help(Option<Verb>),
+    /// `Help.` for the general text, `Help select.` or `Help drawings.` for one
+    /// topic's syntax and examples. `None` when the word named isn't a topic,
+    /// which falls back to the general text rather than reporting an error — a
+    /// builder asking for help should never be met with one.
+    Help(Option<HelpTopic>),
     Finish,
 }
 

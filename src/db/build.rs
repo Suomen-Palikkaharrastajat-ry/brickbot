@@ -11,6 +11,7 @@
 #![allow(clippy::doc_markdown)]
 
 use crate::build::ops::{AppliedOp, History, Op};
+use crate::build::units::MaxModelSize;
 use sqlx::SqlitePool;
 
 /// A live build session.
@@ -27,6 +28,24 @@ pub struct BuildSession {
     /// A sentence waiting on a part the catalogue could not resolve, to be
     /// retried once the builder picks one from the dropdown.
     pub pending_sentence: Option<String>,
+    /// The `size` this session was opened with, if the builder gave one.
+    /// Set together or not at all; `None` on any of the three means no
+    /// override, so the session falls back to the guild's config default.
+    pub max_size_x: Option<u32>,
+    pub max_size_y: Option<u32>,
+    pub max_size_z: Option<u32>,
+}
+
+impl BuildSession {
+    /// This session's size override, if it was given one at creation.
+    #[must_use]
+    pub fn max_size(&self) -> Option<MaxModelSize> {
+        Some(MaxModelSize {
+            x: self.max_size_x?,
+            y: self.max_size_y?,
+            z: self.max_size_z?,
+        })
+    }
 }
 
 /// Opens a session for a thread.
@@ -40,13 +59,16 @@ pub async fn create_build_session(
     owner_user_id: &str,
     model_name: &str,
     expires_in_hours: u32,
+    max_size: Option<MaxModelSize>,
 ) -> Result<BuildSession, sqlx::Error> {
     // Truncated so it fits comfortably inside a component custom_id.
     let id = uuid::Uuid::new_v4().as_simple().to_string()[..12].to_string();
 
     sqlx::query(
-        "INSERT INTO build_sessions (id, guild_id, channel_id, owner_user_id, model_name, expires_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now', '+' || ? || ' hours'))",
+        "INSERT INTO build_sessions
+             (id, guild_id, channel_id, owner_user_id, model_name, expires_at,
+              max_size_x, max_size_y, max_size_z)
+         VALUES (?, ?, ?, ?, ?, datetime('now', '+' || ? || ' hours'), ?, ?, ?)",
     )
     .bind(&id)
     .bind(guild_id)
@@ -54,6 +76,9 @@ pub async fn create_build_session(
     .bind(owner_user_id)
     .bind(model_name)
     .bind(expires_in_hours)
+    .bind(max_size.map(|s| i64::from(s.x)))
+    .bind(max_size.map(|s| i64::from(s.y)))
+    .bind(max_size.map(|s| i64::from(s.z)))
     .execute(db)
     .await?;
 
@@ -65,11 +90,15 @@ pub async fn create_build_session(
         model_name: model_name.to_string(),
         cursor: None,
         pending_sentence: None,
+        max_size_x: max_size.map(|s| s.x),
+        max_size_y: max_size.map(|s| s.y),
+        max_size_z: max_size.map(|s| s.z),
     })
 }
 
 /// One `build_sessions` row as selected, before it becomes a [`BuildSession`]:
-/// id, guild, channel, owner, model name, cursor, pending sentence.
+/// id, guild, channel, owner, model name, cursor, pending sentence, size cap
+/// on X, Y and Z.
 type SessionRow = (
     String,
     String,
@@ -78,6 +107,9 @@ type SessionRow = (
     String,
     Option<i64>,
     Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
 );
 
 /// Finds the live session for a thread, if there is one.
@@ -89,7 +121,8 @@ pub async fn get_active_session_by_channel(
     channel_id: &str,
 ) -> Result<Option<BuildSession>, sqlx::Error> {
     let row: Option<SessionRow> = sqlx::query_as(
-        "SELECT id, guild_id, channel_id, owner_user_id, model_name, cursor, pending_sentence
+        "SELECT id, guild_id, channel_id, owner_user_id, model_name, cursor, pending_sentence,
+                max_size_x, max_size_y, max_size_z
          FROM build_sessions
          WHERE channel_id = ? AND status = 'active' AND expires_at > CURRENT_TIMESTAMP",
     )
@@ -98,7 +131,18 @@ pub async fn get_active_session_by_channel(
     .await?;
 
     Ok(row.map(
-        |(id, guild_id, channel_id, owner_user_id, model_name, cursor, pending_sentence)| {
+        |(
+            id,
+            guild_id,
+            channel_id,
+            owner_user_id,
+            model_name,
+            cursor,
+            pending_sentence,
+            max_size_x,
+            max_size_y,
+            max_size_z,
+        )| {
             BuildSession {
                 id,
                 guild_id,
@@ -107,6 +151,9 @@ pub async fn get_active_session_by_channel(
                 model_name,
                 cursor: cursor.and_then(|c| usize::try_from(c).ok()),
                 pending_sentence,
+                max_size_x: max_size_x.and_then(|n| u32::try_from(n).ok()),
+                max_size_y: max_size_y.and_then(|n| u32::try_from(n).ok()),
+                max_size_z: max_size_z.and_then(|n| u32::try_from(n).ok()),
             }
         },
     ))
@@ -344,7 +391,7 @@ mod tests {
     }
 
     async fn session(db: &SqlitePool) -> BuildSession {
-        create_build_session(db, "guild1", "thread1", "alice", "Castle", 24)
+        create_build_session(db, "guild1", "thread1", "alice", "Castle", 24, None)
             .await
             .unwrap()
     }
@@ -376,7 +423,7 @@ mod tests {
 
         // The partial unique index rejects a second live session, so two
         // people running /build at once cannot both win.
-        let second = create_build_session(&db, "guild1", "thread1", "bob", "Other", 24).await;
+        let second = create_build_session(&db, "guild1", "thread1", "bob", "Other", 24, None).await;
         assert!(second.is_err());
     }
 
@@ -394,7 +441,7 @@ mod tests {
         );
         // A new session can now be opened in the same thread.
         assert!(
-            create_build_session(&db, "guild1", "thread1", "bob", "Second", 24)
+            create_build_session(&db, "guild1", "thread1", "bob", "Second", 24, None)
                 .await
                 .is_ok()
         );
@@ -458,6 +505,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(history.materialize().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_sessions_size_override_round_trips() {
+        let db = setup_db().await;
+        let given = MaxModelSize { x: 8, y: 6, z: 12 };
+        let created =
+            create_build_session(&db, "guild1", "thread1", "alice", "Castle", 24, Some(given))
+                .await
+                .unwrap();
+        assert_eq!(created.max_size(), Some(given));
+
+        let reloaded = get_active_session_by_channel(&db, "thread1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.max_size(), Some(given));
+    }
+
+    #[tokio::test]
+    async fn a_session_opened_without_a_size_has_no_override() {
+        let db = setup_db().await;
+        let created = session(&db).await;
+        assert_eq!(created.max_size(), None);
+
+        let reloaded = get_active_session_by_channel(&db, "thread1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.max_size(), None);
     }
 
     #[tokio::test]

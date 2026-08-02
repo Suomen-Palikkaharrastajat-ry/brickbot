@@ -12,6 +12,7 @@ use super::dispatch::{self, Outcome};
 use super::draft;
 use super::ops::History;
 use super::scene::{self, SceneMode};
+use super::units::MaxModelSize;
 use crate::commands::build as build_cmd;
 use crate::config::{BuildCommandConfig, Config};
 use crate::db;
@@ -121,6 +122,34 @@ pub async fn handle_build_command(
         .unwrap_or("Model")
         .to_owned();
 
+    // `size` is free-typed rather than a set of choices, so it can be
+    // anything — validate it before touching Discord or the database, the
+    // same way an unparseable channel would be refused before creating one.
+    let size_arg = command
+        .data
+        .options
+        .iter()
+        .find(|opt| build_cmd::size_option_name_matches(&opt.name))
+        .and_then(|opt| opt.value.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let max_size = match size_arg.map(crate::build::units::MaxModelSize::parse) {
+        None => None,
+        Some(Some(parsed)) => Some(parsed),
+        Some(None) => {
+            return respond_ephemeral(
+                ctx,
+                command,
+                &rust_i18n::t!(
+                    "command.build.invalid_size",
+                    locale = locale.as_str(),
+                    size = size_arg.unwrap_or_default()
+                ),
+            )
+            .await;
+        }
+    };
+
     // Discord does not allow nesting threads, so refuse early with a useful
     // message rather than failing at creation time. An uncached channel is
     // assumed not to be a thread: the worst case is the friendlier error being
@@ -164,6 +193,7 @@ pub async fn handle_build_command(
         &command.user.id.get().to_string(),
         &model_name,
         cfg.session_ttl_hours,
+        max_size,
     )
     .await?;
 
@@ -181,6 +211,22 @@ pub async fn handle_build_command(
             )
             .await;
     }
+
+    // The starter message carries the same button row every picture carries,
+    // so [Draw…] exists before anything has been built.
+    let _ = thread
+        .id
+        .send_message(
+            &ctx.http,
+            CreateMessage::new()
+                .content(build_cmd::thread_intro_message(&model_name, &locale))
+                .components(vec![build_cmd::build_session_buttons(
+                    &session.id,
+                    &locale,
+                    cfg.enable_io_export,
+                )]),
+        )
+        .await;
 
     tracing::info!(
         "build: opened session {} in thread {} for model '{}'",
@@ -246,7 +292,14 @@ pub async fn handle_thread_message(
 
     let history = db::build::load_history(pool, &session.id, &session.model_name).await?;
     let builders = builders_of(ctx, msg, &history);
-    let outcome = dispatch::process_message(&history, &msg.content, &locale, &builders, &author);
+    let outcome = dispatch::process_message(
+        &history,
+        &msg.content,
+        &locale,
+        &builders,
+        &author,
+        max_size_for(&session, &cfg),
+    );
 
     // Ordinary conversation: say nothing at all.
     if outcome.is_silent() {
@@ -647,6 +700,14 @@ static SESSION_LOCKS: std::sync::OnceLock<
     moka::future::Cache<String, Arc<tokio::sync::Mutex<()>>>,
 > = std::sync::OnceLock::new();
 
+/// A session's effective size cap: its own `size`, if it was opened with one,
+/// otherwise the guild's configured default.
+fn max_size_for(session: &db::build::BuildSession, cfg: &BuildCommandConfig) -> MaxModelSize {
+    session
+        .max_size()
+        .unwrap_or_else(|| MaxModelSize::cube(cfg.max_model_size))
+}
+
 async fn session_lock(session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     SESSION_LOCKS
         .get_or_init(|| {
@@ -901,7 +962,13 @@ pub async fn handle_part_choice(
     )]);
     let author = interaction.user.id.get().to_string();
     let outcome = dispatch::process_message_with_part(
-        &history, &sentence, &locale, &builders, &author, &chosen,
+        &history,
+        &sentence,
+        &locale,
+        &builders,
+        &author,
+        &chosen,
+        max_size_for(&session, &cfg),
     );
     persist(&app_ctx.db, &session.id, &history, &outcome, &author).await?;
     drop(guard);
@@ -1827,7 +1894,14 @@ async fn show_preview<R: Respondable>(
 
     let history = db::build::load_history(&app_ctx.db, &session.id, &session.model_name).await?;
     let builders = dispatch::Builders::new([(user_id.to_string(), user_id.to_string())]);
-    let preview = draft::preview(&history, &stored.fields(), locale, &builders, user_id);
+    let preview = draft::preview(
+        &history,
+        &stored.fields(),
+        locale,
+        &builders,
+        user_id,
+        max_size_for(&session, &cfg),
+    );
 
     stored.based_on = preview.based_on;
     stored.preview_seq = stored.preview_seq.saturating_add(1);
@@ -1994,7 +2068,14 @@ async fn apply_draft(
 
     let history = db::build::load_history(&app_ctx.db, &session.id, &session.model_name).await?;
     let builders = dispatch::Builders::new([(user_id.to_string(), user_id.to_string())]);
-    let preview = draft::preview(&history, &stored.fields(), locale, &builders, user_id);
+    let preview = draft::preview(
+        &history,
+        &stored.fields(),
+        locale,
+        &builders,
+        user_id,
+        max_size_for(&session, &cfg),
+    );
 
     if draft::is_stale(&preview, &history) || stored.based_on != history.revision() {
         drop(guard);
@@ -2222,7 +2303,14 @@ async fn place_draft(
     let builders = dispatch::Builders::new([(user_id.to_string(), user_id.to_string())]);
     let mut fields = stored.fields();
     fields.location = String::new();
-    let preview = draft::preview(&history, &fields, locale, &builders, user_id);
+    let preview = draft::preview(
+        &history,
+        &fields,
+        locale,
+        &builders,
+        user_id,
+        max_size_for(&session, &cfg),
+    );
 
     let Some(pending) = preview.outcome.pending_proposal.clone() else {
         return respond_ephemeral_component(
@@ -2502,7 +2590,14 @@ mod tests {
             ("alice".to_string(), "111".to_string()),
             ("bob".to_string(), "222".to_string()),
         ]);
-        let outcome = dispatch::process_message(&history, text, "en-US", &builders, author);
+        let outcome = dispatch::process_message(
+            &history,
+            text,
+            "en-US",
+            &builders,
+            author,
+            MaxModelSize::cube(10),
+        );
         persist(pool, session_id, &history, &outcome, author)
             .await
             .unwrap();
@@ -2522,7 +2617,7 @@ mod tests {
         // just freed and the cursor was then set below it — the yellow brick
         // disappeared.
         let pool = setup_db().await;
-        let s = db::build::create_build_session(&pool, "g", "t", "alice", "Castle", 24)
+        let s = db::build::create_build_session(&pool, "g", "t", "alice", "Castle", 24, None)
             .await
             .unwrap();
 
@@ -2539,7 +2634,7 @@ mod tests {
     #[tokio::test]
     async fn undo_and_redo_round_trip_through_the_database() {
         let pool = setup_db().await;
-        let s = db::build::create_build_session(&pool, "g", "t", "alice", "Castle", 24)
+        let s = db::build::create_build_session(&pool, "g", "t", "alice", "Castle", 24, None)
             .await
             .unwrap();
 
@@ -2561,7 +2656,7 @@ mod tests {
     #[tokio::test]
     async fn a_paused_sentence_is_parked_and_later_cleared() {
         let pool = setup_db().await;
-        let s = db::build::create_build_session(&pool, "g", "t", "alice", "Castle", 24)
+        let s = db::build::create_build_session(&pool, "g", "t", "alice", "Castle", 24, None)
             .await
             .unwrap();
 

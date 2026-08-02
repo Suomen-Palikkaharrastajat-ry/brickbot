@@ -18,7 +18,7 @@ use super::ast::{
     ObjectExpr, PartSpec, Place, Query, Ref, Statement, Structure,
 };
 use super::block::{self, CodeBlock};
-use super::lexer::{Keyword, Sentence, Token, Verb};
+use super::lexer::{HelpTopic, Keyword, Sentence, Token, Verb};
 use crate::build::model::PartKind;
 use crate::build::units::{Direction, GridView, IVec3, Unit};
 
@@ -757,6 +757,21 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// The topic a `Help …` sentence names, if it names one.
+///
+/// Takes the first word after `help` that resolves to a topic, so `Help me with
+/// drawings.` and `Help the select.` both land where they were meant to. The
+/// sentence is read as typed rather than from the token stream, which has
+/// already collapsed `draw` into [`Verb::Render`] and `colour` into
+/// [`Verb::Paint`] — the two words most likely to be asked about by name.
+fn help_topic(sentence: &str) -> Option<HelpTopic> {
+    sentence
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .skip(1)
+        .find_map(|word| HelpTopic::parse(&word.to_lowercase()))
+}
+
 /// Parses one sentence.
 /// Reads a verbless sentence that names a part, e.g. `2 2x2 bricks stacked`.
 ///
@@ -865,13 +880,15 @@ pub fn parse_sentence(sentence: &Sentence) -> SentenceOutcome {
         Verb::Render => SentenceOutcome::Statement(Statement::Meta(Meta::Render)),
         Verb::Help => {
             // "Help select." names a topic; a bare "Help." does not. Anything
-            // else after "help" that isn't a verb (a typo, "help me") is
+            // else after "help" that isn't a topic (a typo, "help me") is
             // quietly ignored rather than reported — asking for help wrong is
             // still asking for help.
-            let topic = match parser.peek() {
-                Some(Token::Verb(v)) => Some(*v),
-                _ => None,
-            };
+            //
+            // Read from the sentence as typed rather than from the tokens:
+            // tokenizing has already thrown away which word produced a verb,
+            // and "Help draw." must reach drawings while "Help render." reaches
+            // render, even though both lex to `Verb::Render`.
+            let topic = help_topic(parser.sentence);
             SentenceOutcome::Statement(Statement::Meta(Meta::Help(topic)))
         }
         Verb::Finish => SentenceOutcome::Statement(Statement::Meta(Meta::Finish)),
@@ -1998,15 +2015,59 @@ mod tests {
     fn help_names_a_topic_by_its_verb() {
         assert_eq!(
             statement("Help select"),
-            Statement::Meta(Meta::Help(Some(Verb::Select)))
+            Statement::Meta(Meta::Help(Some(HelpTopic::Verb(Verb::Select))))
         );
         // A synonym still resolves to the canonical verb.
         assert_eq!(
             statement("Help put"),
-            Statement::Meta(Meta::Help(Some(Verb::Add)))
+            Statement::Meta(Meta::Help(Some(HelpTopic::Verb(Verb::Add))))
         );
         // Anything else after "help" is ignored rather than reported.
         assert_eq!(statement("Help me"), Statement::Meta(Meta::Help(None)));
+    }
+
+    #[test]
+    fn help_names_a_topic_that_is_not_a_verb() {
+        assert_eq!(
+            statement("Help drawings"),
+            Statement::Meta(Meta::Help(Some(HelpTopic::Drawings)))
+        );
+        assert_eq!(
+            statement("Help locations"),
+            Statement::Meta(Meta::Help(Some(HelpTopic::Locations)))
+        );
+
+        // "draw" and "colour" lex as `Render` and `Paint`, which is why the
+        // topic is read from the sentence as typed: as tokens these two are
+        // indistinguishable from the verbs they are synonyms of.
+        assert_eq!(
+            statement("Help draw"),
+            Statement::Meta(Meta::Help(Some(HelpTopic::Drawings)))
+        );
+        assert_eq!(
+            statement("Help render"),
+            Statement::Meta(Meta::Help(Some(HelpTopic::Verb(Verb::Render))))
+        );
+        assert_eq!(
+            statement("Help colours"),
+            Statement::Meta(Meta::Help(Some(HelpTopic::Parts)))
+        );
+        assert_eq!(
+            statement("Help paint"),
+            Statement::Meta(Meta::Help(Some(HelpTopic::Verb(Verb::Paint))))
+        );
+
+        // The first word that names a topic wins, so filler in between is
+        // skipped rather than losing the question.
+        assert_eq!(
+            statement("Help me with drawings"),
+            Statement::Meta(Meta::Help(Some(HelpTopic::Drawings)))
+        );
+        // `commands.` is an alias for `help.` and takes topics the same way.
+        assert_eq!(
+            statement("Commands drawings"),
+            Statement::Meta(Meta::Help(Some(HelpTopic::Drawings)))
+        );
     }
 
     #[test]

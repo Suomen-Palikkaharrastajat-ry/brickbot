@@ -219,12 +219,27 @@ command:
     desc: "Start a collaborative LEGO build in a thread"
     name_arg_name: "name"
     name_desc: "What to call the model (e.g. 'Castle')"
+    size_arg_name: "size"
+    size_desc: "Max size: '10' for a cube, '8x12' for a footprint, or '8x12x6' for width x depth x height"
     intro_title: "Building: %{name}"
     intro_body: "This thread is now a build session. Describe what you want in plain sentences and I'll build it. Ordinary chat is ignored, so talk freely."
+    # Every topic `Help <topic>.` answers, in the order the general help lists
+    # them. Not translated: these are words of the build language, which is
+    # English in every locale. Each one must round-trip through
+    # `HelpTopic::parse` — a test enforces it.
+    help_topics: "add, move, raise, lower, rotate, remove, replace, paint, build, duplicate, mirror, select, group, name, undo, redo, revert, count, find, show, export, render, finish, queries, drawings, locations, parts, buttons"
+    intro_say_title: "Say it"
+    intro_say: "`Add a red 2x4 brick at origin.`\n`Put a blue plate on top of that.`\n`Build a wall 10 studs long 6 bricks high.`"
+    intro_draw_title: "Or draw it"
+    intro_draw: "Press **Draw…** under any picture to draw on a grid privately, or type `Build from top at origin:` with a legend and a grid under it."
+    intro_help_title: "Stuck?"
+    intro_help: "`Help.` — everything I understand\n`Help drawings.` — how a drawing is written\n`Undo.`  `Export.`  `Finish.`"
+    thread_intro: "**%{name}** is open. Describe what you want in plain sentences, or press **Draw…** to draw it on a grid instead.\n`Add a red 2x4 brick at origin.`\nSay `Help.` for everything I understand, or `Help drawings.` for how a drawing is written."
     intro_examples: "Try:\n`Add a red 2x4 brick at origin.`\n`Put a blue plate on top of that.`\n`Build a wall 10 studs long 6 bricks high.`\n`Undo.`  `Export.`  `Help.`"
     thread_created: "Started a build session in %{thread}."
     already_in_thread: "Threads can't be nested — run this in the parent channel instead."
     already_building: "There's already a build session in this thread."
+    invalid_size: "I don't understand '%{size}' as a size. Try a number like '10', 'AxB' like '8x12', or 'AxBxC' like '8x12x6'."
     session_failed: "I couldn't start the build session. Please try again."
     render_caption: "**%{name}** — %{parts} part(s), revision %{revision}"
     export_button: "Export .io"
@@ -234,7 +249,10 @@ command:
     export_ready: "Here's **%{name}** as a BrickLink Studio file."
     export_empty: "There's nothing to export yet."
     box_mode_notice: "Note: the LDraw part library isn't installed, so I'm drawing simple boxes. Ask an admin to run `make fetch-ldraw` for real part shapes."
-    help: "Describe your model in sentences. You can also build from drawings (`Build from top:`), or use the [Draw...], Undo and Export buttons under any render. Verbs I know: add, move, raise, lower, rotate, remove, replace, paint, build, duplicate, mirror, select, group, name, undo, redo, revert, count, find, show, export, render, finish.\nExamples:\n`Add a red 2x4 brick at origin.`\n`Move it one stud east.`\n`Build a tower 5 bricks high.`\n`Paint all red bricks dark tan.`\n`How tall is the tower?`"
+    # The general help. `%{topics}` comes from help_topics below rather than
+    # being spelled out here, so what `Help.` advertises and what
+    # `Help <topic>.` answers cannot drift apart.
+    help: "Describe your model in plain sentences, or draw it on a grid — I build either.\n\n**Say it**\n`Add a red 2x4 brick at origin.`\n`Move it one stud east.`\n`Build a wall 10 studs long 6 bricks high.`\n\n**Draw it**\n`Build from top at origin:` followed by a fenced legend and grid, or the [Draw…] button under any picture. Say `Help drawings.` for what one looks like.\n\n**Ask and fix**\n`How tall is the tower?`  `Count red bricks.`\n`Undo.`  `Export.`  `Finish.`\n\n**Topics** — %{topics}.\nSay `Help add.` or `Help drawings.` for any of them."
     help_topic:
       add: "Add [count] [colour] [size] [kind] [location].\nExamples:\n`Add a red 2x4 brick at origin.`\n`Add 3 tan plates on top of that.`\n`Add a black tile under the roof.`\n`Add a white 1x2 plate north of the window.`\n`Add 3001 at gate.`"
       move: "Move <what> <direction> [count] [unit], or to a new location.\nExamples:\n`Move it one stud east.`\n`Move the wall east 2.`\n`Move it under the roof.`"
@@ -244,7 +262,7 @@ command:
       remove: "Remove <what>.\nExamples:\n`Remove the last brick.`\n`Remove all red bricks.`"
       replace: "Replace <what> with a part or a colour.\nExamples:\n`Replace all red bricks with dark red.`"
       paint: "Paint <what> a colour.\nExamples:\n`Paint the selection dark tan.`\n`Paint the highest brick red.`"
-      build: "Build a structure with its dimensions: walls, rows, towers, floors, boxes and stairs. Or build from a drawing.\nExamples:\n`Build a wall 10 studs long 6 bricks high.`\n`Build a row of 20 black tiles east.`\n`Build from top:` followed by a legend and a grid."
+      build: "Build a structure with its dimensions: walls, rows, towers, floors, boxes and stairs. Or build from a drawing, with `Build from <view> at <location>:` and a fenced legend and grid under it — see `Help drawings.`\nExamples:\n`Build a wall 10 studs long 6 bricks high.`\n`Build a row of 20 black tiles east.`\n`Build from top at origin:` followed by a legend and a grid."
       duplicate: "Duplicate <what> [direction] [distance].\nExamples:\n`Duplicate tower east 4 studs.`"
       mirror: "Mirror <what> across an axis or a point.\nExamples:\n`Mirror the wall across north.`\n`Mirror everything across the centre.`"
       select: "Select <what>, to refer to it afterwards as 'the selection'.\nExamples:\n`Select all red bricks.`"
@@ -255,12 +273,19 @@ command:
       revert: "Revert to a specific revision number.\nExamples:\n`Revert to revision 12.`"
       count: "Count parts matching a description.\nExamples:\n`Count red bricks.`"
       find: "Find collisions between parts.\nExamples:\n`Find collisions.`"
-      show: "Show unsupported bricks, list the parts used so far, or read a model back as a drawing.\nExamples:\n`Show unsupported bricks.`\n`Show parts.`\n`Show top view.`"
+      show: "Show unsupported bricks, list the parts used so far, or read the model back as a drawing you can paste in again — see `Help drawings.`\nExamples:\n`Show unsupported bricks.`\n`Show parts.`\n`Show top view.`\n`Show the north view.`\n`Show top view layer 2.`"
       export: "Export the model as a BrickLink Studio (.io) file.\nExamples:\n`Export.`"
-      render: "Render the model again, even if nothing changed.\nExamples:\n`Render.`"
-      help: "Show this help, or one verb's syntax and examples. (`commands.` is an alias for `help.`)\nExamples:\n`Help.`\n`Help select.`"
+      render: "Render the model again, even if nothing changed. To build *from* a drawing instead, see `Help drawings.`\nExamples:\n`Render.`"
+      help: "Show this help, or one topic's syntax and examples. Topics are the verbs plus drawings, locations, parts and buttons. (`commands.` is an alias for `help.`)\nExamples:\n`Help.`\n`Help select.`\n`Help drawings.`"
       finish: "End the build session and post the final picture.\nExamples:\n`Finish.`"
       queries: "Read-only questions about the model.\nExamples:\n`Where is tower?`\n`Who added roof?`\n`What changed?`\n`How tall is it?`"
+      # The topics that are not verbs. `drawings` carries a whole worked
+      # example: it is the one thing nobody can guess the shape of, and the
+      # legend and grid below are meant to be copied straight out of Discord.
+      drawings: "A drawing is a legend and a grid inside a fenced code block, under a header sentence saying which view it is and where it goes:\n\nBuild from top at origin:\n```\nb = blue 1x1 brick\nr = red 1x1 brick\n\n.bb.\nrbbr\n```\nOne cell is one stud. `.` is an empty stud, and every other character must be in the legend. A blank line starts the next layer up — or the next slice back, in a side view. A symbol repeated over a part's own footprint becomes one part, so `bbbb` with `b = red 1x4 brick` is one brick rather than four.\nViews: top, bottom, north, south, east, west. `from` is optional and any location works: `Build from north at 20 0 40:`, `Build top view at gate:`\n`Show top view.` reads the model back in this same syntax, ready to paste in again.\nPress [Draw…] under any picture to draft one privately, where nobody sees the attempts."
+      locations: "Where a part goes. Without a location it rests on top of whatever was last touched, which is how a conversation naturally stacks bricks.\nExamples:\n`Add a gray 8x8 plate at origin.`\n`Add a brick at 20 0 40.`\n`Name this point gate.` then `Add a brick at gate.`\n`Put a blue plate on top of that.`\n`Add a black tile under the roof.`\n`Add a white 1x2 plate north of the window.`"
+      parts: "A part is [count] [colour] [size] [kind] in any sensible order, or a bare part number. Colours are LDraw names — `red`, `dark tan`, `light bluish gray`, `trans clear` — and both spellings of colour/color work. Plain `grey` means the modern bluish grey.\nExamples:\n`Add a red 2x4 brick at origin.`\n`Add 3 tan plates on top of that.`\n`Add 3001 at gate.`\n`Show parts.`\nUse `/build-legend` or the [Insert…] button to pick a part and a colour from a list instead of typing them."
+      buttons: "Under every picture: [Export .io] saves a BrickLink Studio file, [Draw…] opens a private drawing form, [Undo] takes back the last edit, and [End session] finishes the build.\n[Draw…] shows a preview only you can see, prefilled with what is already built. Nothing reaches the model until you press [Apply to the model]. [Edit] reopens the form as you left it, [Insert…] adds a legend line from a list of colours and parts, and [Discard] throws the draft away."
     added: "Added %{count} part(s)."
     moved: "Moved %{count} part(s)."
     removed: "Removed %{count} part(s)."
@@ -393,6 +418,7 @@ command:
       selection: "I can't select that yet."
       name: "What should I call it?"
       too_large: "That would be %{total} parts and I can place at most %{limit} at a time. Try building it in smaller pieces."
+      exceeds_max_size: "That would take the model past its %{x}x%{y}x%{z} size limit. Try building it within that space."
       no_legal_spot: "There's nowhere legal to put that — everywhere it could rest is already taken."
       nothing_below: "That's already on the ground, so nothing can go under it."
     # Problems reading a drawing. Positions count from one, the way people do.

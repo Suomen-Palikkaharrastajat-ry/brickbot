@@ -285,6 +285,10 @@ pub struct BuildCommandConfig {
     /// then falls back to a plain `.ldr`, which Studio imports natively.
     #[serde(default = "default_true")]
     pub enable_io_export: bool,
+    /// The largest a model may grow, when a session does not give its own
+    /// `size` at creation: a cube of this many studs on X/Z and bricks on Y.
+    #[serde(default = "default_build_max_model_size")]
+    pub max_model_size: u32,
 }
 
 impl Default for BuildCommandConfig {
@@ -297,6 +301,7 @@ impl Default for BuildCommandConfig {
             supersample: default_build_supersample(),
             render_debounce_ms: default_build_render_debounce_ms(),
             enable_io_export: true,
+            max_model_size: default_build_max_model_size(),
         }
     }
 }
@@ -319,6 +324,10 @@ const fn default_build_supersample() -> u32 {
 
 const fn default_build_render_debounce_ms() -> u64 {
     1200
+}
+
+const fn default_build_max_model_size() -> u32 {
+    10
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -516,6 +525,20 @@ impl Config {
             }
         }
 
+        if self.commands.build.max_model_size == 0 {
+            errors.push("commands.build.max_model_size must be at least 1".to_string());
+        }
+        for guild in &self.guilds {
+            if let Some(build) = guild.commands.as_ref().and_then(|c| c.build.as_ref()) {
+                if build.max_model_size == 0 {
+                    errors.push(format!(
+                        "guild {} commands.build.max_model_size must be at least 1",
+                        guild.guild_id
+                    ));
+                }
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -645,6 +668,7 @@ mod tests {
         assert!(build.supersample >= 1);
         assert!(build.render_debounce_ms > 0);
         assert!(build.enable_io_export);
+        assert!(build.max_model_size > 0);
     }
 
     #[test]
@@ -725,6 +749,38 @@ mod tests {
         .unwrap();
         let errors = config.validate().unwrap_err();
         assert!(errors.iter().any(|e| e.contains("data_dir")));
+    }
+
+    #[test]
+    fn a_zero_max_model_size_is_rejected() {
+        let config: Config = toml::from_str(
+            r"
+        [commands.build]
+        max_model_size = 0
+        ",
+        )
+        .unwrap();
+        let errors = config.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("max_model_size")));
+    }
+
+    #[test]
+    fn a_zero_max_model_size_in_a_guild_override_is_rejected() {
+        let config: Config = toml::from_str(
+            r"
+        [[guilds]]
+        guild_id = 1
+        [guilds.commands.build]
+        max_model_size = 0
+        ",
+        )
+        .unwrap();
+        let errors = config.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("max_model_size") && e.contains('1'))
+        );
     }
 
     #[test]

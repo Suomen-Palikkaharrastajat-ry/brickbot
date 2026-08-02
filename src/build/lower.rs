@@ -69,6 +69,9 @@ pub enum Unsupported {
     /// anchor's *top* instead would reverse what the builder asked for, so we
     /// say so rather than guess.
     NothingBelow,
+    /// The model would grow past its configured maximum size: studs on X/Z,
+    /// bricks on Y.
+    ExceedsMaxSize { x: u32, y: u32, z: u32 },
 }
 
 impl Unsupported {
@@ -86,6 +89,7 @@ impl Unsupported {
             Self::TooLarge { .. } => "command.build.unsupported.too_large",
             Self::NoLegalSpot => "command.build.unsupported.no_legal_spot",
             Self::NothingBelow => "command.build.unsupported.nothing_below",
+            Self::ExceedsMaxSize { .. } => "command.build.unsupported.exceeds_max_size",
         }
     }
 }

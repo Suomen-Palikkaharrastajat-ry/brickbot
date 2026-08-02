@@ -5,7 +5,7 @@
 
 #![allow(clippy::doc_markdown)]
 
-use super::dsl::lexer::Verb;
+use super::dsl::lexer::HelpTopic;
 use super::dsl::parser::ParseError;
 use super::grid::GridError;
 use super::legal::Adjustment;
@@ -190,6 +190,9 @@ pub fn describe_error(error: &LowerError, locale: &str) -> String {
         LowerError::Unsupported(what) => match what {
             Unsupported::TooLarge { total, limit } => {
                 t!(what.key(), locale = locale, total = total, limit = limit).to_string()
+            }
+            Unsupported::ExceedsMaxSize { x, y, z } => {
+                t!(what.key(), locale = locale, x = x, y = y, z = z).to_string()
             }
             _ => t!(what.key(), locale = locale).to_string(),
         },
@@ -504,16 +507,27 @@ pub fn render_caption(model: &Model, revision: usize, locale: &str) -> String {
     .to_string()
 }
 
-/// The help text: the general overview, or one verb's syntax and examples.
+/// The help text: the general overview, or one topic's syntax and examples.
 ///
-/// A topic [`Verb::help_key`] doesn't cover — a synonym-only variant, or
-/// something the sentence typed that wasn't recognised as a verb at all —
-/// falls back to the general text. Asking for help wrong is still asking for
-/// help, so it must never come back as an error.
+/// A word [`HelpTopic::help_key`] doesn't cover falls back to the general
+/// text. Asking for help wrong is still asking for help, so it must never come
+/// back as an error.
+///
+/// The general text lists what can be asked about from
+/// `command.build.help_topics`, the one place the topic list is written down.
+/// Interpolating it rather than repeating it in prose is what keeps `Help.`
+/// honest about what `Help <topic>.` will actually answer, in every locale.
 #[must_use]
-pub fn help_text(topic: Option<Verb>, locale: &str) -> String {
-    topic.and_then(Verb::help_key).map_or_else(
-        || t!("command.build.help", locale = locale).to_string(),
+pub fn help_text(topic: Option<HelpTopic>, locale: &str) -> String {
+    topic.and_then(HelpTopic::help_key).map_or_else(
+        || {
+            t!(
+                "command.build.help",
+                locale = locale,
+                topics = t!("command.build.help_topics", locale = locale)
+            )
+            .to_string()
+        },
         |key| t!(key, locale = locale).to_string(),
     )
 }
@@ -521,6 +535,7 @@ pub fn help_text(topic: Option<Verb>, locale: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::dsl::lexer::Verb;
     use crate::build::dsl::parser::Expectation;
     use crate::build::model::{PartKind, PartRef, PlacementId};
     use crate::build::units::IVec3;
@@ -668,6 +683,11 @@ mod tests {
                 total: 900,
                 limit: 400,
             },
+            Unsupported::ExceedsMaxSize {
+                x: 10,
+                y: 10,
+                z: 10,
+            },
         ];
 
         for gap in gaps {
@@ -688,6 +708,16 @@ mod tests {
             "en-US",
         );
         assert!(too_large.contains("900") && too_large.contains("400"));
+
+        let exceeds_max_size = describe_error(
+            &LowerError::Unsupported(Unsupported::ExceedsMaxSize { x: 8, y: 12, z: 6 }),
+            "en-US",
+        );
+        assert!(
+            exceeds_max_size.contains('8')
+                && exceeds_max_size.contains("12")
+                && exceeds_max_size.contains('6')
+        );
     }
 
     #[test]
@@ -934,8 +964,8 @@ mod tests {
     }
 
     #[test]
-    fn every_documented_verb_has_its_own_help_in_both_locales() {
-        let documented = [
+    fn every_documented_topic_has_its_own_help_in_both_locales() {
+        let verbs = [
             Verb::Add,
             Verb::Move,
             Verb::Raise,
@@ -965,23 +995,108 @@ mod tests {
             Verb::Fill,
             Verb::Repeat,
         ];
+        let documented: Vec<HelpTopic> = verbs
+            .into_iter()
+            .map(HelpTopic::Verb)
+            .chain(HelpTopic::NAMED)
+            .collect();
 
         let general = [help_text(None, "en-US"), help_text(None, "fi-FI")];
 
-        for verb in documented {
+        for topic in documented {
             for locale in ["en-US", "fi-FI"] {
-                let text = help_text(Some(verb), locale);
-                assert!(!text.is_empty(), "{verb:?} has no {locale} help");
+                let text = help_text(Some(topic), locale);
+                assert!(!text.is_empty(), "{topic:?} has no {locale} help");
                 assert!(!text.contains("%{"), "unsubstituted: {text}");
                 assert!(
                     !text.contains("command.build."),
-                    "unresolved key for {verb:?} in {locale}: {text}"
+                    "unresolved key for {topic:?} in {locale}: {text}"
                 );
             }
             assert_ne!(
-                help_text(Some(verb), "en-US"),
+                help_text(Some(topic), "en-US"),
                 general[0],
-                "{verb:?} just repeats the general help"
+                "{topic:?} just repeats the general help"
+            );
+        }
+    }
+
+    /// The general help advertises a list of topics. Every word on it has to be
+    /// a word `Help <topic>.` actually answers, or `Help.` is lying about what
+    /// the bot knows — the exact failure this whole help rework is about.
+    #[test]
+    fn every_topic_the_general_help_advertises_can_be_asked_for() {
+        for locale in ["en-US", "fi-FI"] {
+            let listed = t!("command.build.help_topics", locale = locale).to_string();
+            let general = help_text(None, locale);
+
+            let mut count = 0;
+            for word in listed.split(',').map(str::trim) {
+                let topic = HelpTopic::parse(word).unwrap_or_else(|| {
+                    panic!("{locale} advertises '{word}', which is not a topic")
+                });
+                let text = help_text(Some(topic), locale);
+                assert_ne!(
+                    text, general,
+                    "'{word}' is advertised but falls back to the general help"
+                );
+                assert!(
+                    general.contains(word),
+                    "'{word}' is a topic but the {locale} general help does not name it"
+                );
+                count += 1;
+            }
+            assert!(count > 20, "{locale} advertises only {count} topics");
+        }
+    }
+
+    /// `draw` lexes as a synonym of `render`, so before named topics existed
+    /// `Help draw.` answered "render the model again" — the opposite of the
+    /// question. Both spellings must reach drawings, and `render` must not.
+    #[test]
+    fn drawing_words_reach_the_drawings_topic_and_not_render() {
+        let drawings = help_text(Some(HelpTopic::Drawings), "en-US");
+        for word in ["draw", "drawing", "drawings", "grid", "grids"] {
+            assert_eq!(
+                help_text(HelpTopic::parse(word), "en-US"),
+                drawings,
+                "'{word}' should answer with the drawings topic"
+            );
+        }
+        assert_ne!(
+            help_text(HelpTopic::parse("render"), "en-US"),
+            drawings,
+            "'render' should still answer with the render topic"
+        );
+        assert_ne!(
+            help_text(HelpTopic::parse("paint"), "en-US"),
+            help_text(Some(HelpTopic::Parts), "en-US"),
+            "'paint' should still answer with the paint topic"
+        );
+    }
+
+    /// The drawings help is only useful if it carries a drawing that works.
+    /// A fenced legend and grid is also the longest thing the bot says, and
+    /// replies are sent unsplit, so it has to fit in one Discord message.
+    #[test]
+    fn the_drawings_help_carries_a_usable_example() {
+        for locale in ["en-US", "fi-FI"] {
+            let text = help_text(Some(HelpTopic::Drawings), locale);
+            assert!(text.contains("Build from top at origin:"), "{locale}");
+            assert!(text.contains("b = blue 1x1 brick"), "{locale}");
+            // Exactly one pair. Discord pairs fences in the order it meets
+            // them, so a stray ``` in the prose would open a code block at the
+            // wrong word and swallow the example whole.
+            assert_eq!(
+                text.matches("```").count(),
+                2,
+                "{locale} drawings help must hold exactly one fence"
+            );
+            assert!(text.contains("Show top view."), "{locale}");
+            assert!(
+                text.len() < 2000,
+                "{locale} drawings help is {} chars, over Discord's limit",
+                text.len()
             );
         }
     }

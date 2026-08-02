@@ -18,6 +18,82 @@ pub const LDU_PLATE: i32 = 8;
 /// The height of one brick, which is three plates.
 pub const LDU_BRICK: i32 = 24;
 
+/// The largest a model may grow, per axis: studs on X/Z, bricks on Y.
+///
+/// Builders type this compactly rather than naming three axes: `10` for a
+/// cube, `8x12` for a footprint (the taller of the two sides becomes the
+/// height budget too, since neither side named one), or `8x12x6` to give
+/// width, depth and height explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaxModelSize {
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
+}
+
+impl MaxModelSize {
+    #[must_use]
+    pub const fn cube(side: u32) -> Self {
+        Self {
+            x: side,
+            y: side,
+            z: side,
+        }
+    }
+
+    /// Parses the `/build` `size` argument.
+    ///
+    /// `"10"` is a cube. `"8x12"` is a footprint, with height set to
+    /// `max(8, 12)` since a rectangle names nothing to be tall by. `"8x12x6"`
+    /// gives width, depth and height outright. Anything else — the wrong
+    /// number of parts, a non-number, or a zero or negative side — is not a
+    /// size, so callers can tell a typo from a value.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let parts = text
+            .split(['x', 'X', '×'])
+            .map(|part| part.trim().parse::<u32>().ok().filter(|n| *n > 0))
+            .collect::<Option<Vec<u32>>>()?;
+        match parts[..] {
+            [a] => Some(Self::cube(a)),
+            [a, b] => Some(Self {
+                x: a,
+                y: a.max(b),
+                z: b,
+            }),
+            [a, b, c] => Some(Self { x: a, y: c, z: b }),
+            _ => None,
+        }
+    }
+
+    /// True when growing from `before` to `after` — each an X/Y/Z span in
+    /// LDU, the shape [`super::model::Model::bounds`] measures in — pushes
+    /// the model past this limit on some axis.
+    ///
+    /// Only *growth* past the limit is refused. A model already bigger than
+    /// the box — built before a limit existed, or under a looser size given
+    /// to an earlier session — is not punished for edits that do not make it
+    /// any bigger: whichever axis is already over, `after == before` there
+    /// keeps the comparison from tripping.
+    #[must_use]
+    pub fn exceeded_by(self, before: (i32, i32, i32), after: (i32, i32, i32)) -> bool {
+        let limit_x = ldu_limit(self.x, LDU_STUD);
+        let limit_y = ldu_limit(self.y, LDU_BRICK);
+        let limit_z = ldu_limit(self.z, LDU_STUD);
+        (after.0 > limit_x && after.0 > before.0)
+            || (after.1 > limit_y && after.1 > before.1)
+            || (after.2 > limit_z && after.2 > before.2)
+    }
+}
+
+/// `units * ldu_per_unit`, saturating rather than overflowing for a
+/// pathologically large configured size.
+fn ldu_limit(units: u32, ldu_per_unit: i32) -> i32 {
+    i32::try_from(units)
+        .unwrap_or(i32::MAX)
+        .saturating_mul(ldu_per_unit)
+}
+
 /// An integer point in LDraw units.
 #[derive(
     Debug,
@@ -639,5 +715,61 @@ mod tests {
         assert_eq!(Orientation::new(1, false).apply_footprint(2, 4), (4, 2));
         assert_eq!(Orientation::new(2, false).apply_footprint(2, 4), (2, 4));
         assert_eq!(Orientation::new(3, false).apply_footprint(2, 4), (4, 2));
+    }
+
+    #[test]
+    fn a_single_number_is_a_cube() {
+        assert_eq!(MaxModelSize::parse("10"), Some(MaxModelSize::cube(10)));
+    }
+
+    #[test]
+    fn two_numbers_are_a_footprint_with_the_larger_side_as_height() {
+        assert_eq!(
+            MaxModelSize::parse("8x12"),
+            Some(MaxModelSize { x: 8, y: 12, z: 12 })
+        );
+        // Order does not matter for which side is "taller".
+        assert_eq!(
+            MaxModelSize::parse("12x8"),
+            Some(MaxModelSize { x: 12, y: 12, z: 8 })
+        );
+    }
+
+    #[test]
+    fn three_numbers_give_width_height_and_depth_outright() {
+        assert_eq!(
+            MaxModelSize::parse("8x12x6"),
+            Some(MaxModelSize { x: 8, y: 6, z: 12 })
+        );
+    }
+
+    #[test]
+    fn other_shapes_of_input_do_not_parse() {
+        for bad in ["", "0", "10x", "x10", "1x2x3x4", "8x-1", "eight", "10x0"] {
+            assert!(
+                MaxModelSize::parse(bad).is_none(),
+                "{bad:?} should not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn whitespace_around_a_number_is_tolerated() {
+        assert_eq!(
+            MaxModelSize::parse(" 8 x 12 "),
+            Some(MaxModelSize { x: 8, y: 12, z: 12 })
+        );
+    }
+
+    #[test]
+    fn only_growth_past_the_limit_is_refused() {
+        let limit = MaxModelSize::cube(10);
+        // Within the box: fine.
+        assert!(!limit.exceeded_by((0, 0, 0), (100, 100, 100)));
+        // Growing past the box on one axis: refused.
+        assert!(limit.exceeded_by((100, 0, 0), (300, 0, 0)));
+        // Already past the box, but this edit does not make that axis worse:
+        // not refused, so a pre-existing oversized model can still be edited.
+        assert!(!limit.exceeded_by((300, 0, 0), (300, 0, 0)));
     }
 }

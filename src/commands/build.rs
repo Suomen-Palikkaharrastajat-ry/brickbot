@@ -428,13 +428,19 @@ pub fn build_build_command(locale: &str) -> CreateCommand {
     let cmd_desc = t!("command.build.desc", locale = locale).to_string();
     let arg_name = t!("command.build.name_arg_name", locale = locale).to_string();
     let arg_desc = t!("command.build.name_desc", locale = locale).to_string();
+    let size_arg_name = t!("command.build.size_arg_name", locale = locale).to_string();
+    let size_desc = t!("command.build.size_desc", locale = locale).to_string();
 
     let option =
         CreateCommandOption::new(CommandOptionType::String, &arg_name, &arg_desc).required(true);
+    let size_option =
+        CreateCommandOption::new(CommandOptionType::String, &size_arg_name, &size_desc)
+            .required(false);
 
     CreateCommand::new(&cmd_name)
         .description(&cmd_desc)
         .add_option(option)
+        .add_option(size_option)
 }
 
 /// Builds `/build-legend`, which adds a line to an open private drawing.
@@ -506,8 +512,21 @@ pub fn option_name_matches(name: &str) -> bool {
     matches!(name, "name" | "nimi" | "model" | "malli")
 }
 
+/// The names the `/build` `size` argument may arrive under, across locales.
+#[must_use]
+pub fn size_option_name_matches(name: &str) -> bool {
+    matches!(name, "size" | "koko")
+}
+
 /// The announcement posted when a session opens.
+///
+/// Three fields rather than one list of examples: a builder who has never seen
+/// the language needs to learn that sentences work, that drawings work, and
+/// that `Help.` exists — and the third is what makes the first two recoverable
+/// when a sentence does not land.
 pub fn build_intro_embed(model_name: &str, locale: &str) -> CreateEmbed {
+    let field = |key: &str| t!(key, locale = locale).to_string();
+
     CreateEmbed::new()
         .title(t!(
             "command.build.intro_title",
@@ -516,11 +535,36 @@ pub fn build_intro_embed(model_name: &str, locale: &str) -> CreateEmbed {
         ))
         .description(t!("command.build.intro_body", locale = locale))
         .field(
-            "\u{200b}",
-            t!("command.build.intro_examples", locale = locale),
+            field("command.build.intro_say_title"),
+            field("command.build.intro_say"),
+            false,
+        )
+        .field(
+            field("command.build.intro_draw_title"),
+            field("command.build.intro_draw"),
+            false,
+        )
+        .field(
+            field("command.build.intro_help_title"),
+            field("command.build.intro_help"),
             false,
         )
         .color(0x00E0_9B3D)
+}
+
+/// The message posted inside the thread when a session opens.
+///
+/// It carries [`build_session_buttons`], which is the whole point of it: the
+/// buttons used to arrive only under a picture, so a builder who had not yet
+/// landed a sentence never learned that `[Draw…]` existed.
+#[must_use]
+pub fn thread_intro_message(model_name: &str, locale: &str) -> String {
+    t!(
+        "command.build.thread_intro",
+        locale = locale,
+        name = model_name
+    )
+    .to_string()
 }
 
 /// The buttons attached to every render.
@@ -594,6 +638,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_thread_intro_names_the_model_and_points_at_help() {
+        for locale in ["en-US", "fi-FI"] {
+            let text = thread_intro_message("Castle", locale);
+            assert!(text.contains("Castle"), "{locale}: {text}");
+            assert!(!text.contains("%{"), "unsubstituted: {text}");
+            assert!(text.contains("Draw"), "{locale} never mentions the button");
+            assert!(text.contains("Help drawings."), "{locale}: {text}");
+            assert!(text.len() < 2000, "{locale} is over Discord's limit");
+        }
+        assert_ne!(
+            thread_intro_message("Castle", "en-US"),
+            thread_intro_message("Castle", "fi-FI"),
+            "the starter message is not translated"
+        );
+    }
+
+    #[test]
     fn the_command_name_is_localized() {
         let english = serde_json::to_value(build_build_command("en-US")).unwrap();
         assert_eq!(english["name"], "build");
@@ -603,17 +664,20 @@ mod tests {
     }
 
     #[test]
-    fn the_command_takes_one_required_name_argument() {
+    fn the_command_takes_a_required_name_and_an_optional_size_argument() {
         let json = serde_json::to_value(build_build_command("en-US")).unwrap();
         let options = json["options"].as_array().unwrap();
-        assert_eq!(options.len(), 1);
+        assert_eq!(options.len(), 2);
         assert_eq!(options[0]["name"], "name");
         assert_eq!(options[0]["required"], true);
+        assert_eq!(options[1]["name"], "size");
+        assert_eq!(options[1]["required"], false);
 
-        // The argument name is localized too, which is why handlers match a
+        // The argument names are localized too, which is why handlers match a
         // set of aliases.
         let finnish = serde_json::to_value(build_build_command("fi-FI")).unwrap();
         assert_eq!(finnish["options"][0]["name"], "nimi");
+        assert_eq!(finnish["options"][1]["name"], "koko");
     }
 
     #[test]
@@ -621,6 +685,13 @@ mod tests {
         assert!(option_name_matches("name"));
         assert!(option_name_matches("nimi"));
         assert!(!option_name_matches("query"));
+    }
+
+    #[test]
+    fn both_localized_size_argument_names_are_recognised() {
+        assert!(size_option_name_matches("size"));
+        assert!(size_option_name_matches("koko"));
+        assert!(!size_option_name_matches("name"));
     }
 
     #[test]

@@ -83,6 +83,7 @@
 # supersample = 2
 # render_debounce_ms = 1200
 # enable_io_export = true
+# max_model_size = 10
 
 # [[guilds]]
 # guild_id = 1424873309325234220

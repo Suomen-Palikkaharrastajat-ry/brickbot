@@ -219,12 +219,27 @@ command:
     desc: "Aloita yhteinen LEGO-rakennusprojekti ketjussa"
     name_arg_name: "nimi"
     name_desc: "Mallin nimi (esim. 'Linna')"
+    size_arg_name: "koko"
+    size_desc: "Enimmäiskoko: '10' kuutiolle, '8x12' pohjalle, tai '8x12x6' leveys x syvyys x korkeus"
     intro_title: "Rakennetaan: %{name}"
     intro_body: "Tästä ketjusta tuli rakennusistunto. Kuvaile tavallisin lausein mitä haluat, niin rakennan sen. Tavallinen jutustelu jätetään huomiotta, joten voit puhua vapaasti."
+    # Kaikki aiheet joihin `Help <topic>.` vastaa, samassa järjestyksessä kuin
+    # yleisohje ne listaa. Ei käännetä: nämä ovat rakennuskielen sanoja, ja kieli
+    # on englantia kaikilla kielialueilla. Jokaisen on kuljettava
+    # `HelpTopic::parse`:n läpi — testi valvoo sitä.
+    help_topics: "add, move, raise, lower, rotate, remove, replace, paint, build, duplicate, mirror, select, group, name, undo, redo, revert, count, find, show, export, render, finish, queries, drawings, locations, parts, buttons"
+    intro_say_title: "Sano se"
+    intro_say: "`Add a red 2x4 brick at origin.`\n`Put a blue plate on top of that.`\n`Build a wall 10 studs long 6 bricks high.`"
+    intro_draw_title: "Tai piirrä se"
+    intro_draw: "Paina kuvan alta **Draw…**, niin piirrät ruudukkoon yksityisesti, tai kirjoita `Build from top at origin:` ja sen alle selite ja ruudukko."
+    intro_help_title: "Jumissa?"
+    intro_help: "`Help.` — kaikki mitä ymmärrän\n`Help drawings.` — miten piirros kirjoitetaan\n`Undo.`  `Export.`  `Finish.`"
+    thread_intro: "**%{name}** on auki. Kuvaile tavallisin lausein mitä haluat, tai paina **Draw…** ja piirrä se ruudukkoon.\n`Add a red 2x4 brick at origin.`\nSano `Help.` niin näet kaiken mitä ymmärrän, tai `Help drawings.` niin näet miten piirros kirjoitetaan."
     intro_examples: "Kokeile:\n`Add a red 2x4 brick at origin.`\n`Put a blue plate on top of that.`\n`Build a wall 10 studs long 6 bricks high.`\n`Undo.`  `Export.`  `Help.`"
     thread_created: "Rakennusistunto aloitettu ketjussa %{thread}."
     already_in_thread: "Ketjuja ei voi upottaa toisiinsa — suorita tämä yläkanavalla."
     already_building: "Tässä ketjussa on jo rakennusistunto."
+    invalid_size: "En ymmärrä kokoa '%{size}'. Kokeile lukua kuten '10', muotoa 'AxB' kuten '8x12', tai muotoa 'AxBxC' kuten '8x12x6'."
     session_failed: "Rakennusistunnon aloitus epäonnistui. Yritä uudelleen."
     render_caption: "**%{name}** — %{parts} osaa, versio %{revision}"
     export_button: "Vie .io-tiedostona"
@@ -234,7 +249,10 @@ command:
     export_ready: "Tässä **%{name}** BrickLink Studio -tiedostona."
     export_empty: "Vietävää ei ole vielä."
     box_mode_notice: "Huom: LDraw-osakirjastoa ei ole asennettu, joten piirrän yksinkertaisia laatikoita. Pyydä ylläpitäjää ajamaan `make fetch-ldraw`, niin saat oikeat osamuodot."
-    help: "Kuvaile malli lausein. Voit myös rakentaa piirroksista (`Build from top:`), tai käyttää kuvan alla olevia [Draw...], Undo ja Export -nappeja. Tunnetut verbit: add, move, raise, lower, rotate, remove, replace, paint, build, duplicate, mirror, select, group, name, undo, redo, revert, count, find, show, export, render, finish.\nEsimerkkejä:\n`Add a red 2x4 brick at origin.`\n`Move it one stud east.`\n`Build a tower 5 bricks high.`\n`Paint all red bricks dark tan.`\n`How tall is the tower?`"
+    # Yleisohje. `%{topics}` tulee alla olevasta help_topics-avaimesta eikä ole
+    # kirjoitettu tähän auki, jottei `Help.`:n lupaama lista ja `Help <topic>.`:n
+    # vastaukset pääse eriytymään toisistaan.
+    help: "Kuvaile malli tavallisin lausein tai piirrä se ruudukkoon — rakennan kummastakin.\n\n**Sano se**\n`Add a red 2x4 brick at origin.`\n`Move it one stud east.`\n`Build a wall 10 studs long 6 bricks high.`\n\n**Piirrä se**\n`Build from top at origin:` ja sen perään aidattu selite ja ruudukko, tai kuvan alla oleva [Draw…]-nappi. Sano `Help drawings.` niin näet millainen piirros on.\n\n**Kysy ja korjaa**\n`How tall is the tower?`  `Count red bricks.`\n`Undo.`  `Export.`  `Finish.`\n\n**Aiheet** — %{topics}.\nSano `Help add.` tai `Help drawings.` niin saat lisää mistä tahansa niistä."
     help_topic:
       add: "Lisää [määrä] [väri] [koko] [tyyppi] [sijainti].\nEsimerkkejä:\n`Add a red 2x4 brick at origin.`\n`Add 3 tan plates on top of that.`\n`Add a black tile under the roof.`\n`Add a white 1x2 plate north of the window.`\n`Add 3001 at gate.`"
       move: "Siirrä <kohde> <suunta> [määrä] [yksikkö], tai uuteen sijaintiin.\nEsimerkkejä:\n`Move it one stud east.`\n`Move the wall east 2.`\n`Move it under the roof.`"
@@ -244,7 +262,7 @@ command:
       remove: "Poista <kohde>.\nEsimerkkejä:\n`Remove the last brick.`\n`Remove all red bricks.`"
       replace: "Korvaa <kohde> osalla tai värillä.\nEsimerkkejä:\n`Replace all red bricks with dark red.`"
       paint: "Maalaa <kohde> jonkin värin.\nEsimerkkejä:\n`Paint the selection dark tan.`\n`Paint the highest brick red.`"
-      build: "Rakenna rakenne mittoineen: seiniä, rivejä, torneja, lattioita, laatikoita ja portaita. Tai rakenna piirroksesta.\nEsimerkkejä:\n`Build a wall 10 studs long 6 bricks high.`\n`Build a row of 20 black tiles east.`\n`Build from top:` jonka perässä on selite ja ruudukko."
+      build: "Rakenna rakenne mittoineen: seiniä, rivejä, torneja, lattioita, laatikoita ja portaita. Tai rakenna piirroksesta muodossa `Build from <view> at <location>:` ja sen alle aidattu selite ja ruudukko — katso `Help drawings.`\nEsimerkkejä:\n`Build a wall 10 studs long 6 bricks high.`\n`Build a row of 20 black tiles east.`\n`Build from top at origin:` jonka perässä on selite ja ruudukko."
       duplicate: "Monista <kohde> [suunta] [etäisyys].\nEsimerkkejä:\n`Duplicate tower east 4 studs.`"
       mirror: "Peilaa <kohde> akselin tai pisteen suhteen.\nEsimerkkejä:\n`Mirror the wall across north.`\n`Mirror everything across the centre.`"
       select: "Valitse <kohde>, jotta voit viitata siihen myöhemmin ilmauksella 'the selection'.\nEsimerkkejä:\n`Select all red bricks.`"
@@ -255,12 +273,19 @@ command:
       revert: "Palauta malli tiettyyn revisioon.\nEsimerkkejä:\n`Revert to revision 12.`"
       count: "Laske kuvausta vastaavien osien määrä.\nEsimerkkejä:\n`Count red bricks.`"
       find: "Etsi osien päällekkäisyyksiä.\nEsimerkkejä:\n`Find collisions.`"
-      show: "Näytä tuetta jäävät osat, listaa tähän mennessä käytetyt osat, tai lue malli takaisin piirroksena.\nEsimerkkejä:\n`Show unsupported bricks.`\n`Show parts.`\n`Show top view.`"
+      show: "Näytä tuetta jäävät osat, listaa tähän mennessä käytetyt osat, tai lue malli takaisin piirroksena jonka voi liittää takaisin ketjuun — katso `Help drawings.`\nEsimerkkejä:\n`Show unsupported bricks.`\n`Show parts.`\n`Show top view.`\n`Show the north view.`\n`Show top view layer 2.`"
       export: "Vie malli BrickLink Studio (.io) -tiedostona.\nEsimerkkejä:\n`Export.`"
-      render: "Piirrä malli uudelleen, vaikka mikään ei olisi muuttunut.\nEsimerkkejä:\n`Render.`"
-      help: "Näytä tämä ohje, tai yhden verbin syntaksi ja esimerkit. (`commands.` on alias sanalle `help.`)\nEsimerkkejä:\n`Help.`\n`Help select.`"
+      render: "Piirrä malli uudelleen, vaikka mikään ei olisi muuttunut. Jos taas haluat rakentaa *piirroksesta*, katso `Help drawings.`\nEsimerkkejä:\n`Render.`"
+      help: "Näytä tämä ohje, tai yhden aiheen syntaksi ja esimerkit. Aiheita ovat verbit sekä drawings, locations, parts ja buttons. (`commands.` on alias sanalle `help.`)\nEsimerkkejä:\n`Help.`\n`Help select.`\n`Help drawings.`"
       finish: "Lopeta rakennussessio ja julkaise lopullinen kuva.\nEsimerkkejä:\n`Finish.`"
       queries: "Vain luku -kysymyksiä mallista.\nEsimerkkejä:\n`Where is tower?`\n`Who added roof?`\n`What changed?`\n`How tall is it?`"
+      # Aiheet jotka eivät ole verbejä. `drawings` sisältää kokonaisen
+      # esimerkin: se on ainoa asia jonka muotoa kukaan ei voi arvata, ja alla
+      # oleva selite ja ruudukko on tarkoitettu kopioitavaksi suoraan Discordista.
+      drawings: "Piirros on selite ja ruudukko aidatussa koodilohkossa, ja sen yllä otsikkolause joka kertoo suunnan ja sijainnin:\n\nBuild from top at origin:\n```\nb = blue 1x1 brick\nr = red 1x1 brick\n\n.bb.\nrbbr\n```\nYksi ruutu on yksi nappi. `.` on tyhjä ruutu, ja jokaisen muun merkin on löydyttävä selitteestä. Tyhjä rivi aloittaa seuraavan kerroksen — tai sivukuvassa seuraavan viipaleen taaksepäin. Saman merkin muodostama suorakaide osan oman pohjan kokoisena tulkitaan yhdeksi osaksi, joten `bbbb` selitteellä `b = red 1x4 brick` on yksi palikka eikä neljä.\nSuunnat: top, bottom, north, south, east, west. `from` on vapaaehtoinen ja mikä tahansa sijainti käy: `Build from north at 20 0 40:`, `Build top view at gate:`\n`Show top view.` lukee mallin takaisin samassa muodossa, valmiina liitettäväksi uudelleen.\nPaina kuvan alta [Draw…], niin luonnostelet yksityisesti eikä kukaan näe yrityksiä."
+      locations: "Mihin osa tulee. Ilman sijaintia se asettuu viimeksi käsitellyn päälle, mikä on luonteva tapa pinota palikoita keskustellen.\nEsimerkkejä:\n`Add a gray 8x8 plate at origin.`\n`Add a brick at 20 0 40.`\n`Name this point gate.` ja sitten `Add a brick at gate.`\n`Put a blue plate on top of that.`\n`Add a black tile under the roof.`\n`Add a white 1x2 plate north of the window.`"
+      parts: "Osa on [määrä] [väri] [koko] [tyyppi] missä tahansa järkevässä järjestyksessä, tai pelkkä osanumero. Värit ovat LDraw-nimiä — `red`, `dark tan`, `light bluish gray`, `trans clear` — ja sekä colour että color kelpaavat. Pelkkä `grey` tarkoittaa nykyistä sinertävää harmaata.\nEsimerkkejä:\n`Add a red 2x4 brick at origin.`\n`Add 3 tan plates on top of that.`\n`Add 3001 at gate.`\n`Show parts.`\nKomennolla `/build-legend` tai [Insert…]-napilla voit valita osan ja värin listalta kirjoittamisen sijaan."
+      buttons: "Jokaisen kuvan alla: [Export .io] tallentaa BrickLink Studio -tiedoston, [Draw…] avaa yksityisen piirroslomakkeen, [Undo] kumoaa viimeisimmän muutoksen ja [End session] päättää rakentamisen.\n[Draw…] näyttää esikatselun jonka näet vain sinä, valmiiksi täytettynä sillä mitä on jo rakennettu. Mikään ei päädy malliin ennen kuin painat [Apply to the model]. [Edit] avaa lomakkeen sellaisena kuin sen jätit, [Insert…] lisää seliteriviin osan ja värin listalta, ja [Discard] heittää luonnoksen pois."
     added: "Lisätty %{count} osaa."
     moved: "Siirretty %{count} osaa."
     removed: "Poistettu %{count} osaa."
@@ -393,6 +418,7 @@ command:
       selection: "En osaa valita tuota vielä."
       name: "Minkä nimen annan sille?"
       too_large: "Siitä tulisi %{total} osaa, ja pystyn asettamaan kerralla enintään %{limit}. Kokeile rakentaa se pienemmissä osissa."
+      exceeds_max_size: "Se veisi mallin yli sen %{x}x%{y}x%{z} kokorajan. Kokeile rakentaa se rajojen sisällä."
       no_legal_spot: "Tuolle ei ole laillista paikkaa — kaikki tuet, joille se voisi asettua, ovat jo varattuja."
       nothing_below: "Se on jo maassa, joten sen alle ei mahdu mitään."
     # Piirroksen lukemisen ongelmat. Sijainnit lasketaan ykkösestä, kuten ihmiset laskevat.
