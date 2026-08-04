@@ -531,6 +531,33 @@ mod tests {
     }
 
     #[test]
+    fn batch_proposals_are_anchored_from_their_centre() {
+        let model = model_with(&[IVec3::ZERO]); // The reference part
+        let mut batch = one(&brick_2x2());
+        // Add a second part to the batch to make its center different from its first part
+        batch.push(member(&brick_2x2(), 4, IVec3::new(40, 0, 0)));
+        let proposals = propose(&model, &batch, 16);
+
+        let beside_east = proposals
+            .iter()
+            .find(|c| {
+                matches!(
+                    c.origin,
+                    Origin::Beside {
+                        direction: crate::build::units::Direction::East
+                    }
+                )
+            })
+            .unwrap();
+        // 2x4 at origin goes from -40 to 40 on X.
+        // Batch is two 2x2s at 0 and 40, so it goes from -20 to 60. Center is 20. Width is 80.
+        // Gap should be (80 + 80) / 2 = 80. Target center = 80. Translation = 80 - 20 = 60.
+        // First part at 0 -> 60. Second part at 40 -> 100.
+        assert_eq!(beside_east.placements[0].pos, IVec3::new(60, 0, 0));
+        assert_eq!(beside_east.placements[1].pos, IVec3::new(100, 0, 0));
+    }
+
+    #[test]
     fn a_bare_quantity_offers_stacked_and_side_by_side() {
         let shapes = arrangements(&brick_2x2(), 4, 2, None);
         assert_eq!(shapes.len(), 3);

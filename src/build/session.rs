@@ -1099,7 +1099,7 @@ const PROPOSAL_HIGHLIGHT: crate::ldraw::colors::Rgb = crate::ldraw::colors::Rgb:
 /// How far toward [`PROPOSAL_HIGHLIGHT`] a candidate's real colour is
 /// nudged. High enough to read as "this one is new" at a glance; low enough
 /// that a white part still looks white and a black one still looks black.
-const PROPOSAL_TINT: f32 = 0.35;
+const PROPOSAL_TINT: f32 = 0.0;
 
 /// One tile of the proposal picture.
 const TILE_WIDTH: u32 = 320;

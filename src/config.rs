@@ -327,7 +327,7 @@ const fn default_build_render_debounce_ms() -> u64 {
 }
 
 const fn default_build_max_model_size() -> u32 {
-    10
+    100
 }
 
 #[derive(Deserialize, Debug, Clone)]
