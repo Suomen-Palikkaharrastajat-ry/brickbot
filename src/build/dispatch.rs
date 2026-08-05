@@ -430,7 +430,6 @@ fn run_sentences(
                                     outcome.ops_start = Some(rev as usize);
                                 }
                                 working.push(op.clone(), author);
-                                outcome.ops.push(op.clone());
                             }
                             if let Some(note) = note {
                                 outcome.replies.push(note);
@@ -464,6 +463,18 @@ fn run_sentences(
     // a running commentary on every brick would drown the thread. A message
     // that stopped early keeps every reply, because the last of them is the
     // problem and the ones before it say what did happen.
+
+    // Extract the final, net operations from the history buffer
+    if let Some(start) = outcome.ops_start {
+        outcome.ops = working
+            .ops
+            .get(start..working.cursor)
+            .unwrap_or(&[])
+            .iter()
+            .map(|entry| entry.op.clone())
+            .collect();
+    }
+
     if !stopped && outcome.ops.len() > 1 && outcome.replies.len() > 1 {
         let last = outcome.replies.pop().unwrap_or_default();
         outcome.replies.clear();
@@ -692,16 +703,12 @@ mod tests {
         assert_eq!(model.placements.last().unwrap().color, 2);
     }
 
-    /// Known bug, unrelated to how the model is carried: `Outcome::ops` is
-    /// append-only, so an undo *between* two commands in one message leaves the
-    /// superseded operation in the list. The session then persists a log the
-    /// interpreter never had — here `[red, blue, yellow]` with the cursor at 2,
-    /// which materializes to red+blue, when the message plainly asked for
-    /// red+yellow. Sending the same four sentences as separate messages is
-    /// correct, which is why this went unnoticed.
+    /// `Outcome::ops` is derived from the history buffer at the end of the message,
+    /// so an undo *between* two commands in one message correctly excludes the
+    /// superseded operation from the list. The session persists exactly what the
+    /// interpreter held.
     #[test]
-    #[ignore = "documents a known bug in Outcome::ops; see the comment above"]
-    fn an_undo_between_two_commands_in_one_message_is_persisted_wrongly() {
+    fn an_undo_between_two_commands_in_one_message_is_persisted_correctly() {
         let batched = run(&[
             "Add a red 2x4 brick at origin. Add a blue 2x4 brick. Undo. Add a yellow 2x4 brick.",
         ])

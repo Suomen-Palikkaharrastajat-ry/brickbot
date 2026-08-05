@@ -144,6 +144,7 @@ fn build_guild_commands(
 
     commands
 }
+#[allow(clippy::too_many_lines)]
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
@@ -155,39 +156,7 @@ impl EventHandler for Handler {
         }
 
         for guild in &self.config.guilds {
-            let mut commands = Vec::new();
-
-            if self.config.commands.events.enabled {
-                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
-                commands.push(crate::commands::events::build_events_command(locale));
-            }
-
-            if self.config.commands_for(guild.guild_id).locations.enabled {
-                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
-                commands.push(crate::commands::locations::build_locations_command(locale));
-            }
-
-            if self.config.commands_for(guild.guild_id).set.enabled {
-                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
-                commands.push(crate::commands::set::build_set_command(locale));
-            }
-
-            if self.config.commands_for(guild.guild_id).part.enabled {
-                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
-                commands.push(crate::commands::part::build_part_command(locale));
-            }
-
-            if self.config.commands_for(guild.guild_id).diagnostics.enabled {
-                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
-                commands.push(crate::commands::diagnostics::build_diagnostics_command(
-                    locale,
-                ));
-            }
-
-            if self.config.commands_for(guild.guild_id).build.enabled {
-                let locale = self.config.locale_for(guild.guild_id).unwrap_or("fi-FI");
-                commands.push(crate::commands::build::build_build_command(locale));
-            }
+            let commands = build_guild_commands(&self.config, guild.guild_id);
 
             match GuildId::new(guild.guild_id)
                 .set_commands(&ctx.http, commands)
