@@ -12,11 +12,21 @@
 #![allow(clippy::doc_markdown)]
 
 use super::model::{Model, Placement};
+use super::units::IVec3;
 use crate::ldraw::COLOR_INHERIT;
 use crate::ldraw::colors::{self, Rgb};
 use crate::ldraw::resolve::LdrawLibrary;
 use crate::math::Vec3;
 use crate::render::SceneTriangle;
+
+/// A lattice position as a render-space vector (still in LDU).
+///
+/// Lives here rather than on `IVec3` so the model crate stays independent of
+/// the renderer.
+#[allow(clippy::cast_precision_loss)]
+const fn to_vec3(v: IVec3) -> Vec3 {
+    Vec3::new(v.x as f32, v.y as f32, v.z as f32)
+}
 
 /// How much geometry to use for each placement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,8 +109,8 @@ fn placement_bounds(placement: &Placement) -> (Vec3, Vec3) {
     // the fallback here used to make it.
     let (min, max) = placement.occupied_box();
 
-    let a = Vec3::new(min.to_vec3().x, -max.to_vec3().y, min.to_vec3().z);
-    let b = Vec3::new(max.to_vec3().x, -min.to_vec3().y, max.to_vec3().z);
+    let a = Vec3::new(to_vec3(min).x, -to_vec3(max).y, to_vec3(min).z);
+    let b = Vec3::new(to_vec3(max).x, -to_vec3(min).y, to_vec3(max).z);
     (a, b)
 }
 
@@ -116,7 +126,7 @@ fn mesh_triangles(placement: &Placement, mesh: &crate::ldraw::Mesh) -> Vec<Scene
     // The mesh is in part-local renderer space (+Y up) and keeps the `inherit`
     // colour code, so one cached mesh serves every colour.
     let orientation = placement.orientation.to_ldraw_matrix();
-    let origin = placement.pos.to_vec3();
+    let origin = to_vec3(placement.pos);
     // The model's Y is LDraw's; the mesh has already been flipped.
     let translate = Vec3::new(origin.x, -origin.y, origin.z);
 

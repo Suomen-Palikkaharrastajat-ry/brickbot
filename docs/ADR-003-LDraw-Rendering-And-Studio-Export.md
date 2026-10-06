@@ -43,7 +43,7 @@ Until the library is installed the feature still works — it renders every plac
 
 A BrickLink Studio `.io` file is a ZIP archive encrypted with the legacy PKWARE stream cipher and the fixed, publicly known password `soho0909`, containing `model.ldr`, `model2.ldr`, `.INFO` and `THUMBNAIL.PNG`.
 
-The `zip` crate can *read* ZipCrypto but cannot write it, so `src/build/export/` writes the container by hand: a 256-entry CRC-32 table, the three-word key schedule, and the handful of ZIP records needed. All entries are **stored** rather than deflated — an LDraw file for five hundred bricks is around 40 KB — which removes compression from the problem entirely.
+The `zip` crate can *read* ZipCrypto but cannot write it, so `crates/brick-model/src/export/` writes the container by hand: a 256-entry CRC-32 table, the three-word key schedule, and the handful of ZIP records needed. All entries are **stored** rather than deflated — an LDraw file for five hundred bricks is around 40 KB — which removes compression from the problem entirely.
 
 `crc32fast` is deliberately not used: the cipher needs the raw, non-inverted per-byte CRC update, which that crate's hasher does not expose. The same local table serves the archive's entry checksums.
 
@@ -54,7 +54,7 @@ Exports are byte-for-byte reproducible: timestamps are fixed and the encryption 
 ```
 model (LDraw coordinates, integers)
   │
-  ├─ src/build/export/ ──────────────► .ldr text ──► ZipCrypto ──► .io
+  ├─ crates/brick-model/src/export/ ──────────────► .ldr text ──► ZipCrypto ──► .io
   │
   └─ src/build/scene.rs
        │  box mode ─────────────────► triangles

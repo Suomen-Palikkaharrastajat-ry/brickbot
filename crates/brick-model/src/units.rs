@@ -136,12 +136,6 @@ impl IVec3 {
     pub const fn scale(self, factor: i32) -> Self {
         Self::new(self.x * factor, self.y * factor, self.z * factor)
     }
-
-    #[must_use]
-    pub const fn to_vec3(self) -> crate::math::Vec3 {
-        #[allow(clippy::cast_precision_loss)]
-        crate::math::Vec3::new(self.x as f32, self.y as f32, self.z as f32)
-    }
 }
 
 /// The measurement units the build language understands.

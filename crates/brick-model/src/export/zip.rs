@@ -133,7 +133,7 @@ pub fn write_encrypted_archive(entries: &[Entry], password: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::export::zipcrypto::STUDIO_PASSWORD;
+    use crate::export::zipcrypto::STUDIO_PASSWORD;
     use std::io::Read;
 
     fn sample() -> Vec<Entry> {

@@ -113,8 +113,8 @@ pub fn file_stem(model_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::model::{PartKind, PartRef, Placement, PlacementId};
-    use crate::build::units::{IVec3, Orientation};
+    use crate::model::{PartKind, PartRef, Placement, PlacementId};
+    use crate::units::{IVec3, Orientation};
     use std::io::Read;
 
     fn model_with(placements: Vec<Placement>) -> Model {

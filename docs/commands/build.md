@@ -168,7 +168,7 @@ Everything except the last item is pure and unit-tested, with no serenity, sqlx 
 - `src/build/draft.rs` — the private form's fields, the text they assemble into, and the preview. Pure: a preview is `process_message` against a clone of the history with `persist` skipped, so the preview and the eventual apply cannot disagree.
 - `src/build/{model,ops,units}.rs` — the model, the operation log, and LDraw units.
 - `src/build/{parts,queries,report,scene}.rs` — the part catalogue, questions, localized output, and the model-to-triangles step.
-- `src/build/export/` — LDraw text and the `.io` container.
+- `crates/brick-model/src/export/` — LDraw text and the `.io` container.
 - `crates/brick-render/src/{ldraw,render}/` — part geometry and the software rasterizer.
 - `src/build/dispatch.rs` — `process_message`, the single pure entry point the Discord layer calls.
 - `src/build/session/` — the only part that touches Discord: thread creation, persistence, the render loop and the part-choice dropdown.

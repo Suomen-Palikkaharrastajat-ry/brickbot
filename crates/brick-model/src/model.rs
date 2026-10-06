@@ -441,9 +441,9 @@ pub fn part_box(part: &PartRef, orientation: Orientation, pos: IVec3) -> (IVec3,
 ///
 /// That is the whole basis of legal stacking — a brick resting exactly on
 /// another shares a face and must not read as a collision — so
-/// [`super::legal`] settles against this same predicate rather than its own.
+/// `legal` settles against this same predicate rather than its own.
 #[must_use]
-pub(super) const fn boxes_overlap(a: (IVec3, IVec3), b: (IVec3, IVec3)) -> bool {
+pub const fn boxes_overlap(a: (IVec3, IVec3), b: (IVec3, IVec3)) -> bool {
     let (min_a, max_a) = a;
     let (min_b, max_b) = b;
     min_a.x < max_b.x
