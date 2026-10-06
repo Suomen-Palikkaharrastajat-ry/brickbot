@@ -94,7 +94,7 @@ pub const MAX_ENTRIES: usize = 200_000;
 
 /// Extracts an LDraw library archive into `data_dir`.
 ///
-/// Separate from [`sync`] so it can be tested against an in-memory archive
+/// Separate from `sync` (in the binary) so it can be tested against an in-memory archive
 /// without any network.
 pub fn extract_archive(archive: &[u8], data_dir: &Path) -> anyhow::Result<SyncReport> {
     let reader = std::io::Cursor::new(archive);

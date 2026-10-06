@@ -484,7 +484,7 @@ impl Parser<'_> {
 /// the same grammar rather than a second one that could drift from it.
 ///
 /// The caller must have split the line on its `=` first: `split_words` keeps
-/// `=` inside a word and [`Parser::axis_coords`] reads `x=12` as a coordinate,
+/// `=` inside a word and `Parser::axis_coords` reads `x=12` as a coordinate,
 /// so an unsplit legend line would parse as something else entirely.
 #[must_use]
 pub fn parse_part_spec(text: &str) -> PartSpec {

@@ -6,7 +6,7 @@
 //! grammar if the bot writes it for them — and it is the property the tests
 //! lean on hardest.
 //!
-//! A peer of [`super::scene`]: model to text, where that is model to triangles.
+//! A peer of `build::scene` (in the binary): model to text, where that is model to triangles.
 //! Pure, and needs neither the LDraw part library nor the rasterizer, so it
 //! still works when renders are falling back to plain boxes.
 

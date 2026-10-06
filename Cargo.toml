@@ -56,11 +56,7 @@ futures-util = "0.3.30"
 async-trait = "0.1.77"
 chrono-tz = "0.10.4"
 
-
-# Reads the LDraw library archive during `--fetch-ldraw`, and reads back our
-# own .io exports in tests. It can decrypt ZipCrypto but cannot write it, which
-# is why src/build/export hand-rolls the writer.
-zip = { version = "2", default-features = false, features = ["deflate"] }
-
 [dev-dependencies]
 mockall = "0.15.0"
+# Builds an in-memory LDraw archive for the `ldraw_sync` test.
+zip = { version = "2", default-features = false, features = ["deflate"] }

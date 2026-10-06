@@ -5,7 +5,7 @@
 //! a view, a legend, a grid and an optional location, sees a preview only they
 //! can see, and applies it when it looks right.
 //!
-//! Pure — no serenity, no sqlx. The Discord shell in [`super::session`] owns
+//! Pure — no serenity, no sqlx. The Discord shell in `build::session` in the binary owns
 //! the form and the buttons; everything here is text and interpretation.
 //!
 //! Two properties do the work:

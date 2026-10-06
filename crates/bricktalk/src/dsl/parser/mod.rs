@@ -3,7 +3,7 @@
 //! Context-free by design: the parser never looks at the model. That keeps it
 //! a pure function of a string, so the whole grammar can be table-tested, and
 //! it puts reference resolution — which genuinely does need the model — in one
-//! place, [`super::lower`].
+//! place, [`crate::lower`].
 //!
 //! The error policy matters as much as the grammar. A sentence that does not
 //! open with a verb or a question word never reaches the parser at all

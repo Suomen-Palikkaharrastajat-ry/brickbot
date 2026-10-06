@@ -3,7 +3,7 @@
 //! Mirrors the grammar sketch directly: a command is a verb, an object, an
 //! optional location and any number of modifiers. Nothing here is resolved
 //! against the model — `that`, `the wall` and `a red 2x4 brick` stay symbolic
-//! until [`super::lower`] turns them into operations.
+//! until [`crate::lower`] turns them into operations.
 
 #![allow(clippy::doc_markdown)]
 

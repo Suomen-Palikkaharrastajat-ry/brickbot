@@ -219,7 +219,7 @@ pub fn resolve(spec: &PartSpec) -> Resolution {
 /// Builds a `PartRef` from a Rebrickable lookup result.
 ///
 /// The LDraw id comes from Rebrickable's `external_ids`, which already
-/// deserialises in [`crate::brick::RebrickablePart`]; when it is absent we
+/// deserialises in `crate::brick::RebrickablePart` (in the binary); when it is absent we
 /// fall back to the Rebrickable number, which matches the LDraw design id for
 /// most System parts.
 #[must_use]

@@ -467,7 +467,7 @@ pub(super) fn read_draw_modal(interaction: &serenity::all::ModalInteraction) -> 
 }
 
 /// Who is drafting, and where — gathered so [`show_preview`] stays under
-/// clippy's argument-count lint, the same way [`MessageContext`] does for the
+/// clippy's argument-count lint, the same way `MessageContext` does for the
 /// debug log.
 pub(super) struct DraftContext<'a> {
     pub(super) draft_id: &'a str,
