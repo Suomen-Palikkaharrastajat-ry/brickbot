@@ -54,7 +54,7 @@ When the bot decides to interact, it delegates the message creation to `workflow
 - **`generate_suggestion_text`:** Creates a localized prompt based on the detected topic and the guild's configured locale.
 - **`generate_suggestion_components`:** Constructs Discord Message Components (Buttons). These buttons provide explicit user intent (e.g., "Show details", "Ignore") and avoid the pitfalls of emoji reactions mentioned in the ADR.
 
-## Database & State Management (`src/db.rs`)
+## Database & State Management (`src/db/`)
 
 The SQLite database backs the ambient state, tracking:
 - `ambient_logs`: Records detections for analytics and training.

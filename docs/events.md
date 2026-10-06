@@ -37,7 +37,7 @@ Discord Scheduled Events support cover images. When an event in PocketBase inclu
 
 ## Draft Storage and Resilience
 
-To ensure a resilient user experience during the `/events` wizard flow, the bot utilizes local draft storage (`src/db.rs`):
+To ensure a resilient user experience during the `/events` wizard flow, the bot utilizes local draft storage (`src/db/`):
 - When a user submits an event, the form data is immediately saved to the `inputs` table with a `draft` status.
 - If the downstream routing (e.g., to Zulip) fails, or if validation fails, the data is preserved.
 - Users can use the "Edit & Retry" interactive workflow to recover their draft, modify it, and resubmit without needing to re-type the entire event description.

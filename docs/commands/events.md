@@ -53,7 +53,7 @@ Due to Discord's Modal interaction framework lacking support for file attachment
 3. When the text modal is submitted, the bot retrieves the stored image URL and bundles it into the final Zulip proposal payload.
 
 ## Internal Implementation
-- Handled in `src/commands/events.rs`, `src/events_sync.rs`, and `src/workflows.rs`.
-- Background syncing is handled in `src/events_sync.rs` using the `serenity` `ScheduledEvent` API.
+- Handled in `src/commands/events.rs`, `src/events_sync/`, and `src/workflows/`.
+- Background syncing is handled in `src/events_sync/` using the `serenity` `ScheduledEvent` API.
 - The bot maps PocketBase UIDs to Discord Event IDs statelessly using marker tokens embedded in the Discord event description, ensuring it only modifies its own synced events. Manually created Discord events are fully respected.
 - Submissions and edits are inserted into the `inputs` table and forwarded to Zulip using `src/zulip`.

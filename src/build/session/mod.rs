@@ -106,11 +106,20 @@ mod proposals;
 mod render;
 mod thread;
 
-pub use buttons::*;
-pub use drafts::*;
-pub use proposals::*;
+use buttons::offer_part_choices;
+pub use buttons::{handle_build_button, handle_part_choice};
+use drafts::{
+    DraftContext, Respondable, StoredDraft, create_draft, finish_draft, open_draft, save_draft,
+    show_preview,
+};
+pub use drafts::{
+    handle_draft_button, handle_draw_button, handle_draw_modal, handle_insert,
+    handle_legend_command,
+};
+use proposals::{ProposalContext, offer_draft_positions, offer_proposals, place_draft};
+pub use proposals::{handle_proposal_button, handle_propose_location_modal};
 use render::{cancel_pending_render, post_export, post_render, render_model, schedule_render};
-pub use thread::*;
+pub use thread::{handle_build_command, handle_thread_message};
 
 /// Writes an outcome's operations and cursor movement to the database.
 ///

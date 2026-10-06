@@ -1,3 +1,4 @@
+use super::proposals::{PROPOSAL_HIGHLIGHT, PROPOSAL_TINT, candidate_soup};
 use super::render::render_state;
 use super::*;
 

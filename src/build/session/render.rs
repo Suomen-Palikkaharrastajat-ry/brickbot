@@ -13,7 +13,7 @@ pub(super) struct RenderState {
     pub(super) pending: Option<tokio::task::JoinHandle<()>>,
 }
 
-pub(super) static RENDER_STATE: std::sync::OnceLock<
+static RENDER_STATE: std::sync::OnceLock<
     moka::future::Cache<String, Arc<tokio::sync::Mutex<RenderState>>>,
 > = std::sync::OnceLock::new();
 
