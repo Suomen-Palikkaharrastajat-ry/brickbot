@@ -115,7 +115,7 @@ applies.
      only place that calls `rust_i18n::t!` for session output, so the whole vocabulary lives in
      `command.build.*` in both locale bundles.
    - Parse failures and unsupported commands are localized down to the fragment: `Expectation`
-     (`src/build/dsl/parser.rs`) and `Unsupported` (`src/build/lower.rs`) are closed sets whose
+     (`src/build/dsl/parser/`) and `Unsupported` (`src/build/lower.rs`) are closed sets whose
      phrasing lives under `command.build.expected.*` and `command.build.unsupported.*` rather than
      as English literals in the code.
    - **The language itself is not translated.** BrickTalk verbs stay English in every locale, so
@@ -160,7 +160,7 @@ Install it once with `make fetch-ldraw`. See [ADR-003](../ADR-003-LDraw-Renderin
 ## Internal Implementation
 Everything except the last item is pure and unit-tested, with no serenity, sqlx or reqwest types crossing into it:
 
-- `src/build/dsl/` — the language: `block.rs` (lifting fenced drawings out before anything else reads them), `lexer.rs` (tokens, multi-word colours, Discord noise stripping), `ast.rs`, `parser.rs` (the grammar and the silence policy).
+- `src/build/dsl/` — the language: `block.rs` (lifting fenced drawings out before anything else reads them), `lexer.rs` (tokens, multi-word colours, Discord noise stripping), `ast.rs`, `parser/` (the grammar and the silence policy).
 - `src/build/lower.rs` — resolves references and locations against the model and emits operations.
 - `src/build/expand.rs` — expands high-level structures into ordinary placements.
 - `src/build/grid.rs` — gathers a drawing's cells into whole parts and places them.
@@ -171,7 +171,7 @@ Everything except the last item is pure and unit-tested, with no serenity, sqlx 
 - `src/build/export/` — LDraw text and the `.io` container.
 - `src/ldraw/` and `src/render/` — part geometry and the software rasterizer.
 - `src/build/dispatch.rs` — `process_message`, the single pure entry point the Discord layer calls.
-- `src/build/session.rs` — the only part that touches Discord: thread creation, persistence, the render loop and the part-choice dropdown.
+- `src/build/session/` — the only part that touches Discord: thread creation, persistence, the render loop and the part-choice dropdown.
 - `src/build/debug_log.rs` — the optional `--build-debug-log` trace described below.
 
 Storage is `build_sessions` and `build_revisions` (`migrations/0002_build_sessions.sql`, `migrations/0003_build_session_state.sql`), accessed through `src/db/build.rs`. Only the operation log is stored; the model is a fold over it. Where undo and redo have left the session is session state (`build_sessions.cursor`), separate from the per-revision `skipped` flag that `Undo alice's last edit.` sets — conflating the two makes redo impossible to express.
