@@ -111,11 +111,11 @@ applies.
 
 11. **Localization**:
    - Everything the bot *says* follows the guild's `locale`: the command name and argument, the
-     intro embed, the buttons, every confirmation, answer and error. `src/build/report.rs` is the
+     intro embed, the buttons, every confirmation, answer and error. `crates/bricktalk/src/report.rs` is the
      only place that calls `rust_i18n::t!` for session output, so the whole vocabulary lives in
      `command.build.*` in both locale bundles.
    - Parse failures and unsupported commands are localized down to the fragment: `Expectation`
-     (`src/build/dsl/parser/`) and `Unsupported` (`src/build/lower.rs`) are closed sets whose
+     (`crates/bricktalk/src/dsl/parser/`) and `Unsupported` (`crates/bricktalk/src/lower.rs`) are closed sets whose
      phrasing lives under `command.build.expected.*` and `command.build.unsupported.*` rather than
      as English literals in the code.
    - **The language itself is not translated.** BrickTalk verbs stay English in every locale, so
@@ -160,17 +160,17 @@ Install it once with `make fetch-ldraw`. See [ADR-003](../ADR-003-LDraw-Renderin
 ## Internal Implementation
 Everything except the last item is pure and unit-tested, with no serenity, sqlx or reqwest types crossing into it:
 
-- `src/build/dsl/` — the language: `block.rs` (lifting fenced drawings out before anything else reads them), `lexer.rs` (tokens, multi-word colours, Discord noise stripping), `ast.rs`, `parser/` (the grammar and the silence policy).
-- `src/build/lower.rs` — resolves references and locations against the model and emits operations.
-- `src/build/expand.rs` — expands high-level structures into ordinary placements.
-- `src/build/grid.rs` — gathers a drawing's cells into whole parts and places them.
-- `src/build/textview.rs` — draws the model back as a grid, in the syntax a drawing is typed in.
-- `src/build/draft.rs` — the private form's fields, the text they assemble into, and the preview. Pure: a preview is `process_message` against a clone of the history with `persist` skipped, so the preview and the eventual apply cannot disagree.
+- `crates/bricktalk/src/dsl/` — the language: `block.rs` (lifting fenced drawings out before anything else reads them), `lexer.rs` (tokens, multi-word colours, Discord noise stripping), `ast.rs`, `parser/` (the grammar and the silence policy).
+- `crates/bricktalk/src/lower.rs` — resolves references and locations against the model and emits operations.
+- `crates/bricktalk/src/expand.rs` — expands high-level structures into ordinary placements.
+- `crates/bricktalk/src/grid.rs` — gathers a drawing's cells into whole parts and places them.
+- `crates/bricktalk/src/textview.rs` — draws the model back as a grid, in the syntax a drawing is typed in.
+- `crates/bricktalk/src/draft.rs` — the private form's fields, the text they assemble into, and the preview. Pure: a preview is `process_message` against a clone of the history with `persist` skipped, so the preview and the eventual apply cannot disagree.
 - `src/build/{model,ops,units}.rs` — the model, the operation log, and LDraw units.
 - `src/build/{parts,queries,report,scene}.rs` — the part catalogue, questions, localized output, and the model-to-triangles step.
 - `crates/brick-model/src/export/` — LDraw text and the `.io` container.
 - `crates/brick-render/src/{ldraw,render}/` — part geometry and the software rasterizer.
-- `src/build/dispatch.rs` — `process_message`, the single pure entry point the Discord layer calls.
+- `crates/bricktalk/src/dispatch.rs` — `process_message`, the single pure entry point the Discord layer calls.
 - `src/build/session/` — the only part that touches Discord: thread creation, persistence, the render loop and the part-choice dropdown.
 - `src/build/debug_log.rs` — the optional `--build-debug-log` trace described below.
 
@@ -194,7 +194,7 @@ Each line:
 - `ok` — applied, at least in part.
 - `problem` — stopped on a parse or lowering error; `replies` carries what was reported.
 
-`problem` and `ignored` lines are the ones worth reviewing when deciding what to extend in `src/build/dsl/`.
+`problem` and `ignored` lines are the ones worth reviewing when deciding what to extend in `crates/bricktalk/src/dsl/`.
 
 ## Appendix: The BrickTalk language
 
@@ -306,7 +306,7 @@ asked can act on it.
 ### Legal connections
 
 Every command is corrected before it is carried out, so the model can only ever contain parts that
-would really go together. Three rules, all in `src/build/legal.rs`:
+would really go together. Three rules, all in `crates/bricktalk/src/legal.rs`:
 
 - **On the grid.** A part's edges land on whole studs (20 LDU) and its base on a whole plate (8 LDU).
   `Add a brick at 3 5 7.` is a brick at the origin; `Move it east 2 plates.` moves it a stud, because

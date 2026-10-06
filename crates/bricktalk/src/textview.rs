@@ -314,8 +314,8 @@ pub fn fit(view: &mut TextView, budget: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::model::{PartKind, PartRef, PlacementId};
-    use crate::build::units::Orientation;
+    use crate::model::{PartKind, PartRef, PlacementId};
+    use crate::units::Orientation;
 
     fn brick_1x1() -> PartRef {
         PartRef::new("3005", "Brick 1 x 1", (1, 1), PartKind::Brick)

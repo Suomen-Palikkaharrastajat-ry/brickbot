@@ -6,22 +6,13 @@
 //! types crossing into it.
 
 pub mod debug_log;
-pub mod dispatch;
-pub mod draft;
-pub mod dsl;
-pub mod expand;
-pub mod grid;
-pub mod legal;
-pub mod lower;
-pub mod parts;
-pub mod propose;
-pub mod queries;
-pub mod report;
 pub mod scene;
 pub mod session;
-pub mod textview;
 
 pub use brick_model::{export, model, ops, units};
+pub use bricktalk::{
+    dispatch, draft, dsl, expand, grid, legal, lower, parts, propose, queries, report, textview,
+};
 pub use lower::{LowerError, lower_command};
 pub use model::{Model, PartKind, PartRef, Placement, PlacementId};
 pub use ops::{History, Op, SelectPredicate};

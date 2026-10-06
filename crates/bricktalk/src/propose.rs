@@ -365,8 +365,8 @@ fn member(part: &PartRef, color: u16, pos: IVec3) -> Placed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::model::PartKind;
-    use crate::build::ops::{Op, apply};
+    use crate::model::PartKind;
+    use crate::ops::{Op, apply};
 
     fn brick_2x4() -> PartRef {
         PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick)
@@ -414,7 +414,7 @@ mod tests {
             let mine = legal::placed_box(placed);
             for existing in &model.placements {
                 assert!(
-                    !crate::build::model::boxes_overlap(mine, existing.occupied_box()),
+                    !crate::model::boxes_overlap(mine, existing.occupied_box()),
                     "{:?} is inside an existing part",
                     placed.pos
                 );
@@ -544,7 +544,7 @@ mod tests {
                 matches!(
                     c.origin,
                     Origin::Beside {
-                        direction: crate::build::units::Direction::East
+                        direction: crate::units::Direction::East
                     }
                 )
             })

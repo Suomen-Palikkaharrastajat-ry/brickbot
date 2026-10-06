@@ -370,11 +370,11 @@ pub const fn default_extent_unit(axis: ExtentAxis) -> Unit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::dsl::Statement;
-    use crate::build::dsl::lexer::tokenize_sentence;
-    use crate::build::dsl::parser::{SentenceOutcome, parse_sentence};
-    use crate::build::lower::lower_command;
-    use crate::build::ops::apply;
+    use crate::dsl::Statement;
+    use crate::dsl::lexer::tokenize_sentence;
+    use crate::dsl::parser::{SentenceOutcome, parse_sentence};
+    use crate::lower::lower_command;
+    use crate::ops::apply;
 
     fn command_of(text: &str) -> Command {
         match parse_sentence(&tokenize_sentence(text)) {
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn a_structure_is_a_single_undo_step() {
-        let mut history = crate::build::ops::History::new("t");
+        let mut history = crate::ops::History::new("t");
         let command = command_of("Build a wall 8 studs long 3 bricks high");
         for op in lower_command(&history.materialize(), &command).unwrap() {
             history.push(op, "alice");
@@ -498,7 +498,7 @@ mod tests {
             model
                 .placements
                 .iter()
-                .all(|p| p.part.kind == crate::build::model::PartKind::Plate)
+                .all(|p| p.part.kind == crate::model::PartKind::Plate)
         );
         assert!(model.collisions().is_empty());
 
@@ -686,8 +686,7 @@ mod tests {
 
     #[test]
     fn studs_convert_to_part_counts_by_rounding_up() {
-        let brick =
-            crate::build::parts::lookup(crate::build::model::PartKind::Brick, 2, 4).unwrap();
+        let brick = crate::parts::lookup(crate::model::PartKind::Brick, 2, 4).unwrap();
         // A 2-wide brick spans 2 studs, so 8 studs needs 4 of them.
         assert_eq!(studs_to_count(8, &brick, Direction::East), 4);
         // 7 studs still needs 4, rounded up.

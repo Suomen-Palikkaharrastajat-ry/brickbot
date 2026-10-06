@@ -621,10 +621,10 @@ pub fn structure_group(structure: &Structure) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::dsl::Statement;
-    use crate::build::dsl::lexer::tokenize_sentence;
-    use crate::build::dsl::parser::{SentenceOutcome, parse_sentence};
-    use crate::build::ops::apply;
+    use crate::dsl::Statement;
+    use crate::dsl::lexer::tokenize_sentence;
+    use crate::dsl::parser::{SentenceOutcome, parse_sentence};
+    use crate::ops::apply;
 
     fn command_of(text: &str) -> Command {
         match parse_sentence(&tokenize_sentence(text)) {

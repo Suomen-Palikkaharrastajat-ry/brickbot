@@ -249,6 +249,7 @@ dependencies = [
  "atom_syndication",
  "brick-model",
  "brick-render",
+ "bricktalk",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -275,6 +276,15 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "bricktalk"
+version = "0.1.0"
+dependencies = [
+ "brick-model",
+ "brick-render",
+ "rust-i18n",
 ]
 
 [[package]]

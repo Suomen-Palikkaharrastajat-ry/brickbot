@@ -8,8 +8,8 @@
 #![allow(clippy::doc_markdown)]
 
 use super::lexer::{HelpTopic, Verb};
-use crate::build::model::PartKind;
-use crate::build::units::{Direction, GridView, IVec3, Unit};
+use crate::model::PartKind;
+use crate::units::{Direction, GridView, IVec3, Unit};
 
 /// A part as described in a sentence, before it has been resolved to a real
 /// element.

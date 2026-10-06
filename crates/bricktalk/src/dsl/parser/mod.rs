@@ -19,8 +19,8 @@ use super::ast::{
 };
 use super::block::{self, CodeBlock};
 use super::lexer::{HelpTopic, Keyword, Sentence, Token, Verb};
-use crate::build::model::PartKind;
-use crate::build::units::{Direction, GridView, IVec3, Unit};
+use crate::model::PartKind;
+use crate::units::{Direction, GridView, IVec3, Unit};
 
 mod command;
 mod phrases;

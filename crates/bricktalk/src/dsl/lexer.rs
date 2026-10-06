@@ -13,9 +13,9 @@
 #![allow(clippy::doc_markdown)]
 
 use super::block::{self, CodeBlock, Segment};
-use crate::build::model::PartKind;
-use crate::build::units::{Direction, Unit};
 use crate::ldraw::colors;
+use crate::model::PartKind;
+use crate::units::{Direction, Unit};
 
 /// A verb the build language recognises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

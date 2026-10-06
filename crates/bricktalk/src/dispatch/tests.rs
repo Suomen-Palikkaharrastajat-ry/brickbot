@@ -23,10 +23,10 @@ fn interpret(history: &History, text: &str, locale: &str) -> Outcome {
 
 fn add_brick(color: u16) -> Op {
     Op::Add {
-        part: crate::build::PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick),
+        part: crate::PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick),
         color,
-        pos: crate::build::IVec3::ZERO,
-        orientation: crate::build::Orientation::DEFAULT,
+        pos: crate::IVec3::ZERO,
+        orientation: crate::Orientation::DEFAULT,
         repeat: None,
         group: None,
     }
@@ -55,7 +55,7 @@ fn a_multi_sentence_message_matches_the_same_sentences_sent_separately() {
     let batched = run(&["Add a red 2x4 brick at origin. Add a blue 2x4 brick."]).materialize();
     let separate = run(&["Add a red 2x4 brick at origin.", "Add a blue 2x4 brick."]).materialize();
 
-    let colors = |m: &crate::build::Model| m.placements.iter().map(|p| p.color).collect::<Vec<_>>();
+    let colors = |m: &crate::Model| m.placements.iter().map(|p| p.color).collect::<Vec<_>>();
     assert_eq!(colors(&batched), colors(&separate));
     assert_eq!(batched.len(), 2);
 }
@@ -109,7 +109,7 @@ fn an_undo_between_two_commands_in_one_message_is_persisted_correctly() {
     ])
     .materialize();
 
-    let colors = |m: &crate::build::Model| m.placements.iter().map(|p| p.color).collect::<Vec<_>>();
+    let colors = |m: &crate::Model| m.placements.iter().map(|p| p.color).collect::<Vec<_>>();
     assert_eq!(colors(&batched), colors(&separate));
 }
 
@@ -249,8 +249,8 @@ fn a_lookup_pauses_the_rest_of_the_message() {
 
 // --- Part disambiguation ----------------------------------------------
 
-fn chosen_part() -> crate::build::PartRef {
-    crate::build::PartRef::new("3009", "Brick 1 x 6", (1, 6), PartKind::Brick)
+fn chosen_part() -> crate::PartRef {
+    crate::PartRef::new("3009", "Brick 1 x 6", (1, 6), PartKind::Brick)
 }
 
 #[test]
@@ -797,11 +797,11 @@ fn a_proposal_offers_only_legal_places_to_put_it() {
     let pending = interpret(&history, "2x2 brick", "en-US")
         .pending_proposal
         .expect("should ask");
-    let candidates = crate::build::propose::propose_any(&model, &pending.batches, 4);
+    let candidates = crate::propose::propose_any(&model, &pending.batches, 4);
     assert!(!candidates.is_empty());
     for candidate in candidates {
         for placed in &candidate.placements {
-            assert!(crate::build::legal::is_on_lattice(
+            assert!(crate::legal::is_on_lattice(
                 placed.pos,
                 &placed.part,
                 placed.orientation
@@ -819,11 +819,11 @@ fn a_proposal_offers_only_legal_places_to_put_it() {
 /// build, and the documented example session has one — its 6-stud wall
 /// runs off the edge of the 6x6 plate underneath it. What must never
 /// happen is a part off the grid, inside another, or below the ground.
-fn assert_legal(model: &crate::build::Model) {
+fn assert_legal(model: &crate::Model) {
     assert!(model.collisions().is_empty(), "parts overlap");
     for p in &model.placements {
         assert!(
-            crate::build::legal::is_on_lattice(p.pos, &p.part, p.orientation),
+            crate::legal::is_on_lattice(p.pos, &p.part, p.orientation),
             "{} is off the stud grid at {:?}",
             p.part.name,
             p.pos
@@ -842,7 +842,7 @@ fn an_off_grid_coordinate_is_nudged_onto_the_stud_grid() {
     // Bare coordinates used to be taken completely literally, so a typo
     // put down a brick that connected to nothing at all.
     let model = run(&["Add a red 2x4 brick at 3 5 7."]).materialize();
-    assert_eq!(model.placements[0].pos, crate::build::IVec3::ZERO);
+    assert_eq!(model.placements[0].pos, crate::IVec3::ZERO);
     assert_legal(&model);
 }
 
@@ -863,7 +863,7 @@ fn a_second_brick_in_the_same_place_is_stacked_rather_than_buried() {
     ])
     .materialize();
     assert_eq!(model.len(), 2);
-    assert_eq!(model.placements[1].pos, crate::build::IVec3::new(0, -24, 0));
+    assert_eq!(model.placements[1].pos, crate::IVec3::new(0, -24, 0));
     assert_legal(&model);
 }
 
@@ -878,7 +878,7 @@ fn a_brick_added_in_mid_air_comes_down_to_rest() {
 fn a_part_of_unknown_size_obeys_the_grid_like_any_other() {
     // A part whose name carries no size used to drop out of every check,
     // so it could sit anywhere at all and overlap anything.
-    let chosen = crate::build::PartRef::new("99999", "Mystery Thing", (0, 0), PartKind::Other);
+    let chosen = crate::PartRef::new("99999", "Mystery Thing", (0, 0), PartKind::Other);
     let history = empty();
     let paused = interpret(&history, "Add a red 3x12 brick at 3 5 7.", "en-US");
     let pending = paused.pending_lookup.expect("expected a pending lookup");
@@ -908,7 +908,7 @@ fn the_operation_written_to_the_history_is_the_corrected_one() {
     // reload would replay the illegal position straight back in.
     let outcome = interpret(&empty(), "Add a red 2x4 brick at 3 5 7.", "en-US");
     match outcome.ops.first().expect("an operation") {
-        Op::Add { pos, .. } => assert_eq!(*pos, crate::build::IVec3::ZERO),
+        Op::Add { pos, .. } => assert_eq!(*pos, crate::IVec3::ZERO),
         other => panic!("not an add: {other:?}"),
     }
 }
@@ -950,17 +950,17 @@ fn replaying_a_history_never_moves_anything() {
     let mut history = empty();
     history.push(
         Op::Add {
-            part: crate::build::PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick),
+            part: crate::PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick),
             color: 4,
-            pos: crate::build::IVec3::new(3, 5, 7),
-            orientation: crate::build::Orientation::DEFAULT,
+            pos: crate::IVec3::new(3, 5, 7),
+            orientation: crate::Orientation::DEFAULT,
             repeat: None,
             group: None,
         },
         "111",
     );
     let model = history.materialize();
-    assert_eq!(model.placements[0].pos, crate::build::IVec3::new(3, 5, 7));
+    assert_eq!(model.placements[0].pos, crate::IVec3::new(3, 5, 7));
 }
 
 #[test]
@@ -1098,7 +1098,7 @@ fn a_drawing_needing_one_part_lookup_pauses_with_its_block_intact() {
     assert!(pending.sentence.contains("qqqqqqq"));
 
     // And the replay, with a part chosen, finishes the drawing.
-    let chosen = crate::build::PartRef::new("3008", "Brick 1 x 7", (1, 7), PartKind::Brick);
+    let chosen = crate::PartRef::new("3008", "Brick 1 x 7", (1, 7), PartKind::Brick);
     let resumed = process_message_with_part(
         &empty(),
         &pending.sentence,
@@ -1133,9 +1133,9 @@ fn a_drawing_survives_a_round_trip_through_the_view() {
     let history = run(&[DRAWING]);
     let model = history.materialize();
 
-    let drawn = crate::build::textview::render(&model, crate::build::units::GridView::Top, None)
+    let drawn = crate::textview::render(&model, crate::units::GridView::Top, None)
         .expect("a model should draw");
-    let block = crate::build::textview::to_block(&drawn);
+    let block = crate::textview::to_block(&drawn);
 
     let rebuilt = run(&[&block]);
     assert_eq!(
@@ -1144,7 +1144,7 @@ fn a_drawing_survives_a_round_trip_through_the_view() {
         "round trip changed the part count\n{block}"
     );
     // Same parts, same colours, same places.
-    let describe = |m: &crate::build::Model| {
+    let describe = |m: &crate::Model| {
         let mut rows: Vec<_> = m
             .placements
             .iter()

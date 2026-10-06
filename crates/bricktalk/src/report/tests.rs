@@ -1,8 +1,8 @@
 use super::*;
-use crate::build::dsl::lexer::Verb;
-use crate::build::dsl::parser::Expectation;
-use crate::build::model::{PartKind, PartRef, PlacementId};
-use crate::build::units::IVec3;
+use crate::dsl::lexer::Verb;
+use crate::dsl::parser::Expectation;
+use crate::model::{PartKind, PartRef, PlacementId};
+use crate::units::IVec3;
 
 fn effect_adding(count: usize) -> Effect {
     Effect {
@@ -19,7 +19,7 @@ fn add_op() -> Op {
         part: PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick),
         color: 4,
         pos: IVec3::ZERO,
-        orientation: crate::build::Orientation::DEFAULT,
+        orientation: crate::Orientation::DEFAULT,
         repeat: None,
         group: None,
     }
@@ -80,7 +80,7 @@ fn every_operation_has_a_description_in_both_locales() {
             part: PartRef::new("3003", "Brick 2 x 2", (2, 2), PartKind::Brick),
         },
         Op::Select {
-            predicate: crate::build::SelectPredicate::default(),
+            predicate: crate::SelectPredicate::default(),
         },
         Op::Group {
             name: "wall".to_string(),

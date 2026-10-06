@@ -1,0 +1,9 @@
+[package]
+name = "bricktalk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+brick-model = { path = "../brick-model" }
+brick-render = { path = "../brick-render" }
+rust-i18n = "3"

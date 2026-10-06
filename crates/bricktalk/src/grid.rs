@@ -363,7 +363,7 @@ pub fn expand(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::model::PartKind;
+    use crate::model::PartKind;
 
     fn part(name: &str, w: u8, d: u8, kind: PartKind) -> PartRef {
         PartRef::new(name, name, (w, d), kind)

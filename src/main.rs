@@ -7,7 +7,6 @@ pub mod build;
 mod commands;
 pub mod config;
 pub mod db;
-pub mod discord_limits;
 pub mod events_sync;
 pub mod http;
 mod i18n;
@@ -22,6 +21,7 @@ mod workflows;
 mod zulip;
 
 pub use brick_render::{ldraw, math, render};
+pub use bricktalk::discord_limits;
 
 use clap::Parser;
 use config::Config;

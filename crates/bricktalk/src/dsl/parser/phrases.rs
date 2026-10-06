@@ -488,7 +488,7 @@ impl Parser<'_> {
 /// so an unsplit legend line would parse as something else entirely.
 #[must_use]
 pub fn parse_part_spec(text: &str) -> PartSpec {
-    let sentence = crate::build::dsl::lexer::tokenize_sentence(text);
+    let sentence = crate::dsl::lexer::tokenize_sentence(text);
     let mut parser = Parser::new(&sentence);
     parser.part_spec()
 }

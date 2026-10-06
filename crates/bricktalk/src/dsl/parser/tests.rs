@@ -1,5 +1,5 @@
 use super::*;
-use crate::build::dsl::lexer::tokenize_sentence;
+use crate::dsl::lexer::tokenize_sentence;
 
 fn parse(text: &str) -> SentenceOutcome {
     parse_sentence(&tokenize_sentence(text))

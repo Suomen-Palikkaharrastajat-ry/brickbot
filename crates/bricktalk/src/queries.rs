@@ -173,10 +173,10 @@ pub const fn is_empty_answer(answer: &QueryAnswer) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::dsl::ast::{PartSpec, Ref};
-    use crate::build::model::{PartKind, Placement};
-    use crate::build::ops::{Op, apply};
-    use crate::build::units::Orientation;
+    use crate::dsl::ast::{PartSpec, Ref};
+    use crate::model::{PartKind, Placement};
+    use crate::ops::{Op, apply};
+    use crate::units::Orientation;
 
     fn brick() -> PartRef {
         PartRef::new("3001", "Brick 2 x 4", (2, 4), PartKind::Brick)
@@ -423,7 +423,7 @@ mod tests {
                 part: brick(),
             },
             Op::Select {
-                predicate: crate::build::SelectPredicate::default(),
+                predicate: crate::SelectPredicate::default(),
             },
             Op::Group {
                 name: "roof".to_string(),

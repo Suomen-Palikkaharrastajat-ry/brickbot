@@ -206,7 +206,7 @@ pub fn preview(
     locale: &str,
     builders: &Builders,
     author: &str,
-    max_size: crate::build::units::MaxModelSize,
+    max_size: crate::units::MaxModelSize,
 ) -> Preview {
     let text = assemble(fields);
     let outcome = dispatch::process_message(history, &text, locale, builders, author, max_size);
@@ -241,8 +241,8 @@ pub const fn is_stale(preview: &Preview, current: &History) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::textview;
-    use crate::build::units::GridView;
+    use crate::textview;
+    use crate::units::GridView;
 
     fn fields() -> DraftFields {
         DraftFields {
@@ -257,8 +257,7 @@ mod tests {
         Builders::new([("Alice".to_string(), "111".to_string())])
     }
 
-    const MAX_MODEL_SIZE: crate::build::units::MaxModelSize =
-        crate::build::units::MaxModelSize::cube(10);
+    const MAX_MODEL_SIZE: crate::units::MaxModelSize = crate::units::MaxModelSize::cube(10);
 
     fn empty() -> History {
         History::new("Castle")
@@ -415,7 +414,7 @@ mod tests {
             MAX_MODEL_SIZE,
         );
 
-        let describe = |model: &crate::build::Model| {
+        let describe = |model: &crate::Model| {
             let mut rows: Vec<_> = model
                 .placements
                 .iter()

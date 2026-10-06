@@ -85,12 +85,7 @@ pub fn describe_adjustment(adjustment: &Adjustment, locale: &str) -> Option<Stri
 
 /// Names what is about to be placed, the way the builder said it.
 #[must_use]
-pub fn describe_part(
-    part: &crate::build::PartRef,
-    color: u16,
-    quantity: u32,
-    locale: &str,
-) -> String {
+pub fn describe_part(part: &crate::PartRef, color: u16, quantity: u32, locale: &str) -> String {
     let named = colors::name_of(color).map_or_else(
         || t!("common.unknown_colour", locale = locale).to_string(),
         str::to_string,
@@ -118,7 +113,7 @@ pub fn describe_drawing(parts: usize, locale: &str) -> String {
 
 /// Describes one proposed position, so the picture has a caption.
 #[must_use]
-pub fn describe_proposal(origin: crate::build::propose::Origin, locale: &str) -> String {
+pub fn describe_proposal(origin: crate::propose::Origin, locale: &str) -> String {
     origin.direction().map_or_else(
         || t!(origin.key(), locale = locale).to_string(),
         |direction| {
@@ -164,8 +159,8 @@ pub fn describe_error(error: &LowerError, locale: &str) -> String {
         // it does: `1x7 brick` is not an element, and naming 1x6 and 1x8 is
         // more use than sending the builder to a search that cannot succeed.
         LowerError::NeedsPartLookup { query, kind } => {
-            let alternatives = crate::build::parts::footprint_from_name(query)
-                .map(|(w, d)| crate::build::parts::suggest(*kind, w, d, 2))
+            let alternatives = crate::parts::footprint_from_name(query)
+                .map(|(w, d)| crate::parts::suggest(*kind, w, d, 2))
                 .unwrap_or_default();
             if alternatives.is_empty() {
                 t!(
@@ -207,9 +202,9 @@ pub fn describe_error(error: &LowerError, locale: &str) -> String {
 /// one Discord message, because a preview that fails to post is worse than a
 /// shortened one.
 #[must_use]
-pub fn draft_preview(preview: &crate::build::draft::Preview, locale: &str) -> String {
-    use crate::build::textview;
+pub fn draft_preview(preview: &crate::draft::Preview, locale: &str) -> String {
     use crate::discord_limits::MAX_MESSAGE_CONTENT;
+    use crate::textview;
 
     let mut out = if preview.failed() {
         t!("command.build.draft_problem", locale = locale).to_string()
@@ -246,7 +241,7 @@ pub fn draft_preview(preview: &crate::build::draft::Preview, locale: &str) -> St
 ///
 /// A suggestion has to be something that can be pasted straight back into a
 /// sentence or a legend, so it reads `1x6 brick` rather than `Brick 1 x 6`.
-fn join_parts(parts: &[crate::build::PartRef]) -> String {
+fn join_parts(parts: &[crate::PartRef]) -> String {
     parts
         .iter()
         .map(|part| {
@@ -441,11 +436,11 @@ pub fn describe_answer(answer: &QueryAnswer, model: &Model, locale: &str) -> Str
 ///
 /// The only place that knows both how long the wrapper is and how much room
 /// Discord leaves, which is why the size guard lives here rather than in
-/// [`crate::build::textview`]. Layers go whole: half a layer is not something
+/// [`crate::textview`]. Layers go whole: half a layer is not something
 /// anyone can paste back.
-fn describe_view(drawing: &crate::build::textview::TextView, locale: &str) -> String {
-    use crate::build::textview;
+fn describe_view(drawing: &crate::textview::TextView, locale: &str) -> String {
     use crate::discord_limits::MAX_MESSAGE_CONTENT;
+    use crate::textview;
 
     let view = drawing.view.as_str();
     let wrapper = t!(
