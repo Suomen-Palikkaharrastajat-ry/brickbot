@@ -39,6 +39,7 @@ The project has been structured to handle multiple asynchronous background tasks
 - `src/commands/`: "One command per module" directory containing `set.rs`, `part.rs`, `events.rs`, `locations.rs`, and `build.rs`. **Agents MUST keep the corresponding documentation files in `docs/interactions/*.md` and `docs/commands/*.md` up-to-date when altering command logic or adding new commands.**
 - `src/workflows/`: Multi-step wizard logic backing the interactive commands (`events/`, `locations/`, `search.rs`, `ambient.rs`). `WizardInteraction` in `src/workflows/mod.rs` is shared by every wizard.
 - `src/zulip/moderation.rs`: `ModerationKind` resolves everything that differs between the events and locations moderation flows (target collection, localization keys, public URL) from the Zulip topic prefix, keeping `process_zulip_message` single-pathed.
+- `crates/brick-render/`: Workspace library crate with the pure geometry and rendering code (`math`, `ldraw`, `render`) — no Discord, database or config. The binary re-exports it (`pub use brick_render::{ldraw, math, render}` in `main.rs`), so `crate::ldraw` etc. still resolve. The `--fetch-ldraw` download (`sync`) stays in `src/ldraw_sync.rs` because it needs the bot's config and HTTP client. `cargo test`/`clippy` cover every crate via `default-members`.
 - `src/rss.rs`: Polling logic and parsing for feeds.
 - `flake.nix` & `devenv.nix`: Nix environment files configuring the `devShell`.
 - `default.nix`: Nix build configuration decoupled from `flake.nix` to prevent "dirty tree" rebuilds.
@@ -79,7 +80,7 @@ Collaborative LEGO building in a Discord thread, driven by a hand-written recurs
 
 **Collaborative state**: sessions are keyed by thread channel id, not by owner, in `build_sessions`/`build_revisions` (`src/db/build.rs`) — every guild member edits the same model. Each accepted command becomes a revision in the append-only log; the read-interpret-write cycle is guarded by a per-session lock and committed in one transaction. `Undo alice's last edit.` resolves chat names to Discord user ids via `dispatch::Builders` (exact name → user id → unambiguous prefix).
 
-**Rendering**: bursts of commands debounce into one render (`render_debounce_ms`, leading+trailing edge) via `src/ldraw/` (part geometry) and `src/render/` (software rasterizer) to PNG. Falls back to plain boxes, with a one-time notice, if the LDraw part library isn't installed (`make fetch-ldraw`; see [ADR-003](docs/ADR-003-LDraw-Rendering-And-Studio-Export.md)).
+**Rendering**: bursts of commands debounce into one render (`render_debounce_ms`, leading+trailing edge) via `crates/brick-render/src/ldraw/` (part geometry) and `crates/brick-render/src/render/` (software rasterizer) to PNG. Falls back to plain boxes, with a one-time notice, if the LDraw part library isn't installed (`make fetch-ldraw`; see [ADR-003](docs/ADR-003-LDraw-Rendering-And-Studio-Export.md)).
 
 **Export**: the `[Export .io]` button or `Export.` sentence produces a BrickLink Studio `.io` file via `src/build/export/`, containing part references only, never geometry.
 

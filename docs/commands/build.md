@@ -169,7 +169,7 @@ Everything except the last item is pure and unit-tested, with no serenity, sqlx 
 - `src/build/{model,ops,units}.rs` — the model, the operation log, and LDraw units.
 - `src/build/{parts,queries,report,scene}.rs` — the part catalogue, questions, localized output, and the model-to-triangles step.
 - `src/build/export/` — LDraw text and the `.io` container.
-- `src/ldraw/` and `src/render/` — part geometry and the software rasterizer.
+- `crates/brick-render/src/{ldraw,render}/` — part geometry and the software rasterizer.
 - `src/build/dispatch.rs` — `process_message`, the single pure entry point the Discord layer calls.
 - `src/build/session/` — the only part that touches Discord: thread creation, persistence, the render loop and the part-choice dropdown.
 - `src/build/debug_log.rs` — the optional `--build-debug-log` trace described below.

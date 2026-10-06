@@ -23,7 +23,7 @@ Three constraints shaped the answer:
 
 ### 1. A software rasterizer, not a GPU or a hosted service
 
-Renders are produced by a z-buffered scan-line rasterizer written in Rust (`src/render/`), running on a blocking thread pool.
+Renders are produced by a z-buffered scan-line rasterizer written in Rust (`crates/brick-render/src/render/`), running on a blocking thread pool.
 
 A GPU path (`wgpu`) was rejected: there is no GPU on the host, software fallbacks add a large dependency tree, and headless GL in a static MUSL build is a source of ongoing pain. A hosted rendering service was rejected because it would put the feature's core loop behind a third-party availability and privacy boundary for no benefit at this scale.
 
@@ -59,10 +59,10 @@ model (LDraw coordinates, integers)
   └─ src/build/scene.rs
        │  box mode ─────────────────► triangles
        │  mesh mode
-       │    └─ src/ldraw/resolve.rs ─► data_dir on disk
+       │    └─ crates/brick-render/src/ldraw/resolve.rs ─► data_dir on disk
        │         └─ parser → geometry (flatten, negate Y)
        ▼
-     src/render/  camera → rasterizer → shader → PNG
+     crates/brick-render/src/render/  camera → rasterizer → shader → PNG
 ```
 
 The model is stored **natively in LDraw coordinates** (right-handed, −Y up, integer LDU). Only the renderer flips Y. That makes `.ldr` export a direct dump with no transform, eliminating a class of mirror-image bugs, and integer coordinates mean no floating-point drift accumulates over a long session — which is what makes "the same command always produces the same model from the same revision" true in practice.

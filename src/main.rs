@@ -12,16 +12,16 @@ pub mod events_sync;
 pub mod http;
 mod i18n;
 pub mod interactions;
-pub mod ldraw;
+mod ldraw_sync;
 mod links;
-pub mod math;
 mod notifications;
 pub mod parts_cache;
 mod pocketbase;
-pub mod render;
 mod rss;
 mod workflows;
 mod zulip;
+
+pub use brick_render::{ldraw, math, render};
 
 use clap::Parser;
 use config::Config;
@@ -798,7 +798,7 @@ async fn handle_autocomplete(
 /// neither the database nor a Discord token.
 async fn install_ldraw_library(config: &Config) -> ! {
     let http_client = crate::http::HttpClient::new();
-    match crate::ldraw::library::sync(&http_client, &config.ldraw).await {
+    match crate::ldraw_sync::sync(&http_client, &config.ldraw).await {
         Ok(report) => {
             tracing::info!(
                 "Installed {} LDraw files ({} bytes) into {}; skipped {} non-redistributable file(s).",

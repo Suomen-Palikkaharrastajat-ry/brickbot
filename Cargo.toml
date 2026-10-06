@@ -1,9 +1,14 @@
+[workspace]
+members = ["crates/*"]
+default-members = [".", "crates/*"]
+
 [package]
 name = "brickbot"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+brick-render = { path = "crates/brick-render" }
 serenity = { version = "0.12.0", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "standard_framework", "cache", "collector"] }
 
 tokio = { version = "1", features = ["full"] }
@@ -43,19 +48,12 @@ regex = "1"
 rust-i18n = "3"
 aho-corasick = "1.1"
 
-# Edit distance behind the "did you mean" suggestions for colours and parts.
-# Already in the tree as a serenity dependency, so promoting it costs nothing.
-levenshtein = "1"
 uuid = { version = "1", features = ["v4"] }
 reqwest-eventsource = "0.6.0"
 futures-util = "0.3.30"
 async-trait = "0.1.77"
 chrono-tz = "0.10.4"
 
-# PNG encoding for the /build model renderer. Chosen over `image` because we
-# only ever write one format, and it is pure Rust so the static Nix build keeps
-# working.
-png = "0.17"
 
 # Reads the LDraw library archive during `--fetch-ldraw`, and reads back our
 # own .io exports in tests. It can decrypt ZipCrypto but cannot write it, which

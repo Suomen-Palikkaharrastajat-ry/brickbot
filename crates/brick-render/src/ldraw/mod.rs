@@ -2,7 +2,7 @@
 //! colour palette, and flattening a part's sub-file tree into a mesh.
 //!
 //! Everything here is pure except [`resolve`], which is the single point that
-//! reaches the network (through the shared [`crate::http::HttpProvider`]).
+//! reads from the library directory on disk (installed by the bot's `--fetch-ldraw`).
 
 #![allow(clippy::doc_markdown, clippy::many_single_char_names)]
 

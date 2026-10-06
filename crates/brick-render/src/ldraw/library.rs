@@ -23,8 +23,6 @@
     clippy::case_sensitive_file_extension_comparisons
 )]
 
-use crate::config::LdrawConfig;
-use crate::http::HttpProvider;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -180,24 +178,6 @@ pub fn is_installed(data_dir: &Path) -> bool {
     data_dir.join("parts").is_dir() && data_dir.join("p").is_dir()
 }
 
-/// Downloads the library and installs it into the configured directory.
-pub async fn sync(http: &dyn HttpProvider, cfg: &LdrawConfig) -> anyhow::Result<SyncReport> {
-    let data_dir = PathBuf::from(&cfg.data_dir);
-    tracing::info!("Downloading the LDraw library from {} ...", cfg.library_url);
-
-    // The archive is far larger than any ordinary API response, so it gets its
-    // own limit rather than `resource_limits.max_http_body_bytes`, and it
-    // bypasses the response cache — caching 80 MB would evict everything else.
-    let bytes = http
-        .get_bounded_bytes(&cfg.library_url, cfg.max_download_bytes, true)
-        .await?;
-
-    tracing::info!("Extracting {} bytes into {}", bytes.len(), cfg.data_dir);
-    let report = extract_archive(&bytes, &data_dir)?;
-    write_lockfile(&data_dir, &report, &cfg.library_url)?;
-    Ok(report)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,26 +324,5 @@ mod tests {
     fn a_corrupt_archive_is_an_error_not_a_panic() {
         let dir = TempDir::new("corrupt");
         assert!(extract_archive(b"this is not a zip file", dir.path()).is_err());
-    }
-
-    #[tokio::test]
-    async fn sync_downloads_extracts_and_locks() {
-        let dir = TempDir::new("sync");
-        let archive = make_archive(&[("ldraw/parts/3001.dat", BRICK), ("ldraw/p/stud.dat", STUD)]);
-
-        let mut http = crate::http::MockHttpProvider::new();
-        http.expect_get_bounded_bytes()
-            .times(1)
-            .returning(move |_, _, _| Ok(bytes::Bytes::from(archive.clone())));
-
-        let cfg = LdrawConfig {
-            data_dir: dir.path().to_string_lossy().into_owned(),
-            ..LdrawConfig::default()
-        };
-        let report = sync(&http, &cfg).await.unwrap();
-
-        assert_eq!(report.files_written, 2);
-        assert!(is_installed(dir.path()));
-        assert!(dir.path().join(LOCKFILE_NAME).is_file());
     }
 }

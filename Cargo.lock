@@ -213,6 +213,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "brick-render"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures-util",
+ "levenshtein",
+ "moka",
+ "png",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "zip",
+]
+
+[[package]]
 name = "brickbot"
 version = "0.1.0"
 dependencies = [
@@ -220,17 +237,16 @@ dependencies = [
  "anyhow",
  "async-trait",
  "atom_syndication",
+ "brick-render",
  "bytes",
  "chrono",
  "chrono-tz",
  "clap",
  "dotenvy",
  "futures-util",
- "levenshtein",
  "mockall",
  "moka",
  "opml",
- "png",
  "regex",
  "reqwest",
  "reqwest-eventsource",
