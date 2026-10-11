@@ -79,7 +79,10 @@ enable_fallback_mention = false # @-mention the submitter if a DM cannot be deli
 guild_id = 123456789
 [guilds.commands.locations]
 enabled = false # Disables /locations for this specific guild
+enable_fallback_mention = false
 ```
+
+A guild's `[guilds.commands.locations]` section replaces the global one as a whole: a flag it leaves out takes its default, not the global value. The defaults are `enabled`, `enable_edit` and `enable_propose` **off** and `enable_fallback_mention` **on**, so repeat `enable_fallback_mention = false` in every guild section if public mentions should stay off.
 
 A `[zulip]` section is required for the moderation flow; without it submissions are dropped.
 

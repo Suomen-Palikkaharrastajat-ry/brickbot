@@ -94,9 +94,23 @@ enable_edit = true
 enable_propose = true
 enable_fallback_mention = false
 
+# Same switches as [commands.events]; off by default
+[commands.locations]
+enabled = true
+enable_edit = true
+enable_propose = true
+enable_fallback_mention = false
+
 [[guilds]]
 guild_id = 123456789012345678 # Your Guild ID here
 locale = "fi-FI"
+
+# Any [commands.*] section can be overridden for one guild (optional).
+# A guild section replaces the global one whole, so flags left out take
+# their defaults; enable_fallback_mention defaults to true.
+[guilds.commands.locations]
+enabled = false
+enable_fallback_mention = false
 
 [[feeds]]
     # List of Feed URLs

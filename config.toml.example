@@ -109,9 +109,12 @@
 # retention_days = 30
 # store_raw_text = false
 #
-# # Override commands specifically for this guild (optional)
+# # Override commands specifically for this guild (optional). A guild section
+# # replaces the global one whole: flags left out take their defaults, and
+# # enable_fallback_mention defaults to true.
 # [guilds.commands.events]
 # enabled = false
+# enable_fallback_mention = false
 # [guilds.commands.locations]
 # enabled = false
 # [guilds.commands.set]
@@ -126,6 +129,9 @@
 # # You can omit interactions or commands to use global defaults
 # [guilds.commands.events]
 # enabled = true
+# enable_edit = true
+# enable_propose = true
+# enable_fallback_mention = false
 
 # [[feeds]]
 # # List of Feed URLs

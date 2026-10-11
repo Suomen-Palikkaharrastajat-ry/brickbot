@@ -117,9 +117,7 @@ fn build_guild_commands(
     let cmds = config.commands_for(guild_id);
     let mut commands = Vec::new();
 
-    // Events alone is read globally rather than per guild; guild overrides still gate the
-    // interaction handler, so a guild that disables it registers the command but never runs it.
-    if config.commands.events.enabled {
+    if cmds.events.enabled {
         commands.push(crate::commands::events::build_events_command(locale));
     }
     if cmds.locations.enabled {
@@ -1175,6 +1173,126 @@ fn reexec() -> ! {
 mod tests {
     use super::*;
     use crate::config::{Config, GuildConfig};
+
+    fn command_names(config: &Config, guild_id: u64) -> Vec<String> {
+        build_guild_commands(config, guild_id)
+            .iter()
+            .map(|command| {
+                serde_json::to_value(command).unwrap()["name"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn events_command_can_be_enabled_for_one_guild_only() {
+        let config: Config = toml::from_str(
+            r#"
+            locale = "en-US"
+
+            [[guilds]]
+            guild_id = 1
+
+            [guilds.commands.events]
+            enabled = true
+
+            [[guilds]]
+            guild_id = 2
+            "#,
+        )
+        .unwrap();
+
+        assert!(command_names(&config, 1).contains(&"events".to_string()));
+        assert!(!command_names(&config, 2).contains(&"events".to_string()));
+    }
+
+    #[test]
+    fn events_command_can_be_disabled_for_one_guild_only() {
+        let config: Config = toml::from_str(
+            r#"
+            locale = "en-US"
+
+            [commands.events]
+            enabled = true
+
+            [[guilds]]
+            guild_id = 1
+
+            [guilds.commands.events]
+            enabled = false
+
+            [[guilds]]
+            guild_id = 2
+            "#,
+        )
+        .unwrap();
+
+        assert!(!command_names(&config, 1).contains(&"events".to_string()));
+        assert!(command_names(&config, 2).contains(&"events".to_string()));
+    }
+
+    #[test]
+    fn a_guild_events_section_without_enabled_switches_the_command_off() {
+        // A guild section replaces the global one whole, and `enabled`
+        // defaults to off — the same rule the dispatch guard applies, so the
+        // command is never listed where it would not answer.
+        let config: Config = toml::from_str(
+            r#"
+            locale = "en-US"
+
+            [commands.events]
+            enabled = true
+
+            [[guilds]]
+            guild_id = 1
+
+            [guilds.commands.events]
+            enable_edit = true
+            "#,
+        )
+        .unwrap();
+
+        assert!(!config.commands_for(1).events.enabled);
+        assert!(!command_names(&config, 1).contains(&"events".to_string()));
+    }
+
+    #[test]
+    fn events_and_locations_register_under_the_same_rules() {
+        let config: Config = toml::from_str(
+            r#"
+            [commands.events]
+            enabled = true
+
+            [commands.locations]
+            enabled = true
+
+            [[guilds]]
+            guild_id = 1
+            locale = "fi-FI"
+
+            [[guilds]]
+            guild_id = 2
+            locale = "en-US"
+
+            [guilds.commands.events]
+            enabled = false
+
+            [guilds.commands.locations]
+            enabled = false
+            "#,
+        )
+        .unwrap();
+
+        let finnish = command_names(&config, 1);
+        assert!(finnish.contains(&"tapahtumat".to_string()));
+        assert!(finnish.contains(&"paikat".to_string()));
+
+        let disabled = command_names(&config, 2);
+        assert!(!disabled.contains(&"events".to_string()));
+        assert!(!disabled.contains(&"locations".to_string()));
+    }
 
     #[test]
     fn test_is_guild_allowed() {
