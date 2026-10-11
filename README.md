@@ -112,6 +112,12 @@ locale = "fi-FI"
 enabled = false
 enable_fallback_mention = false
 
+# Publish new feed articles to a channel of this guild (optional, repeatable).
+# Without feed_urls/opml_urls the section follows every global [[feeds]] entry.
+[[guilds.feeds]]
+channel_id = 234567890123456789
+feed_urls = ["https://example.com/feed1.rss"]
+
 [[feeds]]
     # List of Feed URLs
     feed_urls = [
@@ -211,6 +217,8 @@ Because the bot re-executes the path it was started with, a reload also picks up
 
 ### RSS, ATOM & OPML Polling
 The bot automatically fetches the defined `feed_urls` and `opml_urls` at the specified `poll_interval`. Feeds are parsed to support both RSS and ATOM formats.
+
+A guild can have new articles posted to its channels with `[[guilds.feeds]]` sections. All articles found by one poll go into a single message per channel, and only articles that appear after the bot was last (re)started are announced. See [`docs/news.md`](docs/news.md).
 
 ### Event Synchronization
 The bot continuously syncs events from PocketBase into Discord's native Scheduled Events system. 

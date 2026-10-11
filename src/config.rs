@@ -349,6 +349,21 @@ pub struct GuildConfig {
     pub ambient_training_data: Option<AmbientTrainingDataConfig>,
     pub interactions: Option<GuildInteractionsConfig>,
     pub commands: Option<GuildCommandsConfig>,
+    /// Channels of this guild that new feed articles are published to.
+    #[serde(default)]
+    pub feeds: Vec<GuildFeedConfig>,
+}
+
+/// One channel of a guild and the feeds whose new articles are posted there.
+///
+/// A section naming no URLs at all follows every global `[[feeds]]` entry.
+#[derive(Deserialize, Debug, Clone)]
+pub struct GuildFeedConfig {
+    pub channel_id: u64,
+    #[serde(default)]
+    pub feed_urls: Vec<String>,
+    #[serde(default)]
+    pub opml_urls: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -514,22 +529,7 @@ impl Config {
             }
         }
 
-        for feed in &self.feeds {
-            for url in &feed.feed_urls {
-                if !url.starts_with("http://") && !url.starts_with("https://") {
-                    errors.push(format!(
-                        "Feed URL must start with http:// or https://: {url}"
-                    ));
-                }
-            }
-            for url in &feed.opml_urls {
-                if !url.starts_with("http://") && !url.starts_with("https://") {
-                    errors.push(format!(
-                        "OPML URL must start with http:// or https://: {url}"
-                    ));
-                }
-            }
-        }
+        self.validate_feeds(&mut errors);
 
         if let Some(interval) = self.poll_interval {
             if interval > 0 && interval < 10 {
@@ -555,6 +555,67 @@ impl Config {
             Ok(())
         } else {
             Err(errors)
+        }
+    }
+
+    fn validate_feeds(&self, errors: &mut Vec<String>) {
+        let guild_feeds = self.guilds.iter().flat_map(|g| &g.feeds);
+        let feed_urls = self
+            .feeds
+            .iter()
+            .flat_map(|f| &f.feed_urls)
+            .chain(guild_feeds.clone().flat_map(|f| &f.feed_urls));
+        for url in feed_urls {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                errors.push(format!(
+                    "Feed URL must start with http:// or https://: {url}"
+                ));
+            }
+        }
+        let opml_urls = self
+            .feeds
+            .iter()
+            .flat_map(|f| &f.opml_urls)
+            .chain(guild_feeds.flat_map(|f| &f.opml_urls));
+        for url in opml_urls {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                errors.push(format!(
+                    "OPML URL must start with http:// or https://: {url}"
+                ));
+            }
+        }
+        let has_global_feeds = self
+            .feeds
+            .iter()
+            .any(|f| !f.feed_urls.is_empty() || !f.opml_urls.is_empty());
+        let mut channel_guilds = std::collections::HashMap::new();
+        for guild in &self.guilds {
+            for section in &guild.feeds {
+                if section.channel_id == 0 {
+                    errors.push(format!(
+                        "guild {} feeds channel_id cannot be 0",
+                        guild.guild_id
+                    ));
+                }
+                // A channel belongs to one guild; listed under two it would
+                // get every update twice.
+                let owner = *channel_guilds
+                    .entry(section.channel_id)
+                    .or_insert(guild.guild_id);
+                if owner != guild.guild_id {
+                    errors.push(format!(
+                        "feeds channel_id {} is listed under guilds {} and {}",
+                        section.channel_id, owner, guild.guild_id
+                    ));
+                }
+                if section.feed_urls.is_empty() && section.opml_urls.is_empty() && !has_global_feeds
+                {
+                    errors.push(format!(
+                        "guild {} feeds for channel {} names no URLs and there are no global [[feeds]] to follow",
+                        guild.guild_id, section.channel_id
+                    ));
+                }
+            }
         }
     }
 
@@ -1160,5 +1221,108 @@ mod tests {
                 .iter()
                 .any(|e| e.contains("locations_collection must not be empty"))
         );
+    }
+
+    #[test]
+    fn a_guild_names_the_channels_its_feed_updates_go_to() {
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/rss"]
+            opml_urls = ["https://example.com/feeds.opml"]
+
+            [[guilds.feeds]]
+            channel_id = 11
+
+            [[guilds]]
+            guild_id = 2
+
+            [[feeds]]
+            feed_urls = ["https://example.com/global"]
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.validate().is_ok());
+        let feeds = &config.guilds[0].feeds;
+        assert_eq!(feeds.len(), 2);
+        assert_eq!(feeds[0].channel_id, 10);
+        assert_eq!(feeds[0].feed_urls, ["https://example.com/rss"]);
+        assert_eq!(feeds[0].opml_urls, ["https://example.com/feeds.opml"]);
+        assert!(feeds[1].feed_urls.is_empty());
+        assert!(config.guilds[1].feeds.is_empty());
+    }
+
+    #[test]
+    fn guild_feed_sections_are_validated() {
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 0
+            feed_urls = ["ftp://example.com/rss"]
+            opml_urls = ["example.com/feeds.opml"]
+            "#,
+        )
+        .unwrap();
+
+        let errors = config.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("channel_id cannot be 0")));
+        assert!(errors.iter().any(|e| e.starts_with("Feed URL must")));
+        assert!(errors.iter().any(|e| e.starts_with("OPML URL must")));
+    }
+
+    #[test]
+    fn a_feeds_channel_cannot_be_listed_under_two_guilds() {
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/a"]
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/b"]
+
+            [[guilds]]
+            guild_id = 2
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/c"]
+            "#,
+        )
+        .unwrap();
+
+        // Twice within one guild is fine; across guilds is not.
+        let errors = config.validate().unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("channel_id 10 is listed under guilds 1 and 2"));
+    }
+
+    #[test]
+    fn a_feeds_section_without_urls_needs_global_feeds_to_follow() {
+        let config: Config = toml::from_str(
+            r"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            ",
+        )
+        .unwrap();
+
+        let errors = config.validate().unwrap_err();
+        assert!(errors[0].contains("names no URLs"));
     }
 }

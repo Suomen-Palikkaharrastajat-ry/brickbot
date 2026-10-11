@@ -445,3 +445,9 @@ errors:
   no_events_to_edit: "Ei muokattavia tapahtumia."
   no_locations_to_edit: "Ei muokattavia paikkoja."
   validation_failed: "Validointi epäonnistui: %{e}\nKorjaa virheet ja yritä uudelleen."
+
+feeds:
+  updates:
+    header_one: "📰 Uusi artikkeli"
+    header_many: "📰 %{count} uutta artikkelia"
+    more: "…ja %{count} muuta"

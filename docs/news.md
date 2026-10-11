@@ -24,6 +24,39 @@ opml_urls = [
 ]
 ```
 
+## Publishing New Articles to a Guild
+
+A guild opts in by naming a channel in a `[[guilds.feeds]]` section. Nothing is published anywhere without one.
+
+```toml
+[[guilds]]
+guild_id = 123456789012345678
+
+# These feeds' new articles go to this channel.
+[[guilds.feeds]]
+channel_id = 234567890123456789
+feed_urls = ["https://example.com/rss"]
+opml_urls = ["https://example.com/subscriptions.opml"]
+
+# A section naming no URLs follows every global [[feeds]] entry.
+[[guilds.feeds]]
+channel_id = 345678901234567890
+```
+
+- A guild may have any number of sections, and feeds named only here are polled too — they need not be repeated under the global `[[feeds]]`.
+- **One message per poll.** Everything a polling pass finds for a channel, across all of its feeds, is announced in a single message: a header with the count, then one `- [title](<link>) — source` line per article. Link previews are suppressed, markdown in titles is escaped and mentions are inert. If the list would exceed Discord's message limit it ends with "…and N more" instead of spilling into a second message.
+- **Only articles that appear after startup.** What a feed has already shown is recorded in the `feed_sightings` table (`db::record_feed_sightings`), and `feed_polls.baseline_run` names the bot run that last took the feed's baseline. A feed's first successful poll in a run is that baseline and is silent; only articles first seen on a later poll of the same run are announced. Anything published before or while the bot was down is never mentioned — and since a `SIGHUP` reload re-executes the bot, a reload starts a fresh baseline as well.
+- Sightings are kept only for feeds some guild publishes. A row is refreshed while its feed still lists the article and pruned 30 days after it last did, so the table is bounded by what the feeds carry.
+- A published feed is polled once right at startup, regardless of its last poll time, so the baseline is taken immediately rather than up to one `poll_interval` later. That is one attempt: if it fails, the baseline is taken by the feed's next regular poll instead, and whatever was published in between is not announced.
+- Every feed polled in a pass is stamped with the time the pass began, so feeds that are polled together fall due together again — which is what keeps a channel's updates in one message. A feed that does not answer within 30 seconds is skipped for that pass.
+- A `channel_id` may appear in several sections of one guild, but not under two guilds. A section naming no URLs is rejected when there are no global `[[feeds]]` to follow.
+
+**Known limitations**
+- An article that reaches a channel through two different feeds in *different* passes is announced twice; duplicates are only merged within one pass.
+- An article is identified by its link (its GUID only when it has none), so a feed that rewrites its links re-announces them.
+- A message Discord rejects (missing permission, outage) is logged and not retried.
+- The message is localized with the guild's locale (`feeds.updates.*`).
+
 ## Polling Logic
 - The `global_poll_loop` in `src/rss.rs` runs asynchronously as a single, global background task.
 - Every `poll_interval` seconds, it iterates over all configured feeds and OPML URLs.
@@ -35,4 +68,4 @@ opml_urls = [
 
 ## Recent Changes
 - Support for ATOM feeds was recently introduced to resolve parsing issues with feeds from YouTube and Flickr.
-- Polling logic was restructured to remove dependency on Discord `channel_id` directly in the feeds loop, paving the way for decoupled handling of fetched data.
+- New articles can be published to per-guild channels (`[[guilds.feeds]]`), batched into one message per poll.

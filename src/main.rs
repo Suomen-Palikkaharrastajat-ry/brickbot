@@ -1307,6 +1307,7 @@ mod tests {
                     ambient_training_data: None,
                     interactions: None,
                     commands: None,
+                    feeds: Vec::new(),
                 },
                 GuildConfig {
                     guild_id: 67890,
@@ -1317,6 +1318,7 @@ mod tests {
                     ambient_training_data: None,
                     interactions: None,
                     commands: None,
+                    feeds: Vec::new(),
                 },
             ],
             ..Default::default()

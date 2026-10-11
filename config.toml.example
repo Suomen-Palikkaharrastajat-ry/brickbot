@@ -132,6 +132,15 @@
 # enable_edit = true
 # enable_propose = true
 # enable_fallback_mention = false
+#
+# # Publish new feed articles to a channel of this guild (repeatable).
+# # All articles found by one poll are posted as a single message, and only
+# # articles appearing after the bot was last (re)started are announced.
+# # Without feed_urls/opml_urls the section follows every global [[feeds]].
+# [[guilds.feeds]]
+# channel_id = 234567890123456789
+# feed_urls = ["https://example.com/feed1.rss"]
+# # opml_urls = ["https://example.com/feeds.opml"]
 
 # [[feeds]]
 # # List of Feed URLs

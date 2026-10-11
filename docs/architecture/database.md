@@ -4,11 +4,12 @@ Brickbot relies on an embedded **SQLite** database via `sqlx` to maintain applic
 
 ## Schema & Migrations
 
-The database schema is defined and managed using `sqlx::migrate!`. The migrations live in the `./migrations` directory. There is currently a squashed `0001_initial.sql` file which contains the entire schema.
+The database schema is defined and managed using `sqlx::migrate!`. The migrations live in the `./migrations` directory. `0001_initial.sql` is the squashed original schema; `0002_build_sessions.sql` holds everything `/build` needs (also squashed — it had not reached production) and `0003_feed_sightings.sql` the feed publishing state. A migration that has been applied in production must never be edited: `sqlx` verifies checksums at startup.
 
 **Key Tables:**
-- `feed_items`: Tracks previously seen RSS/ATOM feed GUIDs to prevent double-posting.
-- `feed_polls`: Stores the timestamp of the last poll for each feed URL, enabling intelligent, stateful polling loops that survive bot restarts.
+- `feed_items`: The articles fetched from RSS/ATOM feeds (title and description), searched by the set command's news lookup.
+- `feed_polls`: Stores the timestamp of the last poll for each feed URL, enabling intelligent, stateful polling loops that survive bot restarts. `baseline_run` is the bot run (process start in Unix milliseconds) that last took the feed's silent baseline for publishing.
+- `feed_sightings`: Per feed, the article ids it has shown (`feed_url`, `item_id`, `last_seen_at`), for feeds published to guild channels. A feed's rows not seen for 30 days are pruned on its own next successful poll; rows of feeds without a baseline in the current run are pruned by any poll.
 - `inputs`: Serves as local draft storage for multi-step modal interactions (like event submissions). Submissions are marked as `draft` or `pending` (when sent to Zulip for moderation).
 - `ambient_cooldowns` / `ambient_item_cooldowns`: Implements rate-limiting for the ambient conversational assistant to prevent channel noise.
 - `ambient_user_preferences`: Tracks user opt-outs (`ignore_all`) for the ambient assistant.
@@ -20,7 +21,7 @@ The database schema is defined and managed using `sqlx::migrate!`. The migration
 ### Feed Polling & Item Tracking
 1. The global RSS polling loop checks `feed_polls` to determine if a feed is due for an update based on the configured interval.
 2. If due, the feed is fetched, and `feed_polls` is updated with `CURRENT_TIMESTAMP`.
-3. For each item in the feed, the bot checks `feed_items`. If the GUID exists, it is skipped. If new, it is processed, sent to Discord, and the GUID is inserted into `feed_items`.
+3. Each item in the feed is upserted into `feed_items`, which backs the news lookup of the set command. Publishing new articles to guild channels does **not** consult this table: it uses `feed_sightings` and `feed_polls.baseline_run`, so that only articles first seen after the run's baseline poll are announced (see [`docs/news.md`](../news.md)).
 4. Stale sources are periodically cleaned up using `cleanup_removed_sources` to prevent unbounded growth of `feed_items`.
 
 ### Event Synchronization

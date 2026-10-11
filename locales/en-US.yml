@@ -445,3 +445,9 @@ errors:
   no_events_to_edit: "No events to edit."
   no_locations_to_edit: "No locations to edit."
   validation_failed: "Validation failed: %{e}\nPlease fix the errors and try again."
+
+feeds:
+  updates:
+    header_one: "📰 New article"
+    header_many: "📰 %{count} new articles"
+    more: "…and %{count} more"
