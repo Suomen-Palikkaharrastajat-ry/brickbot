@@ -63,3 +63,16 @@ The SQLite database backs the ambient state, tracking:
 - `ambient_user_preferences`: Tracks opt-out preferences (`ignore_all`).
 
 This implementation guarantees that the ambient assistant remains helpful and unobtrusive in active communities.
+
+## Per-Guild Configuration
+
+Every ambient setting can be set for a single guild under its `[[guilds]]` entry in `config.toml`; a guild that sets nothing follows the global value. Resolution lives in `src/config.rs` (`interactions_for`, `ambient_debug_logging_for`, `ambient_training_data_for`).
+
+| Setting | Global | Per guild |
+|---|---|---|
+| Which topics are offered | `[interactions]` `set` / `part` | `[guilds.interactions]`, per key |
+| Which channels are listened to | — | `ambient_channel_ids` |
+| Detection debug logging | `ambient_debug_logging` | `ambient_debug_logging` |
+| Training-data capture | `[ambient_training_data]` (optionally narrowed by `allowed_guild_ids`) | `[guilds.ambient_training_data]` |
+
+A guild's `[guilds.ambient_training_data]` replaces the global section for that guild as a whole: fields it leaves out take their defaults rather than the global values, and the global `allowed_guild_ids` no longer applies to it. Direct messages always follow the global settings.

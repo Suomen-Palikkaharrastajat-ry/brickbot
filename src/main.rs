@@ -307,7 +307,8 @@ impl EventHandler for Handler {
         }
 
         // Ambient assistant
-        let log_ambient = self.config.ambient_debug_logging;
+        let ambient_guild_id = msg.guild_id.map(GuildId::get);
+        let log_ambient = self.config.ambient_debug_logging_for(ambient_guild_id);
         if let Some(detection) = crate::ambient::detect_topic(&msg.content, log_ambient) {
             let user_id = msg.author.id.get().to_string();
             let is_ignored = crate::db::is_user_ambient_ignored(&self.pool, &user_id)
@@ -326,26 +327,14 @@ impl EventHandler for Handler {
                 let topic_str = format!("{:?}", detection.topic);
 
                 let guild_id_u64 = msg.guild_id.unwrap_or_default().get();
-                let log_training_data =
-                    self.config
-                        .ambient_training_data
-                        .as_ref()
-                        .map_or(false, |cfg| {
-                            if !cfg.enabled {
-                                return false;
-                            }
-                            cfg.allowed_guild_ids
-                                .as_ref()
-                                .is_none_or(|allowed| allowed.contains(&guild_id_u64))
-                        });
+                let training_cfg = self.config.ambient_training_data_for(ambient_guild_id);
 
-                if log_training_data {
+                if let Some(training_cfg) = training_cfg {
                     let is_opt_out = crate::db::is_user_training_opt_out(&self.pool, &user_id)
                         .await
                         .unwrap_or(false);
 
                     if !is_opt_out {
-                        let training_cfg = self.config.ambient_training_data.as_ref().unwrap();
                         let content_to_store = if training_cfg.store_raw_text {
                             Some(msg.content.as_str())
                         } else {
@@ -1192,6 +1181,8 @@ mod tests {
                     locale: None,
                     bot_name: None,
                     ambient_channel_ids: None,
+                    ambient_debug_logging: None,
+                    ambient_training_data: None,
                     interactions: None,
                     commands: None,
                 },
@@ -1200,6 +1191,8 @@ mod tests {
                     locale: None,
                     bot_name: None,
                     ambient_channel_ids: None,
+                    ambient_debug_logging: None,
+                    ambient_training_data: None,
                     interactions: None,
                     commands: None,
                 },

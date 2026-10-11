@@ -9,6 +9,7 @@
 # enabled = false
 # retention_days = 30
 # allowed_guild_ids = [123456789]
+# # Both ambient settings above can also be set per guild; see [[guilds]] below.
 
 # poll_interval = 3600
 # cache_ttl_secs = 600
@@ -94,6 +95,20 @@
 # set = false
 # part = true
 # 
+# # Ambient assistant settings for this guild only (all optional).
+# # Channels where ambient detection runs; omit to listen in every channel.
+# # These two keys must come before any [guilds.*] table of this guild.
+# ambient_channel_ids = [111111111111111111]
+# # Overrides the global ambient_debug_logging.
+# ambient_debug_logging = true
+#
+# # Replaces the global [ambient_training_data] for this guild as a whole:
+# # omitted fields take their defaults, not the global values.
+# [guilds.ambient_training_data]
+# enabled = true
+# retention_days = 30
+# store_raw_text = false
+#
 # # Override commands specifically for this guild (optional)
 # [guilds.commands.events]
 # enabled = false

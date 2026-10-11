@@ -337,6 +337,12 @@ pub struct GuildConfig {
     pub bot_name: Option<String>,
     #[serde(default)]
     pub ambient_channel_ids: Option<Vec<u64>>,
+    /// Overrides the global `ambient_debug_logging` for this guild.
+    pub ambient_debug_logging: Option<bool>,
+    /// Replaces the global `[ambient_training_data]` for this guild, whole:
+    /// fields left out take their defaults, not the global values, and the
+    /// global `allowed_guild_ids` no longer applies.
+    pub ambient_training_data: Option<AmbientTrainingDataConfig>,
     pub interactions: Option<GuildInteractionsConfig>,
     pub commands: Option<GuildCommandsConfig>,
 }
@@ -355,6 +361,8 @@ pub struct AmbientTrainingDataConfig {
     pub enabled: bool,
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
+    /// Read on the global section only; a guild's own section already names
+    /// its guild.
     pub allowed_guild_ids: Option<Vec<u64>>,
     #[serde(default)]
     pub store_raw_text: bool,
@@ -594,6 +602,42 @@ impl Config {
         }
     }
 
+    /// Whether ambient detection explains its decisions in the log for a
+    /// message from `guild_id` (`None` for a DM): the guild's own setting,
+    /// else the global one.
+    #[must_use]
+    pub fn ambient_debug_logging_for(&self, guild_id: Option<u64>) -> bool {
+        guild_id
+            .and_then(|id| self.get_guild_config(id))
+            .and_then(|g| g.ambient_debug_logging)
+            .unwrap_or(self.ambient_debug_logging)
+    }
+
+    /// The training-data settings in force for a message from `guild_id`
+    /// (`None` for a DM), or `None` when nothing may be captured there.
+    ///
+    /// A guild's own section wins outright. Otherwise the global section
+    /// applies, narrowed by its `allowed_guild_ids` when that is set.
+    #[must_use]
+    pub fn ambient_training_data_for(
+        &self,
+        guild_id: Option<u64>,
+    ) -> Option<&AmbientTrainingDataConfig> {
+        let own = guild_id
+            .and_then(|id| self.get_guild_config(id))
+            .and_then(|g| g.ambient_training_data.as_ref());
+        if let Some(own) = own {
+            return own.enabled.then_some(own);
+        }
+
+        let global = self.ambient_training_data.as_ref()?;
+        let allowed = global
+            .allowed_guild_ids
+            .as_ref()
+            .is_none_or(|ids| guild_id.is_some_and(|id| ids.contains(&id)));
+        (global.enabled && allowed).then_some(global)
+    }
+
     /// The locale configured for a guild, if any.
     ///
     /// Prefer [`Self::locale_or_default`] when a locale is actually needed:
@@ -631,6 +675,155 @@ mod tests {
         assert_eq!(config.locale_for(123), None);
         assert_eq!(config.locale_or_default(123), DEFAULT_LOCALE);
         assert_eq!(config.default_locale(), DEFAULT_LOCALE);
+    }
+
+    #[test]
+    fn ambient_debug_logging_can_be_switched_on_for_one_guild() {
+        let config: Config = toml::from_str(
+            r"
+            [[guilds]]
+            guild_id = 1
+            ambient_debug_logging = true
+
+            [[guilds]]
+            guild_id = 2
+            ",
+        )
+        .unwrap();
+
+        assert!(config.ambient_debug_logging_for(Some(1)));
+        assert!(!config.ambient_debug_logging_for(Some(2)));
+        // Unconfigured guilds and DMs follow the global flag.
+        assert!(!config.ambient_debug_logging_for(Some(999)));
+        assert!(!config.ambient_debug_logging_for(None));
+    }
+
+    #[test]
+    fn a_guild_can_opt_out_of_global_ambient_debug_logging() {
+        let config: Config = toml::from_str(
+            r"
+            ambient_debug_logging = true
+
+            [[guilds]]
+            guild_id = 1
+            ambient_debug_logging = false
+
+            [[guilds]]
+            guild_id = 2
+            ",
+        )
+        .unwrap();
+
+        assert!(!config.ambient_debug_logging_for(Some(1)));
+        assert!(config.ambient_debug_logging_for(Some(2)));
+        assert!(config.ambient_debug_logging_for(None));
+    }
+
+    #[test]
+    fn ambient_training_data_can_be_switched_on_for_one_guild() {
+        let config: Config = toml::from_str(
+            r"
+            [[guilds]]
+            guild_id = 1
+
+            [guilds.ambient_training_data]
+            enabled = true
+            retention_days = 7
+            store_raw_text = true
+
+            [[guilds]]
+            guild_id = 2
+            ",
+        )
+        .unwrap();
+
+        let training = config.ambient_training_data_for(Some(1)).unwrap();
+        assert_eq!(training.retention_days, 7);
+        assert!(training.store_raw_text);
+        assert!(config.ambient_training_data_for(Some(2)).is_none());
+        assert!(config.ambient_training_data_for(None).is_none());
+    }
+
+    #[test]
+    fn a_guild_training_section_replaces_the_global_one() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient_training_data]
+            enabled = true
+            retention_days = 30
+            allowed_guild_ids = [2]
+
+            [[guilds]]
+            guild_id = 1
+
+            [guilds.ambient_training_data]
+            enabled = true
+            retention_days = 7
+
+            [[guilds]]
+            guild_id = 2
+
+            [[guilds]]
+            guild_id = 3
+
+            [[guilds]]
+            guild_id = 4
+
+            [guilds.ambient_training_data]
+            enabled = false
+            ",
+        )
+        .unwrap();
+
+        // Its own section wins outright, including over the global allow-list.
+        assert_eq!(
+            config
+                .ambient_training_data_for(Some(1))
+                .unwrap()
+                .retention_days,
+            7
+        );
+        // No section of its own: the global one applies, allow-list and all.
+        assert_eq!(
+            config
+                .ambient_training_data_for(Some(2))
+                .unwrap()
+                .retention_days,
+            30
+        );
+        assert!(config.ambient_training_data_for(Some(3)).is_none());
+        assert!(config.ambient_training_data_for(Some(4)).is_none());
+    }
+
+    #[test]
+    fn global_training_data_without_an_allow_list_covers_everything() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient_training_data]
+            enabled = true
+
+            [[guilds]]
+            guild_id = 1
+            ",
+        )
+        .unwrap();
+
+        assert!(config.ambient_training_data_for(Some(1)).is_some());
+        assert!(config.ambient_training_data_for(Some(999)).is_some());
+        assert!(config.ambient_training_data_for(None).is_some());
+    }
+
+    #[test]
+    fn disabled_global_training_data_covers_nothing() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient_training_data]
+            enabled = false
+            ",
+        )
+        .unwrap();
+
+        assert!(config.ambient_training_data_for(Some(1)).is_none());
     }
 
     #[test]
