@@ -174,7 +174,7 @@ Everything except the last item is pure and unit-tested, with no serenity, sqlx 
 - `src/build/session/` — the only part that touches Discord: thread creation, persistence, the render loop and the part-choice dropdown.
 - `src/build/debug_log.rs` — the optional `--build-debug-log` trace described below.
 
-Storage is `build_sessions` and `build_revisions` (`migrations/0002_build_sessions.sql`, `migrations/0003_build_session_state.sql`), accessed through `src/db/build.rs`. Only the operation log is stored; the model is a fold over it. Where undo and redo have left the session is session state (`build_sessions.cursor`), separate from the per-revision `skipped` flag that `Undo alice's last edit.` sets — conflating the two makes redo impossible to express.
+Storage is `build_sessions` and `build_revisions` (`migrations/0002_build_sessions.sql`), accessed through `src/db/build.rs`. Only the operation log is stored; the model is a fold over it. Where undo and redo have left the session is session state (`build_sessions.cursor`), separate from the per-revision `skipped` flag that `Undo alice's last edit.` sets — conflating the two makes redo impossible to express.
 
 Each session's read-interpret-write cycle is serialised by a per-session lock and committed in one transaction, because two people building in the same second is the expected case rather than a rare one.
 
