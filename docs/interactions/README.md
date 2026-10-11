@@ -75,4 +75,6 @@ Every ambient setting can be set for a single guild under its `[[guilds]]` entry
 | Detection debug logging | `ambient_debug_logging` | `ambient_debug_logging` |
 | Training-data capture | `[ambient_training_data]` (optionally narrowed by `allowed_guild_ids`) | `[guilds.ambient_training_data]` |
 
-A guild's `[guilds.ambient_training_data]` replaces the global section for that guild as a whole: fields it leaves out take their defaults rather than the global values, and the global `allowed_guild_ids` no longer applies to it. Direct messages always follow the global settings.
+`ambient_channel_ids` and `ambient_debug_logging` must be written directly under the guild's `guild_id`, above its first `[guilds.*]` table; a key placed below `[guilds.interactions]` is rejected as unknown.
+
+A guild's `[guilds.ambient_training_data]` replaces the global section for that guild as a whole: fields it leaves out take their defaults rather than the global values, and the global `allowed_guild_ids` no longer applies to it. The ambient assistant does not run in direct messages.

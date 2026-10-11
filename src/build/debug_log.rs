@@ -70,6 +70,11 @@ impl BuildDebugLog {
         if let Err(e) = file.write_all(line.as_bytes()).await {
             tracing::warn!("build debug log write failed: {e}");
         }
+        // The write itself finishes on a blocking thread; without this a
+        // shutdown or reload can lose the last line.
+        if let Err(e) = file.flush().await {
+            tracing::warn!("build debug log flush failed: {e}");
+        }
     }
 }
 

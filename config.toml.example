@@ -89,19 +89,19 @@
 # [[guilds]]
 # guild_id = 1424873309325234220
 # locale = "fi-FI"
+# # Ambient assistant settings for this guild only (optional). Keep these two
+# # keys here, above the first [guilds.*] table: below one, TOML would read
+# # them as part of that table and the bot would silently ignore them.
+# # Channels where ambient detection runs; omit to listen in every channel.
+# ambient_channel_ids = [111111111111111111]
+# # Overrides the global ambient_debug_logging.
+# ambient_debug_logging = true
 # 
 # # Override interactions specifically for this guild (optional)
 # [guilds.interactions]
 # set = false
 # part = true
 # 
-# # Ambient assistant settings for this guild only (all optional).
-# # Channels where ambient detection runs; omit to listen in every channel.
-# # These two keys must come before any [guilds.*] table of this guild.
-# ambient_channel_ids = [111111111111111111]
-# # Overrides the global ambient_debug_logging.
-# ambient_debug_logging = true
-#
 # # Replaces the global [ambient_training_data] for this guild as a whole:
 # # omitted fields take their defaults, not the global values.
 # [guilds.ambient_training_data]

@@ -56,6 +56,7 @@ The bot uses SQLite (`data/bot.db`).
 - Use `RUST_LOG=debug` or `RUST_LOG=info` to monitor the bot's health.
 - Resource limits are strictly enforced via the `[resource_limits]` section in `config.toml` (e.g., `max_http_body_bytes`, `max_cache_memory_bytes`) to prevent memory bloating or OOM crashes on small servers.
 - **Common Recovery**: If the bot panics at startup, use `--check-config` to verify the `config.toml`. If API requests fail, verify API keys in `.env`.
+- **Applying config changes**: `sudo systemctl reload brickbot` validates `config.toml` and restarts the bot in place; an invalid file is rejected and the bot keeps running (see README, "Reloading Configuration"). `SIGHUP` reloads rather than stops the bot, so a hand-started instance survives its terminal closing — stop it explicitly.
 
 ## Privacy & Data-Retention Policy
 

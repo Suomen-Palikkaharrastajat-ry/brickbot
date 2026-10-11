@@ -33,22 +33,36 @@ where
     }
 }
 
-/// The program and arguments to re-execute: this process's own command line.
+/// The command lines to re-execute, in the order to try them: this
+/// process's own, then the same arguments on the running executable.
 ///
-/// `argv[0]` is preferred over the resolved executable so that a binary
-/// replaced on disk at the same path is picked up by the reload, rather than
-/// the deleted inode the running process still maps.
-pub fn exec_target(
+/// `argv[0]` comes first so that a binary replaced on disk at the same path
+/// is picked up by the reload. `current_exe` is the way back when that path
+/// no longer resolves — by then the bot has shut down, so failing to start
+/// anything would turn a reload into an outage.
+pub fn exec_targets(
     args: impl IntoIterator<Item = OsString>,
-    fallback_exe: PathBuf,
-) -> (OsString, Vec<OsString>) {
+    current_exe: Option<PathBuf>,
+) -> Vec<(OsString, Vec<OsString>)> {
     let mut args = args.into_iter();
-    let program = args.next().unwrap_or_else(|| fallback_exe.into_os_string());
-    (program, args.collect())
+    let program = args.next();
+    let args: Vec<OsString> = args.collect();
+
+    let fallback = current_exe
+        .map(PathBuf::into_os_string)
+        .filter(|exe| program.as_ref() != Some(exe));
+    program
+        .into_iter()
+        .chain(fallback)
+        .map(|program| (program, args.clone()))
+        .collect()
 }
 
-/// Turns `SIGHUP` into reload requests. Installing this also replaces the
-/// signal's default action, which would otherwise terminate the process.
+/// Turns `SIGHUP` into reload requests.
+///
+/// Installing this also replaces the signal's default action, which would
+/// otherwise terminate the process — so call it first thing: until then a
+/// reload request is a kill.
 pub fn spawn_sighup_listener() -> std::io::Result<mpsc::Receiver<()>> {
     use tokio::signal::unix::{SignalKind, signal};
 
@@ -147,8 +161,8 @@ mod tests {
     }
 
     #[test]
-    fn exec_target_keeps_the_command_line_in_order() {
-        let (program, args) = exec_target(
+    fn exec_targets_keep_the_command_line_in_order() {
+        let targets = exec_targets(
             os(&[
                 "/opt/brickbot/brickbot",
                 "--config",
@@ -156,26 +170,58 @@ mod tests {
                 "--build-debug-log",
                 "data/build.log",
             ]),
-            PathBuf::from("/proc/self/exe"),
+            Some(PathBuf::from("/opt/brickbot/brickbot")),
         );
 
-        assert_eq!(program, OsString::from("/opt/brickbot/brickbot"));
         assert_eq!(
-            args,
-            os(&[
-                "--config",
-                "other.toml",
-                "--build-debug-log",
-                "data/build.log"
-            ])
+            targets,
+            vec![(
+                OsString::from("/opt/brickbot/brickbot"),
+                os(&[
+                    "--config",
+                    "other.toml",
+                    "--build-debug-log",
+                    "data/build.log"
+                ])
+            )]
         );
     }
 
     #[test]
-    fn exec_target_falls_back_to_the_executable_when_argv_is_empty() {
-        let (program, args) = exec_target(os(&[]), PathBuf::from("/opt/brickbot/brickbot"));
+    fn exec_targets_fall_back_to_the_running_executable() {
+        // `argv[0]` may no longer resolve: a bare name with a changed PATH,
+        // or a binary caught halfway through being replaced.
+        let targets = exec_targets(
+            os(&["brickbot", "--config", "other.toml"]),
+            Some(PathBuf::from("/nix/store/abc/bin/brickbot")),
+        );
 
-        assert_eq!(program, OsString::from("/opt/brickbot/brickbot"));
-        assert!(args.is_empty());
+        assert_eq!(
+            targets,
+            vec![
+                (OsString::from("brickbot"), os(&["--config", "other.toml"])),
+                (
+                    OsString::from("/nix/store/abc/bin/brickbot"),
+                    os(&["--config", "other.toml"])
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn exec_targets_use_the_executable_alone_when_argv_is_empty() {
+        let targets = exec_targets(os(&[]), Some(PathBuf::from("/opt/brickbot/brickbot")));
+
+        assert_eq!(
+            targets,
+            vec![(OsString::from("/opt/brickbot/brickbot"), vec![])]
+        );
+    }
+
+    #[test]
+    fn exec_targets_without_a_known_executable_still_try_argv() {
+        let targets = exec_targets(os(&["brickbot"]), None);
+
+        assert_eq!(targets, vec![(OsString::from("brickbot"), vec![])]);
     }
 }

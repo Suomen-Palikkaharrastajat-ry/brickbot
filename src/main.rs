@@ -307,8 +307,9 @@ impl EventHandler for Handler {
         }
 
         // Ambient assistant
-        let ambient_guild_id = msg.guild_id.map(GuildId::get);
-        let log_ambient = self.config.ambient_debug_logging_for(ambient_guild_id);
+        // Direct messages returned above, so there is always a guild here.
+        let guild_id_u64 = msg.guild_id.unwrap_or_default().get();
+        let log_ambient = self.config.ambient_debug_logging_for(guild_id_u64);
         if let Some(detection) = crate::ambient::detect_topic(&msg.content, log_ambient) {
             let user_id = msg.author.id.get().to_string();
             let is_ignored = crate::db::is_user_ambient_ignored(&self.pool, &user_id)
@@ -326,8 +327,7 @@ impl EventHandler for Handler {
             if detection.confidence >= crate::ambient::Confidence::Medium {
                 let topic_str = format!("{:?}", detection.topic);
 
-                let guild_id_u64 = msg.guild_id.unwrap_or_default().get();
-                let training_cfg = self.config.ambient_training_data_for(ambient_guild_id);
+                let training_cfg = self.config.ambient_training_data_for(guild_id_u64);
 
                 if let Some(training_cfg) = training_cfg {
                     let is_opt_out = crate::db::is_user_training_opt_out(&self.pool, &user_id)
@@ -998,6 +998,13 @@ fn spawn_maintenance_tasks(pool: &SqlitePool, config: &Config) {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+
+    // Before anything else: SIGHUP terminates by default, and a re-exec puts
+    // that default back, so a second `systemctl reload` arriving while this
+    // one starts up must find the listener already in place. Requests queue
+    // here until startup is done.
+    let reload_requests = crate::reload::spawn_sighup_listener()?;
+
     dotenvy::dotenv().ok();
 
     let cli = Cli::parse();
@@ -1020,10 +1027,6 @@ async fn main() -> anyhow::Result<()> {
     if cli.fetch_ldraw {
         install_ldraw_library(&config).await;
     }
-
-    // Installed before anything slow, so a `systemctl reload` during startup
-    // is queued rather than killing the process: SIGHUP terminates by default.
-    let reload_requests = crate::reload::spawn_sighup_listener()?;
 
     let database_url =
         env::var("DATABASE_URL").expect("Expected a database url in the environment");
@@ -1155,15 +1158,16 @@ async fn restart_in_place(
 }
 
 /// Replaces the process image with this program's own command line. Exits
-/// non-zero if that fails, leaving the service manager to start it again.
+/// non-zero if nothing could be started, leaving the service manager to
+/// start it again.
 fn reexec() -> ! {
     use std::os::unix::process::CommandExt;
 
-    let fallback = env::current_exe().unwrap_or_else(|_| "brickbot".into());
-    let (program, args) = crate::reload::exec_target(env::args_os(), fallback);
-    // `exec` returns only if it failed.
-    let err = std::process::Command::new(&program).args(args).exec();
-    tracing::error!("Failed to re-execute {}: {err}", program.to_string_lossy());
+    for (program, args) in crate::reload::exec_targets(env::args_os(), env::current_exe().ok()) {
+        // `exec` returns only if it failed.
+        let err = std::process::Command::new(&program).args(args).exec();
+        tracing::error!("Failed to re-execute {}: {err}", program.to_string_lossy());
+    }
     std::process::exit(1);
 }
 

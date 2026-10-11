@@ -147,6 +147,7 @@ WorkingDirectory=/opt/brickbot
 ExecStart=/opt/brickbot/brickbot
 # `systemctl reload brickbot`: check the new config, then ask the bot to apply it
 ExecReload=/opt/brickbot/brickbot --check-config
+# On NixOS there is no /bin/kill: use ${pkgs.coreutils}/bin/kill
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
@@ -173,10 +174,12 @@ journalctl -u brickbot -f   # watch the outcome
 
 What happens:
 
-1. `brickbot --check-config` validates the file. If it is invalid, `systemctl reload` fails with the validation errors and the running bot is not touched.
+1. `brickbot --check-config` validates the file. If it is invalid, `systemctl reload` fails, the validation errors are in the journal, and the running bot is not touched.
 2. The bot receives `SIGHUP`, validates the file once more itself (so a plain `kill -HUP <pid>` is just as safe), and on success restarts in place: it closes the Discord connection and the databases and re-executes itself with the same command line. The PID does not change, so systemd sees one uninterrupted service.
 
-Expect the bot to be offline for a few seconds while it reconnects to Discord. Build threads, drafts and wizard sessions are stored in SQLite and survive; a render still waiting in its debounce window may be dropped. A reload sent while the bot is still starting up is applied once startup has finished.
+`systemctl reload` returns as soon as the signal is sent, not when the bot is back: follow the journal to see the restart complete.
+
+Expect the bot to be offline for a few seconds while it reconnects to Discord. As with a restart, build threads, drafts and wizard sessions are stored in SQLite and survive, while a render still waiting in its debounce window may be dropped and Zulip messages arriving during the gap can be missed. A reload sent while the bot is still starting up is queued and applied once startup has finished.
 
 If `ExecStart` passes `--config <path>`, repeat it on the `--check-config` line. To validate by hand, run `/opt/brickbot/brickbot --check-config` from the working directory.
 
@@ -186,6 +189,9 @@ A reload is **not** enough for:
 - **Changes to the unit file itself**: `sudo systemctl daemon-reload && sudo systemctl restart brickbot`.
 
 Because the bot re-executes the path it was started with, a reload also picks up a binary that was replaced at that path.
+
+> [!NOTE]
+> `SIGHUP` now means "reload", not "quit". A bot started by hand in a terminal therefore keeps running when that terminal or SSH session closes — stop it with `Ctrl+C` or `kill <pid>` before starting another, or two instances will answer.
 
 ## Features & Commands
 
