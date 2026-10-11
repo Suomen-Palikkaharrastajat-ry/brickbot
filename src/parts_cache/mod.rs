@@ -107,6 +107,12 @@ impl PartCache {
         Ok(Self { pool, ttl })
     }
 
+    /// Closes the pool, checkpointing the database. Used before the process
+    /// re-executes itself on a configuration reload.
+    pub async fn close(&self) {
+        self.pool.close().await;
+    }
+
     /// Wraps an existing pool, for tests.
     pub async fn from_pool(pool: SqlitePool, ttl: Ttl) -> anyhow::Result<Self> {
         Self::migrate(&pool).await?;

@@ -43,6 +43,7 @@ The project has been structured to handle multiple asynchronous background tasks
 - `crates/brick-model/`: Workspace library crate with the model domain (`units`, `model`, `ops`, `export`) — no Discord, database, rendering or parsing. `src/build/mod.rs` re-exports it, so `crate::build::{model,ops,units,export}` still resolve.
 - `crates/bricktalk/`: Workspace library crate with the BrickTalk language and its interpreter (`dsl`, `lower`, `expand`, `dispatch`, `grid`, `textview`, `draft`, `queries`, `propose`, `report`, `legal`, `parts`, `discord_limits`). It calls `rust_i18n::i18n!("../../locales", …)` on the **shared root `locales/`**, so there is still one set of locale files and the drift tests in `src/i18n.rs` cover them. `src/build/` keeps only the Discord shell (`session/`), `scene.rs` and `debug_log.rs`, and re-exports the crate's modules.
 - `src/rss.rs`: Polling logic and parsing for feeds.
+- `src/reload.rs`: Config reload on `SIGHUP` (`systemctl reload brickbot`). `wait_for_valid_reload` and `exec_target` are pure and unit-tested; `restart_in_place` in `main.rs` does the shutdown and re-exec.
 - `flake.nix` & `devenv.nix`: Nix environment files configuring the `devShell`.
 - `default.nix`: Nix build configuration decoupled from `flake.nix` to prevent "dirty tree" rebuilds.
 - `data/bot.db`: SQLite database file. Ensure the `data` directory exists locally to avoid "database file could not be opened" startup errors.
@@ -70,6 +71,7 @@ The project relies strictly on **Nix** for a reproducible environment.
 3.  **Polling Loops**: Background `tokio` tasks poll external resources (`RSS`/`OPML`) at intervals defined in `config.toml`.
 4.  **Network & Caching**: All outbound HTTP traffic should route through `HttpClient` (`src/http.rs`) to leverage the centralized `moka` cache, preventing redundant network requests.
 5.  **Message Handling**: The bot bypasses standard framework macros in favor of a raw `EventHandler` in `main.rs` to allow dynamic prefix and alias matching defined in the configuration.
+6.  **Config Reload**: `Config` is immutable for the life of a process. `SIGHUP` re-validates `config.toml`; an invalid file is logged and ignored, a valid one makes the bot close the gateway and databases and re-exec itself (same PID). New config consumers therefore need no reload hooks — but keep startup idempotent, and keep the operator docs in `README.md` ("Reloading Configuration") in sync.
 
 ## The `/build` Command (BrickTalk)
 

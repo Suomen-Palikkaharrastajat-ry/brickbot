@@ -145,6 +145,9 @@ Group=brickbot
 # Ensure the working directory contains your data/ folder and config files
 WorkingDirectory=/opt/brickbot
 ExecStart=/opt/brickbot/brickbot
+# `systemctl reload brickbot`: check the new config, then ask the bot to apply it
+ExecReload=/opt/brickbot/brickbot --check-config
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 Environment="RUST_LOG=info"
@@ -158,6 +161,31 @@ Enable and start the service:
 sudo systemctl daemon-reload
 sudo systemctl enable --now brickbot
 ```
+
+#### Reloading Configuration
+
+After editing `config.toml`, apply it without stopping the service:
+
+```bash
+sudo systemctl reload brickbot
+journalctl -u brickbot -f   # watch the outcome
+```
+
+What happens:
+
+1. `brickbot --check-config` validates the file. If it is invalid, `systemctl reload` fails with the validation errors and the running bot is not touched.
+2. The bot receives `SIGHUP`, validates the file once more itself (so a plain `kill -HUP <pid>` is just as safe), and on success restarts in place: it closes the Discord connection and the databases and re-executes itself with the same command line. The PID does not change, so systemd sees one uninterrupted service.
+
+Expect the bot to be offline for a few seconds while it reconnects to Discord. Build threads, drafts and wizard sessions are stored in SQLite and survive; a render still waiting in its debounce window may be dropped. A reload sent while the bot is still starting up is applied once startup has finished.
+
+If `ExecStart` passes `--config <path>`, repeat it on the `--check-config` line. To validate by hand, run `/opt/brickbot/brickbot --check-config` from the working directory.
+
+A reload is **not** enough for:
+
+- **Environment variables and secrets** (`DISCORD_TOKEN`, `DATABASE_URL`, `REBRICKABLE_API_KEY`, `.env`, `Environment=` lines): the restarted bot inherits the old environment. Use `sudo systemctl restart brickbot`.
+- **Changes to the unit file itself**: `sudo systemctl daemon-reload && sudo systemctl restart brickbot`.
+
+Because the bot re-executes the path it was started with, a reload also picks up a binary that was replaced at that path.
 
 ## Features & Commands
 

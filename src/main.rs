@@ -16,6 +16,7 @@ mod links;
 mod notifications;
 pub mod parts_cache;
 mod pocketbase;
+pub mod reload;
 mod rss;
 mod workflows;
 mod zulip;
@@ -974,48 +975,9 @@ fn start_polling_tasks(
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-    dotenvy::dotenv().ok();
-
-    let cli = Cli::parse();
-
-    let config = match Config::load(&cli.config) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to load config from {}: {}", cli.config, e);
-            std::process::exit(1);
-        }
-    };
-
-    if cli.check_config {
-        tracing::info!("Configuration in {} is valid.", cli.config);
-        std::process::exit(0);
-    }
-
-    // Installing the part library needs neither a database nor a Discord
-    // token, so it runs before either is set up.
-    if cli.fetch_ldraw {
-        install_ldraw_library(&config).await;
-    }
-
-    let database_url =
-        env::var("DATABASE_URL").expect("Expected a database url in the environment");
-
-    let pool = setup_database(&database_url).await?;
-
-    let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
-
-    let build_debug_log = open_build_debug_log(cli.build_debug_log.as_deref()).await;
-
-    crate::http::init_cache(config.cache_ttl_secs.unwrap_or(600), 50 * 1024 * 1024);
-
-    let intents = GatewayIntents::GUILDS
-        | GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT
-        | GatewayIntents::DIRECT_MESSAGES;
-
+/// Housekeeping that runs for the life of the process: the daily sweep of
+/// expired rows and the events outbox worker.
+fn spawn_maintenance_tasks(pool: &SqlitePool, config: &Config) {
     // Ambient cleanup
     {
         let pool = pool.clone();
@@ -1042,6 +1004,55 @@ async fn main() -> anyhow::Result<()> {
             crate::workflows::events::outbox_worker(pool, config_clone, http_client).await;
         });
     }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+    dotenvy::dotenv().ok();
+
+    let cli = Cli::parse();
+
+    let config = match Config::load(&cli.config) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to load config from {}: {}", cli.config, e);
+            std::process::exit(1);
+        }
+    };
+
+    if cli.check_config {
+        tracing::info!("Configuration in {} is valid.", cli.config);
+        std::process::exit(0);
+    }
+
+    // Installing the part library needs neither a database nor a Discord
+    // token, so it runs before either is set up.
+    if cli.fetch_ldraw {
+        install_ldraw_library(&config).await;
+    }
+
+    // Installed before anything slow, so a `systemctl reload` during startup
+    // is queued rather than killing the process: SIGHUP terminates by default.
+    let reload_requests = crate::reload::spawn_sighup_listener()?;
+
+    let database_url =
+        env::var("DATABASE_URL").expect("Expected a database url in the environment");
+
+    let pool = setup_database(&database_url).await?;
+
+    let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
+
+    let build_debug_log = open_build_debug_log(cli.build_debug_log.as_deref()).await;
+
+    crate::http::init_cache(config.cache_ttl_secs.unwrap_or(600), 50 * 1024 * 1024);
+
+    let intents = GatewayIntents::GUILDS
+        | GatewayIntents::GUILD_MESSAGES
+        | GatewayIntents::MESSAGE_CONTENT
+        | GatewayIntents::DIRECT_MESSAGES;
+
+    spawn_maintenance_tasks(&pool, &config);
 
     let mut client = Client::builder(&token, intents)
         .event_handler(Handler {
@@ -1099,11 +1110,72 @@ async fn main() -> anyhow::Result<()> {
     // Removing `await` if `start_event_listener` is no longer async
     let () = crate::zulip::start_event_listener(webhook_state);
 
-    if let Err(why) = client.start().await {
-        tracing::error!("Client error: {why:?}");
+    let shard_manager = client.shard_manager.clone();
+    let config_path = cli.config.clone();
+
+    tokio::select! {
+        result = client.start() => {
+            if let Err(why) = result {
+                tracing::error!("Client error: {why:?}");
+            }
+        }
+        _ = crate::reload::wait_for_valid_reload(reload_requests, || Config::load(&config_path)) => {
+            tracing::info!("Configuration in {} is valid, restarting in place.", cli.config);
+            restart_in_place(&shard_manager, &pool, parts_cache.as_deref()).await;
+        }
     }
 
     Ok(())
+}
+
+/// Longest any one shutdown step may hold up a reload.
+const RELOAD_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Closes the gateway and the databases, then replaces this process with a
+/// fresh copy of itself, which reads the new configuration on its way up.
+/// The PID is kept, so a service manager sees one uninterrupted service.
+async fn restart_in_place(
+    shard_manager: &serenity::gateway::ShardManager,
+    pool: &SqlitePool,
+    parts_cache: Option<&crate::parts_cache::PartCache>,
+) -> ! {
+    // Background tasks are still running and may hold a connection; none of
+    // them is allowed to stall the reload.
+    if tokio::time::timeout(RELOAD_SHUTDOWN_TIMEOUT, shard_manager.shutdown_all())
+        .await
+        .is_err()
+    {
+        tracing::warn!("Timed out closing the Discord gateway before reload.");
+    }
+    if tokio::time::timeout(RELOAD_SHUTDOWN_TIMEOUT, pool.close())
+        .await
+        .is_err()
+    {
+        tracing::warn!("Timed out closing the database before reload.");
+    }
+    if let Some(cache) = parts_cache {
+        if tokio::time::timeout(RELOAD_SHUTDOWN_TIMEOUT, cache.close())
+            .await
+            .is_err()
+        {
+            tracing::warn!("Timed out closing the part cache before reload.");
+        }
+    }
+
+    reexec()
+}
+
+/// Replaces the process image with this program's own command line. Exits
+/// non-zero if that fails, leaving the service manager to start it again.
+fn reexec() -> ! {
+    use std::os::unix::process::CommandExt;
+
+    let fallback = env::current_exe().unwrap_or_else(|_| "brickbot".into());
+    let (program, args) = crate::reload::exec_target(env::args_os(), fallback);
+    // `exec` returns only if it failed.
+    let err = std::process::Command::new(&program).args(args).exec();
+    tracing::error!("Failed to re-execute {}: {err}", program.to_string_lossy());
+    std::process::exit(1);
 }
 
 #[cfg(test)]
