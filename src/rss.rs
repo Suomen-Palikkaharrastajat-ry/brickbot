@@ -86,7 +86,7 @@ pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
             }
         }
     }
-    entries.retain(|e| !e.id.is_empty());
+    entries.retain(|e| !e.id.trim().is_empty());
     entries
 }
 
@@ -215,23 +215,29 @@ fn message_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
 
-/// Flattens text onto one line and keeps it from closing a markdown link or
-/// styling the lines after it.
+/// A link longer than this is left out and the article named by title only,
+/// so that no single article can crowd the others out of a message.
+const MAX_LINK_CHARS: usize = 500;
+
+/// Text on one line, with every run of whitespace a single space.
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Flattens text onto one line and keeps it from closing a markdown link,
+/// styling the lines after it, or turning its own line into a heading, quote
+/// or list item.
 fn inline_text(s: &str, max_chars: usize) -> String {
-    let flat = s
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace('[', "(")
-        .replace(']', ")");
+    let flat = one_line(s).replace('[', "(").replace(']', ")");
     let mut cut: String = flat.chars().take(max_chars).collect();
     if cut.len() < flat.len() {
         cut.pop();
         cut.push('…');
     }
     let mut escaped = String::with_capacity(cut.len());
-    for c in cut.chars() {
-        if matches!(c, '\\' | '*' | '_' | '~' | '`' | '|') {
+    for (i, c) in cut.chars().enumerate() {
+        let leads_a_block = i == 0 && matches!(c, '#' | '>' | '-');
+        if leads_a_block || matches!(c, '\\' | '*' | '_' | '~' | '`' | '|') {
             escaped.push('\\');
         }
         escaped.push(c);
@@ -239,46 +245,54 @@ fn inline_text(s: &str, max_chars: usize) -> String {
     escaped
 }
 
-fn update_line(entry: &FeedEntry) -> String {
+/// Up to this many new articles of a source are announced one message each;
+/// more than that are listed in a single message for the source.
+const MAX_INDIVIDUAL_UPDATES: usize = 3;
+
+/// An article as a link (or as plain text when it has no usable one).
+fn article_text(entry: &FeedEntry) -> String {
     let linkable = (entry.id.starts_with("http://") || entry.id.starts_with("https://"))
-        && !entry.id.contains(|c: char| c.is_whitespace() || c == '>');
+        && !entry.id.contains(|c: char| c.is_whitespace() || c == '>')
+        && message_len(&entry.id) <= MAX_LINK_CHARS;
     let title = inline_text(&entry.title, MAX_TITLE_CHARS);
-    let source = inline_text(&entry.source_title, MAX_TITLE_CHARS);
 
     // Angle brackets keep Discord from unfurling a preview per article.
-    let mut line = match (linkable, title.is_empty()) {
-        (true, false) => format!("- [{title}](<{}>)", entry.id),
-        (true, true) => format!("- <{}>", entry.id),
-        (false, false) => format!("- {title}"),
-        (false, true) => format!("- {}", inline_text(&entry.id, MAX_TITLE_CHARS)),
-    };
-    if !source.is_empty() {
-        line.push_str(" — ");
-        line.push_str(&source);
+    match (linkable, title.is_empty()) {
+        (true, false) => format!("[{title}](<{}>)", entry.id),
+        (true, true) => format!("<{}>", entry.id),
+        (false, false) => title,
+        (false, true) => inline_text(&entry.id, MAX_TITLE_CHARS),
     }
-    line
 }
 
-/// The single message announcing everything one poll found for a channel.
+/// One article announced on its own: `[title](<link>) — source`.
+fn single_update_message(entry: &FeedEntry) -> String {
+    let article = article_text(entry);
+    let source = inline_text(&entry.source_title, MAX_TITLE_CHARS);
+    if source.is_empty() {
+        article
+    } else {
+        format!("{article} — {source}")
+    }
+}
+
+/// Many articles of one source in a single message, under a line naming it.
 ///
 /// Articles that would push it past Discord's length limit are summarised in
 /// a closing "and N more" line rather than spilling into a second message.
-#[must_use]
-pub fn build_updates_message(locale: &str, entries: &[FeedEntry]) -> String {
-    let mut message = if entries.len() == 1 {
-        t!("feeds.updates.header_one", locale = locale).to_string()
+fn source_updates_message(locale: &str, source: &str, entries: &[&FeedEntry]) -> String {
+    // The name's own colon, if it ends in one, would only be doubled.
+    let name = inline_text(source.trim_end_matches(':'), MAX_TITLE_CHARS);
+    let mut message = if name.is_empty() {
+        t!("feeds.updates.other", locale = locale).to_string()
     } else {
-        t!(
-            "feeds.updates.header_many",
-            locale = locale,
-            count = entries.len()
-        )
-        .to_string()
+        name
     };
+    message.push(':');
 
     let mut used = message_len(&message);
     for (i, entry) in entries.iter().enumerate() {
-        let line = update_line(entry);
+        let line = format!("\n- {}", article_text(entry));
         let remaining = entries.len() - i;
         let more = t!("feeds.updates.more", locale = locale, count = remaining).to_string();
         // Room is always kept for the closing line, unless this is the last
@@ -288,23 +302,53 @@ pub fn build_updates_message(locale: &str, entries: &[FeedEntry]) -> String {
         } else {
             message_len(&more) + 1
         };
-        let needed = message_len(&line) + 1;
-        if used + needed + reserve > MAX_MESSAGE_CHARS {
+        if used + message_len(&line) + reserve > MAX_MESSAGE_CHARS {
             message.push('\n');
             message.push_str(&more);
             break;
         }
-        message.push('\n');
+        used += message_len(&line);
         message.push_str(&line);
-        used += needed;
     }
     message
 }
 
+/// The messages announcing what one poll found for a channel, source by
+/// source in the order the sources first appear.
+///
+/// A source with a few new articles announces them one message each, oldest
+/// first, as a chat is read. One with more than [`MAX_INDIVIDUAL_UPDATES`]
+/// lists them in a single message of its own instead, so a busy source takes
+/// up one message rather than many. Feeds sharing a title are one source.
+#[must_use]
+pub fn build_updates_messages(locale: &str, entries: &[FeedEntry]) -> Vec<String> {
+    // Keyed by the name as it will be shown, so that two spellings rendering
+    // alike are not announced as two sources.
+    let mut sources: Vec<(String, Vec<&FeedEntry>)> = Vec::new();
+    for entry in entries {
+        let source = one_line(&entry.source_title);
+        match sources.iter_mut().find(|(s, _)| *s == source) {
+            Some((_, group)) => group.push(entry),
+            None => sources.push((source, vec![entry])),
+        }
+    }
+
+    let mut messages = Vec::new();
+    for (source, group) in sources {
+        if group.len() <= MAX_INDIVIDUAL_UPDATES {
+            // Feeds list their newest article first.
+            messages.extend(group.into_iter().rev().map(single_update_message));
+        } else {
+            messages.push(source_updates_message(locale, &source, &group));
+        }
+    }
+    messages
+}
+
 /// Adds one feed's unseen articles to the batch of every channel it is
-/// published to. A feed with nothing new adds nothing — not even an empty
-/// batch, which would be announced as "0 new articles" — and an article
-/// already batched for a channel through another feed is not repeated.
+/// published to. A feed with nothing new adds nothing, not even an empty
+/// batch, and an article already batched for a channel through another feed
+/// is not repeated.
 pub fn collect_updates(
     updates: &mut BTreeMap<PublishTarget, Vec<FeedEntry>>,
     targets: Option<&BTreeSet<PublishTarget>>,
@@ -354,7 +398,7 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
         // Everything polled in a pass is stamped with the time the pass
         // began, not the time its own fetch finished. Feeds polled together
         // thus fall due together again, which is what keeps a channel's
-        // updates in one message instead of drifting into separate passes.
+        // updates batched in one pass instead of drifting into separate ones.
         let pass_at = whole_seconds(chrono::Utc::now());
 
         for opml_url in configured_opml_urls(&config) {
@@ -425,19 +469,23 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
             let locale = config.locale_or_default(target.guild_id);
             // Suppressed outright as well as link by link: a bare URL inside
             // a title would otherwise still unfurl.
-            let message = CreateMessage::new()
-                .content(build_updates_message(locale, &entries))
-                .flags(serenity::all::MessageFlags::SUPPRESS_EMBEDS)
-                .allowed_mentions(CreateAllowedMentions::new());
-            if let Err(err) = ChannelId::new(target.channel_id)
-                .send_message(&http, message)
-                .await
-            {
-                tracing::error!(
-                    "failed to publish feed updates to channel {}: {}",
-                    target.channel_id,
-                    err
-                );
+            for content in build_updates_messages(locale, &entries) {
+                let message = CreateMessage::new()
+                    .content(content)
+                    .flags(serenity::all::MessageFlags::SUPPRESS_EMBEDS)
+                    .allowed_mentions(CreateAllowedMentions::new());
+                if let Err(err) = ChannelId::new(target.channel_id)
+                    .send_message(&http, message)
+                    .await
+                {
+                    tracing::error!(
+                        "failed to publish feed updates to channel {}: {}",
+                        target.channel_id,
+                        err
+                    );
+                    // A channel that refuses one message refuses the rest.
+                    break;
+                }
             }
         }
 
@@ -719,19 +767,35 @@ mod tests {
         assert!(publish_targets(&config, &HashMap::new()).is_empty());
     }
 
-    #[test]
-    fn one_update_is_announced_in_the_singular() {
-        let message = build_updates_message("en-US", &[entry("https://example.com/a", "First")]);
+    fn sourced(id: &str, title: &str, source: &str) -> FeedEntry {
+        FeedEntry {
+            source_title: source.to_string(),
+            ..entry(id, title)
+        }
+    }
 
-        assert_eq!(
-            message,
-            "📰 New article\n- [First](<https://example.com/a>) — Source"
-        );
+    /// The one message a source with too much to announce individually gets.
+    fn grouped(locale: &str, entries: &[FeedEntry]) -> String {
+        let mut messages = build_updates_messages(locale, entries);
+        assert_eq!(messages.len(), 1);
+        messages.remove(0)
     }
 
     #[test]
-    fn several_updates_share_one_message() {
-        let message = build_updates_message(
+    fn nothing_new_means_no_message() {
+        assert!(build_updates_messages("en-US", &[]).is_empty());
+    }
+
+    #[test]
+    fn one_article_is_announced_on_its_own_without_a_heading() {
+        let messages = build_updates_messages("en-US", &[entry("https://example.com/a", "First")]);
+
+        assert_eq!(messages, ["[First](<https://example.com/a>) — Source"]);
+    }
+
+    #[test]
+    fn up_to_three_articles_of_a_source_get_a_message_each() {
+        let messages = build_updates_messages(
             "en-US",
             &[
                 entry("https://example.com/a", "First"),
@@ -740,45 +804,223 @@ mod tests {
             ],
         );
 
+        // Feeds list the newest first; the channel reads oldest first.
         assert_eq!(
-            message,
-            "📰 3 new articles\n\
-             - [First](<https://example.com/a>) — Source\n\
-             - [Second](<https://example.com/b>) — Source\n\
-             - Third — Source"
+            messages,
+            [
+                "Third — Source",
+                "[Second](<https://example.com/b>) — Source",
+                "[First](<https://example.com/a>) — Source",
+            ]
         );
     }
 
     #[test]
-    fn updates_are_announced_in_the_guilds_locale() {
-        let message =
-            build_updates_message("fi-FI", &[entry("https://a", "A"), entry("https://b", "B")]);
+    fn the_fourth_article_of_a_source_turns_messages_into_a_list() {
+        let articles = |n: usize| -> Vec<FeedEntry> {
+            (0..n)
+                .map(|i| entry(&format!("https://example.com/{i}"), "T"))
+                .collect()
+        };
 
-        assert!(message.starts_with("📰 2 uutta artikkelia\n"));
+        assert_eq!(build_updates_messages("en-US", &articles(3)).len(), 3);
+        assert_eq!(build_updates_messages("en-US", &articles(4)).len(), 1);
     }
 
     #[test]
-    fn titles_cannot_break_the_link_or_the_list() {
-        let mut odd = entry("https://example.com/a", "  A [LEGO]\n review  ");
-        odd.source_title = String::new();
-        let untitled = entry("https://example.com/b", "");
-
-        let message = build_updates_message("en-US", &[odd, untitled]);
+    fn more_than_three_articles_of_a_source_share_one_message() {
+        let entries: Vec<FeedEntry> = (1..=4)
+            .map(|i| {
+                sourced(
+                    &format!("https://a.example/{i}"),
+                    &format!("A {i}"),
+                    "Brothers Brick",
+                )
+            })
+            .collect();
 
         assert_eq!(
-            message,
-            "📰 2 new articles\n\
-             - [A (LEGO) review](<https://example.com/a>)\n\
-             - <https://example.com/b> — Source"
+            grouped("en-US", &entries),
+            "Brothers Brick:\n\
+             - [A 1](<https://a.example/1>)\n\
+             - [A 2](<https://a.example/2>)\n\
+             - [A 3](<https://a.example/3>)\n\
+             - [A 4](<https://a.example/4>)"
         );
+    }
+
+    #[test]
+    fn each_source_is_announced_separately() {
+        // Interleaved as two feeds polled in one pass never are, to show that
+        // the sources are told apart by name, not by position.
+        let mut entries = vec![sourced("https://b.example/1", "B 1", "Brickset")];
+        entries.extend((1..=4).map(|i| {
+            sourced(
+                &format!("https://a.example/{i}"),
+                &format!("A {i}"),
+                "Brothers Brick",
+            )
+        }));
+        entries.push(sourced("urn:b2", "B 2", " Brickset "));
+
+        let messages = build_updates_messages("en-US", &entries);
+
+        // Brickset has two, so each stands alone; Brothers Brick has four,
+        // so they are listed together — in a message of their own.
+        assert_eq!(
+            messages,
+            [
+                "B 2 — Brickset",
+                "[B 1](<https://b.example/1>) — Brickset",
+                "Brothers Brick:\n\
+                 - [A 1](<https://a.example/1>)\n\
+                 - [A 2](<https://a.example/2>)\n\
+                 - [A 3](<https://a.example/3>)\n\
+                 - [A 4](<https://a.example/4>)",
+            ]
+        );
+    }
+
+    #[test]
+    fn two_busy_sources_get_a_message_each() {
+        let entries: Vec<FeedEntry> = (0..8)
+            .map(|i| {
+                sourced(
+                    &format!("https://example.com/{i}"),
+                    "T",
+                    if i < 4 { "One" } else { "Two" },
+                )
+            })
+            .collect();
+
+        let messages = build_updates_messages("en-US", &entries);
+
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].starts_with("One:\n- "));
+        assert!(messages[1].starts_with("Two:\n- "));
+        assert_eq!(messages[1].lines().count(), 5);
+    }
+
+    #[test]
+    fn articles_of_a_nameless_source_are_listed_under_a_localized_heading() {
+        let entries: Vec<FeedEntry> = (0..4)
+            .map(|i| sourced(&format!("https://example.com/{i}"), "T", ""))
+            .collect();
+
+        assert!(grouped("en-US", &entries).starts_with("Other:\n- "));
+        assert!(grouped("fi-FI", &entries).starts_with("Muut:\n- "));
+    }
+
+    #[test]
+    fn titles_cannot_break_the_link() {
+        let odd = sourced("https://example.com/a", "  A [LEGO]\n review  ", "One");
+        let untitled = sourced("https://example.com/b", "", "Two");
+        let bare = sourced("urn:c", "", "");
+
+        let messages = build_updates_messages("en-US", &[odd, untitled, bare]);
+
+        assert_eq!(
+            messages,
+            [
+                "[A (LEGO) review](<https://example.com/a>) — One",
+                "<https://example.com/b> — Two",
+                "urn:c",
+            ]
+        );
+    }
+
+    #[test]
+    fn titles_cannot_break_the_list() {
+        let mut entries: Vec<FeedEntry> = (0..3)
+            .map(|i| entry(&format!("https://example.com/{i}"), "T"))
+            .collect();
+        entries.push(entry("https://example.com/odd", " A [LEGO]\n review "));
+
+        let message = grouped("en-US", &entries);
+
+        assert_eq!(message.lines().count(), 5);
+        assert!(message.ends_with("\n- [A (LEGO) review](<https://example.com/odd>)"));
+    }
+
+    #[test]
+    fn text_that_starts_a_message_cannot_become_a_heading_or_quote() {
+        let alone = sourced("urn:a", "# Sale", "");
+        let listed: Vec<FeedEntry> = (0..4)
+            .map(|i| sourced(&format!("https://example.com/{i}"), "- T", "> Blog_news:"))
+            .collect();
+
+        assert_eq!(build_updates_messages("en-US", &[alone]), [r"\# Sale"]);
+        let message = grouped("en-US", &listed);
+        // The name is escaped, and its own colon is not doubled.
+        assert!(message.starts_with("\\> Blog\\_news:\n- [\\- T](<https://example.com/0>)"));
+    }
+
+    #[test]
+    fn spellings_that_render_alike_are_one_source() {
+        let mut entries: Vec<FeedEntry> = (0..2)
+            .map(|i| sourced(&format!("https://a.example/{i}"), "T", "Brick  Blog"))
+            .collect();
+        entries.extend(
+            (0..2).map(|i| sourced(&format!("https://b.example/{i}"), "T", " Brick Blog\n")),
+        );
+
+        let message = grouped("en-US", &entries);
+
+        assert!(message.starts_with("Brick Blog:\n"));
+        assert_eq!(message.lines().count(), 5);
+    }
+
+    #[test]
+    fn an_overlong_link_does_not_hide_the_articles_after_it() {
+        let long = format!("https://example.com/{}", "a".repeat(3000));
+        let mut entries = vec![entry(&long, "Long one")];
+        entries.extend((0..4).map(|i| entry(&format!("https://example.com/{i}"), "T")));
+
+        let message = grouped("en-US", &entries);
+
+        assert!(message.starts_with("Source:\n- Long one\n- [T](<https://example.com/0>)"));
+        assert_eq!(message.lines().count(), 6);
+        assert!(!message.contains("more"));
+    }
+
+    #[test]
+    fn an_untitled_article_with_an_overlong_link_is_still_named() {
+        let long = format!("https://example.com/{}", "a".repeat(3000));
+
+        let messages = build_updates_messages("en-US", &[sourced(&long, "", "")]);
+
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].starts_with("https://example.com/aaa"));
+        assert!(messages[0].ends_with('…'));
+        assert!(message_len(&messages[0]) <= MAX_TITLE_CHARS);
+    }
+
+    #[test]
+    fn an_article_identified_by_whitespace_alone_is_skipped() {
+        let rss_data = r#"<?xml version="1.0" encoding="UTF-8" ?>
+        <rss version="2.0"><channel>
+          <title>Bricks</title><link>https://example.com</link><description>d</description>
+          <item><title>Blank guid</title><guid>   </guid></item>
+        </channel></rss>"#;
+
+        assert!(feed_entries(&parse_feed(rss_data.as_bytes()).unwrap()).is_empty());
     }
 
     #[test]
     fn long_titles_are_shortened() {
-        let message =
-            build_updates_message("en-US", &[entry("https://example.com/a", &"x".repeat(500))]);
+        let messages =
+            build_updates_messages("en-US", &[entry("https://example.com/a", &"x".repeat(500))]);
 
-        assert!(message.contains(&format!("[{}…]", "x".repeat(MAX_TITLE_CHARS - 1))));
+        assert!(messages[0].contains(&format!("[{}…]", "x".repeat(MAX_TITLE_CHARS - 1))));
+    }
+
+    #[test]
+    fn a_link_too_long_to_send_is_left_out() {
+        let url = format!("https://example.com/{}", "a".repeat(3000));
+
+        let messages = build_updates_messages("en-US", &[entry(&url, "Title")]);
+
+        assert_eq!(messages, ["Title — Source"]);
     }
 
     #[test]
@@ -787,25 +1029,37 @@ mod tests {
             .map(|i| entry(&format!("https://example.com/{i}"), &"t".repeat(100)))
             .collect();
 
-        let message = build_updates_message("en-US", &entries);
+        let message = grouped("en-US", &entries);
 
         assert!(message_len(&message) <= MAX_MESSAGE_CHARS);
         let listed = message.lines().filter(|l| l.starts_with("- ")).count();
         assert!(listed > 0 && listed < 200);
-        assert!(message.starts_with("📰 200 new articles\n"));
-        assert!(message.ends_with(&format!("…and {} more", 200 - listed)));
+        assert!(message.starts_with("Source:\n- "));
+        assert!(message.ends_with(&format!("\n…and {} more", 200 - listed)));
     }
 
     #[test]
-    fn a_batch_that_just_fits_has_no_closing_line() {
+    fn a_batch_that_fits_has_no_closing_line() {
         let entries: Vec<FeedEntry> = (0..5)
             .map(|i| entry(&format!("https://example.com/{i}"), "Title"))
             .collect();
 
-        let message = build_updates_message("en-US", &entries);
+        let message = grouped("en-US", &entries);
 
         assert_eq!(message.lines().count(), 6);
         assert!(!message.contains("more"));
+    }
+
+    #[test]
+    fn the_closing_line_is_localized() {
+        let entries: Vec<FeedEntry> = (0..200)
+            .map(|i| entry(&format!("https://example.com/{i}"), &"t".repeat(100)))
+            .collect();
+
+        let message = grouped("fi-FI", &entries);
+
+        assert!(message.lines().last().unwrap().starts_with("…ja "));
+        assert!(message.ends_with(" muuta"));
     }
 
     #[test]
@@ -815,7 +1069,7 @@ mod tests {
             .map(|i| entry(&format!("https://example.com/{i}"), &"🧱".repeat(100)))
             .collect();
 
-        let message = build_updates_message("en-US", &entries);
+        let message = grouped("en-US", &entries);
 
         assert!(message.encode_utf16().count() <= MAX_MESSAGE_CHARS);
         assert!(message.contains("more"));
@@ -823,7 +1077,7 @@ mod tests {
 
     #[test]
     fn markdown_in_a_title_is_escaped() {
-        let message = build_updates_message(
+        let messages = build_updates_messages(
             "en-US",
             &[entry(
                 "https://example.com/a",
@@ -832,17 +1086,17 @@ mod tests {
         );
 
         assert_eq!(
-            message.lines().nth(1).unwrap(),
-            r"- [\*New\* set\_42 \`x\` \|\|y\|\| \~\~z\~\~ \\](<https://example.com/a>) — Source"
+            messages[0],
+            r"[\*New\* set\_42 \`x\` \|\|y\|\| \~\~z\~\~ \\](<https://example.com/a>) — Source"
         );
     }
 
     #[test]
     fn a_link_with_parentheses_is_still_a_link() {
-        let message =
-            build_updates_message("en-US", &[entry("https://example.com/Lego_(toy)", "Lego")]);
+        let messages =
+            build_updates_messages("en-US", &[entry("https://example.com/Lego_(toy)", "Lego")]);
 
-        assert!(message.contains("[Lego](<https://example.com/Lego_(toy)>)"));
+        assert!(messages[0].contains("[Lego](<https://example.com/Lego_(toy)>)"));
     }
 
     const ONE: PublishTarget = PublishTarget {

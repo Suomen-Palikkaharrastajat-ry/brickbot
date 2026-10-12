@@ -448,6 +448,5 @@ errors:
 
 feeds:
   updates:
-    header_one: "📰 New article"
-    header_many: "📰 %{count} new articles"
+    other: "Other"
     more: "…and %{count} more"

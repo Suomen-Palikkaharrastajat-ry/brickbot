@@ -218,7 +218,7 @@ Because the bot re-executes the path it was started with, a reload also picks up
 ### RSS, ATOM & OPML Polling
 The bot automatically fetches the defined `feed_urls` and `opml_urls` at the specified `poll_interval`. Feeds are parsed to support both RSS and ATOM formats.
 
-A guild can have new articles posted to its channels with `[[guilds.feeds]]` sections. All articles found by one poll go into a single message per channel, and only articles that appear after the bot was last (re)started are announced. See [`docs/news.md`](docs/news.md).
+A guild can have new articles posted to its channels with `[[guilds.feeds]]` sections. Each source is announced separately: up to three new articles of a source get one message each, more are listed in a single message for that source. Only articles that appear after the bot was last (re)started are announced. See [`docs/news.md`](docs/news.md).
 
 ### Event Synchronization
 The bot continuously syncs events from PocketBase into Discord's native Scheduled Events system. 

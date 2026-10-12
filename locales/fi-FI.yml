@@ -448,6 +448,5 @@ errors:
 
 feeds:
   updates:
-    header_one: "📰 Uusi artikkeli"
-    header_many: "📰 %{count} uutta artikkelia"
+    other: "Muut"
     more: "…ja %{count} muuta"

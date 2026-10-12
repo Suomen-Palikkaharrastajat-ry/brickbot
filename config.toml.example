@@ -134,8 +134,10 @@
 # enable_fallback_mention = false
 #
 # # Publish new feed articles to a channel of this guild (repeatable).
-# # All articles found by one poll are posted as a single message, and only
-# # articles appearing after the bot was last (re)started are announced.
+# # Each source is announced separately: up to three new articles of a source
+# # are posted one message each, more are listed in one message for that
+# # source. Only articles appearing after the bot was last (re)started are
+# # announced.
 # # Without feed_urls/opml_urls the section follows every global [[feeds]].
 # [[guilds.feeds]]
 # channel_id = 234567890123456789
