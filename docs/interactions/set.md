@@ -12,9 +12,12 @@ The `set` interaction provides detailed information about LEGO sets. Unlike trad
 - **Related Articles**: Searches the local `feed_items` database for any recent RSS/Atom articles matching the set number and appends links to the results directly beneath the set embed.
 - **Service Links**: Users can select which third-party services they want links for via a dropdown menu (`update_services_set`). Supported services include:
   - BrickLink
-  - LEGO.com
   - Brickset
+  - LEGO.com
   - Rebrickable
+  - Articles — offered only when the set has related articles
+
+  The choice is remembered per user and shared with the part lookup. A menu only changes the services it offers: one that is not on offer this time (articles for a set without any) keeps its setting.
 - **Localization**: Fully localized using `rust-i18n` (supports `en-US` and `fi-FI`).
 
 ## Internal Implementation

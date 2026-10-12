@@ -98,33 +98,14 @@ pub async fn build_set_response_data(
                 .add_embed(*embed)
                 .ephemeral(preview_mode);
 
-            let mut options = vec![
-                CreateSelectMenuOption::new("BrickLink", "bricklink")
-                    .default_selection(default_services.contains(&"bricklink".to_string())),
-                CreateSelectMenuOption::new("Brickset", "brickset")
-                    .default_selection(default_services.contains(&"brickset".to_string())),
-                CreateSelectMenuOption::new("LEGO.com", "lego")
-                    .default_selection(default_services.contains(&"lego".to_string())),
-                CreateSelectMenuOption::new("Rebrickable", "rebrickable")
-                    .default_selection(default_services.contains(&"rebrickable".to_string())),
-            ];
-
-            if has_articles {
-                options.push(
-                    CreateSelectMenuOption::new(
-                        t!("command.set.articles", locale = locale),
-                        "articles",
-                    )
-                    .default_selection(default_services.contains(&"articles".to_string())),
-                );
-            }
-            let select = CreateSelectMenu::new(
+            let articles_label =
+                has_articles.then(|| t!("command.set.articles", locale = locale).to_string());
+            let options = set_service_options(&default_services, articles_label);
+            let select = services_select(
                 format!("update_services_set:{query}"),
-                CreateSelectMenuKind::String { options },
-            )
-            .min_values(0)
-            .max_values(5)
-            .placeholder(t!("modal.services.placeholder", locale = locale));
+                options,
+                t!("modal.services.placeholder", locale = locale),
+            );
 
             let mut components = vec![];
 
@@ -211,12 +192,8 @@ pub async fn handle_update_services_set(
 ) -> anyhow::Result<()> {
     let set_num = arg.unwrap_or_default();
     if let ComponentInteractionDataKind::StringSelect { values } = &interaction.data.kind {
-        let services = values.clone();
-
         let user_id = interaction.user.id.get().to_string();
-        let services_str = services.join(",");
-        let _ =
-            crate::db::update_user_preferred_services(&app_ctx.db, &user_id, &services_str).await;
+        save_selected_services(app_ctx, interaction, &user_id, values).await;
 
         let preview_mode = interaction
             .message
@@ -338,29 +315,12 @@ pub async fn build_part_response_data(
                 .add_embed(*embed)
                 .ephemeral(preview_mode);
 
-            let mut options = vec![
-                CreateSelectMenuOption::new("BrickLink", "bricklink")
-                    .default_selection(default_services.contains(&"bricklink".to_string())),
-            ];
-            if in_production {
-                options.push(
-                    CreateSelectMenuOption::new("LEGO Pick a Brick", "lego")
-                        .default_selection(default_services.contains(&"lego".to_string())),
-                );
-            }
-            options.push(
-                CreateSelectMenuOption::new("Rebrickable", "rebrickable")
-                    .default_selection(default_services.contains(&"rebrickable".to_string())),
-            );
-
-            let max_vals = if in_production { 3 } else { 2 };
-            let select = CreateSelectMenu::new(
+            let options = part_service_options(&default_services, in_production);
+            let select = services_select(
                 format!("update_services_part:{query}"),
-                CreateSelectMenuKind::String { options },
-            )
-            .min_values(0)
-            .max_values(max_vals)
-            .placeholder(t!("modal.services.placeholder", locale = locale));
+                options,
+                t!("modal.services.placeholder", locale = locale),
+            );
 
             let mut components = vec![];
 
@@ -444,12 +404,8 @@ pub async fn handle_update_services_part(
 ) -> anyhow::Result<()> {
     let query = arg.unwrap_or_default();
     if let ComponentInteractionDataKind::StringSelect { values } = &interaction.data.kind {
-        let services = values.clone();
-
         let user_id = interaction.user.id.get().to_string();
-        let services_str = services.join(",");
-        let _ =
-            crate::db::update_user_preferred_services(&app_ctx.db, &user_id, &services_str).await;
+        save_selected_services(app_ctx, interaction, &user_id, values).await;
 
         let preview_mode = interaction
             .message
@@ -511,7 +467,8 @@ pub async fn handle_workflow_set_search(
         "set_number_input",
     )
     .placeholder(t!("modal.set_search.input_placeholder", locale = locale))
-    .required(true);
+    .required(true)
+    .max_length(MAX_SEARCH_QUERY);
 
     let mut modal_id = "modal_set_search".to_string();
     if let Some(val) = arg {
@@ -563,7 +520,8 @@ pub async fn handle_workflow_part_search(
         "part_number_input",
     )
     .placeholder(t!("modal.part_search.input_placeholder", locale = locale))
-    .required(true);
+    .required(true)
+    .max_length(MAX_SEARCH_QUERY);
 
     let mut modal_id = "modal_part_search".to_string();
     if let Some(val) = arg {
@@ -868,7 +826,8 @@ pub async fn handle_part_search_again(
         "part_query",
     )
     .placeholder(t!("modal.part_search.input_placeholder", locale = locale))
-    .required(true);
+    .required(true)
+    .max_length(MAX_SEARCH_QUERY);
 
     if let Some(val) = arg {
         let parts: Vec<&str> = val.split(':').collect();
@@ -1017,7 +976,8 @@ pub async fn handle_set_search_again(
         "set_number_input",
     )
     .placeholder(t!("modal.set_search.input_placeholder", locale = locale))
-    .required(true);
+    .required(true)
+    .max_length(MAX_SEARCH_QUERY);
 
     if let Some(val) = arg {
         let parts: Vec<&str> = val.split(':').collect();
@@ -1037,4 +997,244 @@ pub async fn handle_set_search_again(
         .await?;
 
     Ok(())
+}
+
+/// The longest search query accepted from a modal or a slash command.
+///
+/// Queries travel on in component custom ids (`update_services_part:{query}`
+/// being the longest prefix), which Discord caps at 100 characters.
+pub const MAX_SEARCH_QUERY: u16 = 75;
+
+/// The services preselected for someone who has never chosen any.
+const DEFAULT_SERVICES: [&str; 3] = ["bricklink", "lego", "articles"];
+
+fn service_option(
+    label: impl Into<String>,
+    value: &str,
+    selected: &[String],
+) -> CreateSelectMenuOption {
+    CreateSelectMenuOption::new(label, value).default_selection(selected.iter().any(|s| s == value))
+}
+
+/// The services offered for a set. Articles are only offered when the set has
+/// some, which `articles_label` being present says.
+fn set_service_options(
+    selected: &[String],
+    articles_label: Option<String>,
+) -> Vec<CreateSelectMenuOption> {
+    let mut options = vec![
+        service_option("BrickLink", "bricklink", selected),
+        service_option("Brickset", "brickset", selected),
+        service_option("LEGO.com", "lego", selected),
+        service_option("Rebrickable", "rebrickable", selected),
+    ];
+    if let Some(label) = articles_label {
+        options.push(service_option(label, "articles", selected));
+    }
+    options
+}
+
+/// The services offered for a part. Pick a Brick only sells what is still in
+/// production.
+fn part_service_options(selected: &[String], in_production: bool) -> Vec<CreateSelectMenuOption> {
+    let mut options = vec![service_option("BrickLink", "bricklink", selected)];
+    if in_production {
+        options.push(service_option("LEGO Pick a Brick", "lego", selected));
+    }
+    options.push(service_option("Rebrickable", "rebrickable", selected));
+    options
+}
+
+/// The multi-select of services to show links for: any number of them, up to
+/// all that are offered.
+///
+/// The upper bound is taken from the options themselves because Discord
+/// rejects the whole response when `max_values` exceeds their number, and the
+/// number varies (the articles option is only there when there are articles).
+fn services_select(
+    custom_id: String,
+    options: Vec<CreateSelectMenuOption>,
+    placeholder: impl Into<String>,
+) -> CreateSelectMenu {
+    // Discord allows 1 to 25.
+    let max_values = u8::try_from(options.len().clamp(1, 25)).unwrap_or(25);
+    CreateSelectMenu::new(custom_id, CreateSelectMenuKind::String { options })
+        .min_values(0)
+        .max_values(max_values)
+        .placeholder(placeholder)
+}
+
+/// A person's services after they submitted a services menu.
+///
+/// Only what the menu offered is theirs to switch off. The menus differ — a
+/// part's has no Brickset, a set without articles has no articles — so taking
+/// the submission as the whole truth would drop every service that simply was
+/// not on offer this time.
+fn merge_services(stored: &[String], offered: &[String], selected: &[String]) -> Vec<String> {
+    let mut merged: Vec<String> = stored
+        .iter()
+        .filter(|s| !offered.contains(s))
+        .cloned()
+        .collect();
+    for service in selected {
+        if !merged.contains(service) {
+            merged.push(service.clone());
+        }
+    }
+    merged
+}
+
+/// The values of the menu the interaction came from.
+fn offered_services(interaction: &ComponentInteraction) -> Vec<String> {
+    interaction
+        .message
+        .components
+        .iter()
+        .flat_map(|row| &row.components)
+        .find_map(|component| match component {
+            ActionRowComponent::SelectMenu(menu)
+                if menu.custom_id.as_deref() == Some(interaction.data.custom_id.as_str()) =>
+            {
+                Some(menu.options.iter().map(|o| o.value.clone()).collect())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+async fn save_selected_services(
+    app_ctx: &AppContext,
+    interaction: &ComponentInteraction,
+    user_id: &str,
+    selected: &[String],
+) {
+    let stored: Vec<String> =
+        match crate::db::get_user_preferred_services(&app_ctx.db, user_id).await {
+            Ok(Some(services)) => services
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect(),
+            _ => DEFAULT_SERVICES.iter().map(ToString::to_string).collect(),
+        };
+    let services = merge_services(&stored, &offered_services(interaction), selected).join(",");
+    let _ = crate::db::update_user_preferred_services(&app_ctx.db, user_id, &services).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(ToString::to_string).collect()
+    }
+
+    /// Serializes a services menu and checks what Discord checks: it never
+    /// allows more than it offers, nor preselects more than it allows.
+    fn checked(options: Vec<CreateSelectMenuOption>) -> Vec<serde_json::Value> {
+        let select = services_select("id".to_string(), options, "Pick");
+        let json = serde_json::to_value(select).unwrap();
+        let options = json["options"].as_array().unwrap().clone();
+        let preselected = options.iter().filter(|o| o["default"] == true).count();
+
+        assert_eq!(json["min_values"], 0);
+        assert_eq!(json["max_values"], options.len());
+        assert!(preselected <= options.len());
+        options
+    }
+
+    fn values(options: &[serde_json::Value]) -> Vec<&str> {
+        options
+            .iter()
+            .map(|o| o["value"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_set_without_articles_offers_four_services() {
+        // Discord rejected this menu while its limit stayed at five.
+        let options = checked(set_service_options(&strings(&["lego", "articles"]), None));
+
+        assert_eq!(
+            values(&options),
+            ["bricklink", "brickset", "lego", "rebrickable"]
+        );
+        assert_eq!(options[2]["default"], true);
+    }
+
+    #[test]
+    fn a_set_with_articles_offers_them_too() {
+        let options = checked(set_service_options(
+            &strings(&["articles"]),
+            Some("Articles".to_string()),
+        ));
+
+        assert_eq!(options.len(), 5);
+        assert_eq!(options[4]["value"], "articles");
+        assert_eq!(options[4]["label"], "Articles");
+        assert_eq!(options[4]["default"], true);
+    }
+
+    #[test]
+    fn a_part_offers_pick_a_brick_only_while_in_production() {
+        let selected = strings(&["bricklink", "lego"]);
+
+        let current = checked(part_service_options(&selected, true));
+        let retired = checked(part_service_options(&selected, false));
+
+        assert_eq!(values(&current), ["bricklink", "lego", "rebrickable"]);
+        assert_eq!(values(&retired), ["bricklink", "rebrickable"]);
+    }
+
+    #[test]
+    fn the_limit_stays_within_what_discord_accepts() {
+        let many = (0..40)
+            .map(|i| CreateSelectMenuOption::new(format!("Service {i}"), i.to_string()))
+            .collect();
+
+        let json = serde_json::to_value(services_select("id".to_string(), many, "Pick")).unwrap();
+        let none = serde_json::to_value(services_select("id".to_string(), vec![], "Pick")).unwrap();
+
+        assert_eq!(json["max_values"], 25);
+        assert_eq!(none["max_values"], 1);
+    }
+
+    #[test]
+    fn a_service_that_was_not_offered_is_kept() {
+        // A set without articles: the menu had no articles option to untick.
+        let merged = merge_services(
+            &strings(&["bricklink", "lego", "articles"]),
+            &strings(&["bricklink", "brickset", "lego", "rebrickable"]),
+            &strings(&["brickset"]),
+        );
+
+        assert_eq!(merged, ["articles", "brickset"]);
+    }
+
+    #[test]
+    fn a_service_that_was_offered_and_left_out_is_dropped() {
+        let offered = strings(&["bricklink", "lego", "rebrickable"]);
+
+        let merged = merge_services(&strings(&["bricklink", "lego"]), &offered, &[]);
+
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn a_part_menu_does_not_wipe_the_set_services() {
+        let merged = merge_services(
+            &strings(&["brickset", "articles", "lego"]),
+            &strings(&["bricklink", "rebrickable"]),
+            &strings(&["bricklink"]),
+        );
+
+        assert_eq!(merged, ["brickset", "articles", "lego", "bricklink"]);
+    }
+
+    #[test]
+    fn a_search_query_fits_in_every_custom_id() {
+        let longest_prefix = "update_services_part:".len();
+
+        assert!(longest_prefix + usize::from(MAX_SEARCH_QUERY) <= 100);
+    }
 }

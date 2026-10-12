@@ -65,11 +65,10 @@ pub async fn part_interaction(
                     .take(25)
                     .map(|r| {
                         let label = format!("{} - {}", r.part_num, r.name);
-                        let truncated_label = if label.len() > 100 {
-                            format!("{}...", &label[..97])
-                        } else {
-                            label
-                        };
+                        let truncated_label = crate::discord_limits::truncate(
+                            &label,
+                            crate::discord_limits::MAX_SELECT_OPTION_LABEL,
+                        );
                         serenity::all::CreateSelectMenuOption::new(truncated_label, r.part_num)
                     })
                     .collect();
@@ -199,6 +198,7 @@ pub fn build_part_command(locale: &str) -> serenity::all::CreateCommand {
     let part_option =
         CreateCommandOption::new(CommandOptionType::String, &part_arg_name, &part_desc)
             .required(true)
+            .max_length(crate::workflows::search::MAX_SEARCH_QUERY)
             .set_autocomplete(true);
 
     CreateCommand::new(&cmd_name)

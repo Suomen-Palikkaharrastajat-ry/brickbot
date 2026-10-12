@@ -65,11 +65,10 @@ pub async fn set_interaction(
                     .map(|r| {
                         let set_id = format!("{}-{}", r.number, r.numberVariant);
                         let label = format!("{} - {}", set_id, r.name);
-                        let truncated_label = if label.len() > 100 {
-                            format!("{}...", &label[..97])
-                        } else {
-                            label
-                        };
+                        let truncated_label = crate::discord_limits::truncate(
+                            &label,
+                            crate::discord_limits::MAX_SELECT_OPTION_LABEL,
+                        );
                         serenity::all::CreateSelectMenuOption::new(truncated_label, set_id)
                     })
                     .collect();
@@ -203,7 +202,8 @@ pub fn build_set_command(locale: &str) -> serenity::all::CreateCommand {
     let set_desc = rust_i18n::t!("command.set.set_desc", locale = locale).to_string();
 
     let set_option = CreateCommandOption::new(CommandOptionType::String, &set_arg_name, &set_desc)
-        .required(true);
+        .required(true)
+        .max_length(crate::workflows::search::MAX_SEARCH_QUERY);
 
     CreateCommand::new(&cmd_name)
         .description(&cmd_desc)
