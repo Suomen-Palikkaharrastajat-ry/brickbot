@@ -364,6 +364,26 @@ pub struct GuildFeedConfig {
     pub feed_urls: Vec<String>,
     #[serde(default)]
     pub opml_urls: Vec<String>,
+    /// Feeds served from these domains, or their subdomains, are not
+    /// published to this channel, wherever the section got them from. Added
+    /// to the global `[[feeds]]` entries' `blocked_domains`, which always
+    /// apply.
+    #[serde(default)]
+    pub blocked_domains: Vec<String>,
+}
+
+/// Whether a `blocked_domains` entry is a plain host name such as
+/// `example.com`: no scheme, port, path or wildcard, and not the tail of an
+/// IP address.
+fn is_bare_domain(domain: &str) -> bool {
+    !domain.is_empty()
+        && !domain
+            .rsplit('.')
+            .next()
+            .is_some_and(|tld| tld.chars().all(|c| c.is_ascii_digit()))
+        && domain.split('.').all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -372,6 +392,10 @@ pub struct RssFeedConfig {
     pub feed_urls: Vec<String>,
     #[serde(default)]
     pub opml_urls: Vec<String>,
+    /// Domains blocked in every guild's `feeds` sections by default; a
+    /// section's own `blocked_domains` add to these.
+    #[serde(default)]
+    pub blocked_domains: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -584,6 +608,13 @@ impl Config {
                 ));
             }
         }
+        for domain in self.feeds.iter().flat_map(|f| &f.blocked_domains) {
+            if !is_bare_domain(domain) {
+                errors.push(format!(
+                    "feeds blocked_domains entry must be a bare domain such as example.com: {domain:?}"
+                ));
+            }
+        }
         let has_global_feeds = self
             .feeds
             .iter()
@@ -607,6 +638,14 @@ impl Config {
                         "feeds channel_id {} is listed under guilds {} and {}",
                         section.channel_id, owner, guild.guild_id
                     ));
+                }
+                for domain in &section.blocked_domains {
+                    if !is_bare_domain(domain) {
+                        errors.push(format!(
+                            "guild {} feeds blocked_domains entry must be a bare domain such as example.com: {domain:?}",
+                            guild.guild_id
+                        ));
+                    }
                 }
                 if section.feed_urls.is_empty() && section.opml_urls.is_empty() && !has_global_feeds
                 {
@@ -1276,6 +1315,92 @@ mod tests {
         assert!(errors.iter().any(|e| e.contains("channel_id cannot be 0")));
         assert!(errors.iter().any(|e| e.starts_with("Feed URL must")));
         assert!(errors.iter().any(|e| e.starts_with("OPML URL must")));
+    }
+
+    #[test]
+    fn a_feeds_section_may_block_domains() {
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/rss"]
+            blocked_domains = ["kuvat.fi", "Flickr.com", "xn--hkyrinen-0zab.fi"]
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.validate().is_ok());
+        assert_eq!(
+            config.guilds[0].feeds[0].blocked_domains,
+            ["kuvat.fi", "Flickr.com", "xn--hkyrinen-0zab.fi"]
+        );
+    }
+
+    #[test]
+    fn global_feeds_may_block_domains_too() {
+        let config: Config = toml::from_str(
+            r#"
+            [[feeds]]
+            feed_urls = ["https://example.com/rss"]
+            blocked_domains = ["kuvat.fi"]
+
+            [[feeds]]
+            blocked_domains = ["https://flickr.com"]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.feeds[0].blocked_domains, ["kuvat.fi"]);
+        let errors = config.validate().unwrap_err();
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|e| e.contains("blocked_domains"))
+                .collect::<Vec<_>>(),
+            [
+                "feeds blocked_domains entry must be a bare domain such as example.com: \"https://flickr.com\""
+            ]
+        );
+    }
+
+    #[test]
+    fn blocked_domains_must_be_bare_domains() {
+        for bad in [
+            "",
+            "https://flickr.com",
+            "flickr.com/photos",
+            "flickr.com:443",
+            "*.flickr.com",
+            ".flickr.com",
+            "flickr.com.",
+            "flickr com",
+            // Would match the tail of an IP address.
+            "1.1",
+        ] {
+            let config: Config = toml::from_str(&format!(
+                r#"
+                [[guilds]]
+                guild_id = 1
+
+                [[guilds.feeds]]
+                channel_id = 10
+                feed_urls = ["https://example.com/rss"]
+                blocked_domains = ["{bad}"]
+                "#
+            ))
+            .unwrap();
+
+            let errors = config.validate().unwrap_err();
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains("blocked_domains") && e.contains("guild 1")),
+                "{bad:?} should be rejected, got {errors:?}"
+            );
+        }
     }
 
     #[test]

@@ -44,6 +44,36 @@ pub struct FeedEntry {
     pub source_title: String,
     pub title: String,
     pub description: String,
+    /// When the feed says the article was published, if it says so legibly.
+    pub published: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Dates outside this range are placeholders for "unknown" — the Unix epoch,
+/// year 1, year 9999 — rather than when anything was published.
+const PLAUSIBLE_DATES: std::ops::Range<i64> = 1..4_102_444_800;
+
+/// A date only if it could be a real publication date.
+fn plausible_date<Tz: chrono::TimeZone>(
+    at: &chrono::DateTime<Tz>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    PLAUSIBLE_DATES
+        .contains(&at.timestamp())
+        .then(|| at.to_utc())
+}
+
+/// Reads a date as feeds write it: RFC 2822, which RSS asks for, or the
+/// RFC 3339 that Dublin Core and many RSS feeds use instead.
+#[must_use]
+pub fn parse_feed_date(text: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let text = text.trim();
+    // A common zone name the RFC 2822 parser does not know.
+    let rfc2822 = text
+        .strip_suffix(" UTC")
+        .map_or_else(|| text.to_string(), |rest| format!("{rest} +0000"));
+    chrono::DateTime::parse_from_rfc2822(&rfc2822)
+        .or_else(|_| chrono::DateTime::parse_from_rfc3339(text))
+        .ok()
+        .and_then(|at| plausible_date(&at))
 }
 
 /// The articles of a parsed feed, skipping any that cannot be identified.
@@ -62,6 +92,10 @@ pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
                     source_title: channel.title().to_string(),
                     title: item.title().unwrap_or_default().to_string(),
                     description: item.description().unwrap_or_default().to_string(),
+                    published: item.pub_date().and_then(parse_feed_date).or_else(|| {
+                        item.dublin_core_ext()
+                            .and_then(|dc| dc.dates().iter().find_map(|d| parse_feed_date(d)))
+                    }),
                 });
             }
         }
@@ -82,6 +116,12 @@ pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
                         .or_else(|| entry.content.as_ref().and_then(|c| c.value.as_deref()))
                         .unwrap_or_default()
                         .to_string(),
+                    // A missing `updated` is parsed as the Unix epoch.
+                    published: entry
+                        .published
+                        .as_ref()
+                        .and_then(plausible_date)
+                        .or_else(|| plausible_date(&entry.updated)),
                 });
             }
         }
@@ -169,14 +209,40 @@ pub fn feeds_to_poll(config: &Config, opml_cache: &OpmlCache) -> BTreeSet<String
     global.chain(guild).cloned().collect()
 }
 
+/// Whether a feed is served from one of the blocked domains or a subdomain
+/// of one. A URL without a host is served from nowhere and so never blocked.
+#[must_use]
+pub fn domain_blocked(feed_url: &str, blocked_domains: &[String]) -> bool {
+    let Some(host) = reqwest::Url::parse(feed_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+    else {
+        return false;
+    };
+    let host = host.trim_end_matches('.');
+    blocked_domains.iter().any(|domain| {
+        let domain = domain.to_ascii_lowercase();
+        host.strip_suffix(domain.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
+    })
+}
+
 /// Which channels each feed's new articles go to, per the guilds' `feeds`
-/// sections. A section naming no URLs follows every global feed.
+/// sections. A section naming no URLs follows every global feed; whichever
+/// it follows, feeds from its `blocked_domains` are left out, and so are
+/// those from the global `[[feeds]]` entries' `blocked_domains`, which are
+/// every section's defaults.
 #[must_use]
 pub fn publish_targets(
     config: &Config,
     opml_cache: &OpmlCache,
 ) -> HashMap<String, BTreeSet<PublishTarget>> {
     let mut targets: HashMap<String, BTreeSet<PublishTarget>> = HashMap::new();
+    let blocked_everywhere: Vec<String> = config
+        .feeds
+        .iter()
+        .flat_map(|f| f.blocked_domains.iter().cloned())
+        .collect();
     for guild in &config.guilds {
         for section in &guild.feeds {
             let target = PublishTarget {
@@ -194,6 +260,11 @@ pub fn publish_targets(
                 resolve_feed_urls(&section.feed_urls, &section.opml_urls, opml_cache).collect()
             };
             for url in urls {
+                if domain_blocked(url, &blocked_everywhere)
+                    || domain_blocked(url, &section.blocked_domains)
+                {
+                    continue;
+                }
                 targets.entry(url.clone()).or_default().insert(target);
             }
         }
@@ -265,14 +336,26 @@ fn article_text(entry: &FeedEntry) -> String {
     }
 }
 
-/// One article announced on its own: `[title](<link>) — source`.
+/// What follows an article to say when it was published; nothing when the
+/// feed did not say.
+///
+/// A Discord timestamp rather than text: each reader sees the date in their
+/// own language and time zone.
+fn date_suffix(entry: &FeedEntry) -> String {
+    entry
+        .published
+        .map_or_else(String::new, |at| format!(" · <t:{}:d>", at.timestamp()))
+}
+
+/// One article announced on its own: `[title](<link>) — source · date`.
 fn single_update_message(entry: &FeedEntry) -> String {
     let article = article_text(entry);
     let source = inline_text(&entry.source_title, MAX_TITLE_CHARS);
+    let date = date_suffix(entry);
     if source.is_empty() {
-        article
+        format!("{article}{date}")
     } else {
-        format!("{article} — {source}")
+        format!("{article} — {source}{date}")
     }
 }
 
@@ -292,7 +375,7 @@ fn source_updates_message(locale: &str, source: &str, entries: &[&FeedEntry]) ->
 
     let mut used = message_len(&message);
     for (i, entry) in entries.iter().enumerate() {
-        let line = format!("\n- {}", article_text(entry));
+        let line = format!("\n- {}{}", article_text(entry), date_suffix(entry));
         let remaining = entries.len() - i;
         let more = t!("feeds.updates.more", locale = locale, count = remaining).to_string();
         // Room is always kept for the closing line, unless this is the last
@@ -607,6 +690,14 @@ mod tests {
             source_title: "Source".to_string(),
             title: title.to_string(),
             description: String::new(),
+            published: None,
+        }
+    }
+
+    fn dated(id: &str, title: &str, timestamp: i64) -> FeedEntry {
+        FeedEntry {
+            published: chrono::DateTime::from_timestamp(timestamp, 0),
+            ..entry(id, title)
         }
     }
 
@@ -615,8 +706,8 @@ mod tests {
         let rss_data = r#"<?xml version="1.0" encoding="UTF-8" ?>
         <rss version="2.0"><channel>
           <title>Bricks</title><link>https://example.com</link><description>d</description>
-          <item><title>Linked</title><link>https://example.com/a</link><description>Body</description></item>
-          <item><title>Guid only</title><guid>urn:b</guid></item>
+          <item><title>Linked</title><link>https://example.com/a</link><description>Body</description><pubDate>Mon, 12 Oct 2026 16:00:48 +0300</pubDate></item>
+          <item><title>Guid only</title><guid>urn:b</guid><pubDate>sometime last week</pubDate></item>
           <item><title>Nothing to go by</title></item>
         </channel></rss>"#;
 
@@ -628,6 +719,12 @@ mod tests {
         assert_eq!(entries[0].title, "Linked");
         assert_eq!(entries[0].description, "Body");
         assert_eq!(entries[1].id, "urn:b");
+        assert_eq!(
+            entries[0].published,
+            chrono::DateTime::from_timestamp(1_791_810_048, 0)
+        );
+        // A date that cannot be read is no date, not a reason to drop the article.
+        assert_eq!(entries[1].published, None);
     }
 
     #[test]
@@ -638,6 +735,7 @@ mod tests {
           <entry>
             <title>Robots</title><link href="http://example.org/robots"/>
             <id>urn:1</id><updated>2003-12-13T18:30:02Z</updated><summary>Some text.</summary>
+            <published>2003-12-01T08:00:00Z</published>
           </entry>
           <entry>
             <title>No link</title><id>urn:2</id><updated>2003-12-13T18:30:02Z</updated>
@@ -651,6 +749,82 @@ mod tests {
         assert_eq!(entries[0].source_title, "Example Feed");
         assert_eq!(entries[0].description, "Some text.");
         assert_eq!(entries[1].id, "urn:2");
+        assert_eq!(
+            entries[0].published,
+            chrono::DateTime::from_timestamp(1_070_265_600, 0)
+        );
+        // Without a publication date, the last update stands in for it.
+        assert_eq!(
+            entries[1].published,
+            chrono::DateTime::from_timestamp(1_071_340_202, 0)
+        );
+    }
+
+    #[test]
+    fn an_atom_entry_without_a_date_is_undated() {
+        // The parser stands in the Unix epoch for a missing `updated`.
+        let atom_data = r#"<?xml version="1.0" encoding="utf-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Example Feed</title><id>urn:feed</id>
+          <entry><title>Undated</title><link href="http://example.org/a"/><id>urn:1</id></entry>
+          <entry>
+            <title>Year one</title><link href="http://example.org/b"/><id>urn:2</id>
+            <updated>0001-01-01T00:00:00Z</updated>
+          </entry>
+        </feed>"#;
+
+        let entries = feed_entries(&parse_feed(atom_data.as_bytes()).unwrap());
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].published, None);
+        assert_eq!(entries[1].published, None);
+    }
+
+    #[test]
+    fn an_rss_item_falls_back_to_its_dublin_core_date() {
+        let rss_data = r#"<?xml version="1.0" encoding="UTF-8" ?>
+        <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/"><channel>
+          <title>Bricks</title><link>https://example.com</link><description>d</description>
+          <item><title>A</title><link>https://example.com/a</link><dc:date>2026-10-12T16:00:48+03:00</dc:date></item>
+        </channel></rss>"#;
+
+        let entries = feed_entries(&parse_feed(rss_data.as_bytes()).unwrap());
+
+        assert_eq!(
+            entries[0].published,
+            chrono::DateTime::from_timestamp(1_791_810_048, 0)
+        );
+    }
+
+    #[test]
+    fn feed_dates_are_read_in_the_spellings_feeds_use() {
+        let at = chrono::DateTime::from_timestamp(1_791_810_048, 0);
+        for spelling in [
+            "Mon, 12 Oct 2026 13:00:48 +0000",
+            "Mon, 12 Oct 2026 13:00:48 GMT",
+            "Mon, 12 Oct 2026 13:00:48 UTC",
+            "12 Oct 2026 16:00:48 +0300",
+            "  Mon, 12 Oct 2026 16:00:48 +0300\n",
+            "2026-10-12T16:00:48+03:00",
+            "2026-10-12T13:00:48Z",
+        ] {
+            assert_eq!(parse_feed_date(spelling), at, "{spelling:?}");
+        }
+    }
+
+    #[test]
+    fn implausible_feed_dates_are_no_date() {
+        for spelling in [
+            "",
+            "sometime last week",
+            "2026-10-12",
+            // Placeholders feeds write for "unknown".
+            "Thu, 01 Jan 1970 00:00:00 +0000",
+            "0001-01-01T00:00:00Z",
+            "9999-12-31T23:59:59Z",
+        ] {
+            assert_eq!(parse_feed_date(spelling), None, "{spelling:?}");
+        }
     }
 
     #[test]
@@ -767,6 +941,157 @@ mod tests {
         assert!(publish_targets(&config, &HashMap::new()).is_empty());
     }
 
+    #[test]
+    fn a_domain_blocks_itself_and_its_subdomains_only() {
+        let blocked = ["Kuvat.fi".to_string(), "flickr.com".to_string()];
+
+        assert!(domain_blocked("https://kuvat.fi/rss", &blocked));
+        assert!(domain_blocked(
+            "https://palikkatakomo.kuvat.fi/kuvat/rss/",
+            &blocked
+        ));
+        assert!(domain_blocked(
+            "https://WWW.FLICKR.COM/services/feeds/photos_public.gne?id=1",
+            &blocked
+        ));
+        assert!(domain_blocked("http://flickr.com:8080/feed", &blocked));
+        assert!(domain_blocked("https://www.flickr.com./feed", &blocked));
+        assert!(domain_blocked("https://user:pw@flickr.com/feed", &blocked));
+
+        assert!(!domain_blocked("https://notflickr.com/feed", &blocked));
+        assert!(!domain_blocked(
+            "https://flickr.com.example.org/feed",
+            &blocked
+        ));
+        assert!(!domain_blocked(
+            "https://example.org/feed?from=flickr.com",
+            &blocked
+        ));
+        assert!(!domain_blocked("not a url", &blocked));
+        assert!(!domain_blocked("https://kuvat.fi/rss", &[]));
+    }
+
+    #[test]
+    fn a_blocked_domain_is_not_published_to_that_channel() {
+        let config: Config = toml::from_str(
+            r#"
+            [[feeds]]
+            feed_urls = ["https://www.flickr.com/global", "https://blog.example/global"]
+
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            blocked_domains = ["flickr.com", "kuvat.fi"]
+
+            [[guilds.feeds]]
+            channel_id = 11
+            feed_urls = ["https://a.kuvat.fi/own", "https://blog.example/own"]
+            opml_urls = ["https://own/opml"]
+            blocked_domains = ["kuvat.fi"]
+
+            [[guilds]]
+            guild_id = 2
+
+            [[guilds.feeds]]
+            channel_id = 20
+            "#,
+        )
+        .unwrap();
+        let cache = HashMap::from([(
+            "https://own/opml".to_string(),
+            vec![
+                "https://b.kuvat.fi/from-opml".to_string(),
+                "https://blog.example/from-opml".to_string(),
+            ],
+        )]);
+        let target = |channel_id, guild_id| PublishTarget {
+            channel_id,
+            guild_id,
+        };
+
+        let targets = publish_targets(&config, &cache);
+
+        // The channel that does not block the domain still gets it.
+        assert_eq!(
+            targets["https://www.flickr.com/global"],
+            BTreeSet::from([target(20, 2)])
+        );
+        assert_eq!(
+            targets["https://blog.example/global"],
+            BTreeSet::from([target(10, 1), target(20, 2)])
+        );
+        assert_eq!(
+            targets["https://blog.example/own"],
+            BTreeSet::from([target(11, 1)])
+        );
+        assert_eq!(
+            targets["https://blog.example/from-opml"],
+            BTreeSet::from([target(11, 1)])
+        );
+        // A feed nobody is left publishing has no entry at all.
+        assert!(!targets.contains_key("https://a.kuvat.fi/own"));
+        assert!(!targets.contains_key("https://b.kuvat.fi/from-opml"));
+        assert_eq!(targets.len(), 4);
+        // Blocking is about announcing; the feed is still polled.
+        assert!(feeds_to_poll(&config, &cache).contains("https://a.kuvat.fi/own"));
+    }
+
+    #[test]
+    fn globally_blocked_domains_are_every_channels_default() {
+        let config: Config = toml::from_str(
+            r#"
+            [[feeds]]
+            feed_urls = ["https://www.flickr.com/global", "https://blog.example/global"]
+            blocked_domains = ["flickr.com"]
+
+            [[feeds]]
+            feed_urls = ["https://a.kuvat.fi/global"]
+            blocked_domains = ["youtube.com"]
+
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+
+            # A section adds to the defaults; it cannot take any away.
+            [[guilds.feeds]]
+            channel_id = 11
+            blocked_domains = ["kuvat.fi"]
+
+            # The defaults cover the feeds a section names itself, too.
+            [[guilds.feeds]]
+            channel_id = 12
+            feed_urls = ["https://www.youtube.com/own", "https://www.flickr.com/own", "https://blog.example/own"]
+            "#,
+        )
+        .unwrap();
+        let target = |channel_id| PublishTarget {
+            channel_id,
+            guild_id: 1,
+        };
+
+        let targets = publish_targets(&config, &HashMap::new());
+
+        assert_eq!(
+            targets["https://blog.example/global"],
+            BTreeSet::from([target(10), target(11)])
+        );
+        assert_eq!(
+            targets["https://a.kuvat.fi/global"],
+            BTreeSet::from([target(10)])
+        );
+        assert_eq!(
+            targets["https://blog.example/own"],
+            BTreeSet::from([target(12)])
+        );
+        assert_eq!(targets.len(), 3);
+        // Still polled: blocking is about announcing.
+        assert!(feeds_to_poll(&config, &HashMap::new()).contains("https://www.flickr.com/global"));
+    }
+
     fn sourced(id: &str, title: &str, source: &str) -> FeedEntry {
         FeedEntry {
             source_title: source.to_string(),
@@ -791,6 +1116,63 @@ mod tests {
         let messages = build_updates_messages("en-US", &[entry("https://example.com/a", "First")]);
 
         assert_eq!(messages, ["[First](<https://example.com/a>) — Source"]);
+    }
+
+    #[test]
+    fn a_dated_article_ends_with_its_publication_date() {
+        let messages = build_updates_messages(
+            "en-US",
+            &[dated("https://example.com/a", "First", 1_791_810_048)],
+        );
+
+        assert_eq!(
+            messages,
+            ["[First](<https://example.com/a>) — Source · <t:1791810048:d>"]
+        );
+    }
+
+    #[test]
+    fn a_dated_article_of_a_nameless_source_still_ends_with_its_date() {
+        let nameless = FeedEntry {
+            source_title: String::new(),
+            ..dated("https://example.com/a", "First", 1_791_810_048)
+        };
+
+        assert_eq!(
+            build_updates_messages("en-US", &[nameless]),
+            ["[First](<https://example.com/a>) · <t:1791810048:d>"]
+        );
+    }
+
+    #[test]
+    fn listed_articles_carry_their_dates_and_undated_ones_none() {
+        let mut entries: Vec<_> = (0..3)
+            .map(|i| dated(&format!("https://example.com/{i}"), "T", 1_791_810_048 + i))
+            .collect();
+        entries.push(entry("https://example.com/undated", "U"));
+
+        assert_eq!(
+            grouped("en-US", &entries),
+            "Source:\n\
+             - [T](<https://example.com/0>) · <t:1791810048:d>\n\
+             - [T](<https://example.com/1>) · <t:1791810049:d>\n\
+             - [T](<https://example.com/2>) · <t:1791810050:d>\n\
+             - [U](<https://example.com/undated>)"
+        );
+    }
+
+    #[test]
+    fn dates_count_towards_the_length_limit() {
+        let entries: Vec<_> = (0..200)
+            .map(|i| dated(&format!("https://example.com/{i}"), "T", 1_791_810_048))
+            .collect();
+
+        let message = grouped("en-US", &entries);
+
+        assert!(message_len(&message) <= MAX_MESSAGE_CHARS);
+        let listed = message.matches(" · <t:1791810048:d>").count();
+        assert_eq!(listed, message.matches("\n- ").count());
+        assert!(message.ends_with(&format!("…and {} more", 200 - listed)));
     }
 
     #[test]

@@ -117,6 +117,8 @@ enable_fallback_mention = false
 [[guilds.feeds]]
 channel_id = 234567890123456789
 feed_urls = ["https://example.com/feed1.rss"]
+# More domains to block for this channel only, added to the global ones.
+# blocked_domains = ["flickr.com"]
 
 [[feeds]]
     # List of Feed URLs
@@ -126,6 +128,9 @@ feed_urls = ["https://example.com/feed1.rss"]
     ]
     # List of OPML URLs
     opml_urls = ["https://example.com/feeds.opml"]
+    # Feeds served from these domains (or their subdomains) are never
+    # published to any channel (optional).
+    # blocked_domains = ["kuvat.fi"]
 ```
 > [!IMPORTANT]
 > The `guild_id` must be a valid, non-zero numeric ID.

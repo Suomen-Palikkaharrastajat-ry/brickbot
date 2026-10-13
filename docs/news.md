@@ -22,6 +22,8 @@ feed_urls = [
 opml_urls = [
     "https://example.com/subscriptions.opml"
 ]
+# Never published to any channel (see "Blocked domains" below).
+blocked_domains = ["flickr.com"]
 ```
 
 ## Publishing New Articles to a Guild
@@ -41,10 +43,15 @@ opml_urls = ["https://example.com/subscriptions.opml"]
 # A section naming no URLs follows every global [[feeds]] entry.
 [[guilds.feeds]]
 channel_id = 345678901234567890
+# Feeds served from these domains are not published to this channel, on top
+# of the domains the global [[feeds]] block everywhere.
+blocked_domains = ["kuvat.fi"]
 ```
 
 - A guild may have any number of sections, and feeds named only here are polled too — they need not be repeated under the global `[[feeds]]`.
-- **Announced source by source.** A polling pass collects everything new for a channel across all of its feeds and announces it one source (feed title) at a time, with no heading. A source with up to three new articles gets one message per article, `[title](<link>) — source`. A source with more than three gets a single message of its own — the source name and a colon, then one `- [title](<link>)` line per article (a feed without a title is called "Other"; feeds sharing a title count as one source). Individually announced articles are posted oldest first; sources follow the order of their feed URLs. So a pass sends at least one message per source that has something new. Link previews are suppressed, markdown in titles is escaped and mentions are inert. If a source's list would exceed Discord's message limit it ends with "…and N more" instead of spilling into a second message.
+- **Announced source by source.** A polling pass collects everything new for a channel across all of its feeds and announces it one source (feed title) at a time, with no heading. A source with up to three new articles gets one message per article, `[title](<link>) — source · date`. A source with more than three gets a single message of its own — the source name and a colon, then one `- [title](<link>) · date` line per article (a feed without a title is called "Other"; feeds sharing a title count as one source). Individually announced articles are posted oldest first; sources follow the order of their feed URLs. So a pass sends at least one message per source that has something new. Link previews are suppressed, markdown in titles is escaped and mentions are inert. If a source's list would exceed Discord's message limit it ends with "…and N more" instead of spilling into a second message.
+- **Publication dates.** The date is the feed's own (`pubDate`, or failing that `dc:date`, in RSS; `published`, or failing that `updated`, in Atom; RFC 2822 or RFC 3339), sent as a Discord timestamp (`<t:…:d>`) so that each reader sees it in their own language and time zone. An article whose feed gives no date, one that cannot be read, or a placeholder (the Unix epoch or earlier, year 2100 or later) is announced without one.
+- **Blocked domains.** `blocked_domains` keeps feeds out of a channel by where they are served from: the host of the *feed URL* (not of the article links) is compared case-insensitively, and a domain covers its subdomains — `kuvat.fi` blocks `palikkatakomo.kuvat.fi`, `flickr.com` does not block `notflickr.com`. The global `[[feeds]]` entries' `blocked_domains` are the defaults: together they apply to every section of every guild. A section's own `blocked_domains` are added to them for that section's channel only; a section cannot take a default away. Either way the list applies to whatever the section follows — its own `feed_urls`, the feeds of its `opml_urls`, or the global `[[feeds]]`. Entries must be bare domains (no scheme, port, path or wildcard; an internationalized name in its `xn--` form); anything else is rejected at startup and on reload. A blocked feed is still polled and stored, so its articles keep turning up in `/set`; it is only never announced.
 - **Only articles that appear after startup.** What a feed has already shown is recorded in the `feed_sightings` table (`db::record_feed_sightings`), and `feed_polls.baseline_run` names the bot run that last took the feed's baseline. A feed's first successful poll in a run is that baseline and is silent; only articles first seen on a later poll of the same run are announced. Anything published before or while the bot was down is never mentioned — and since a `SIGHUP` reload re-executes the bot, a reload starts a fresh baseline as well.
 - Sightings are kept only for feeds some guild publishes. A row is refreshed while its feed still lists the article and pruned 30 days after it last did, so the table is bounded by what the feeds carry.
 - A published feed is polled once right at startup, regardless of its last poll time, so the baseline is taken immediately rather than up to one `poll_interval` later. That is one attempt: if it fails, the baseline is taken by the feed's next regular poll instead, and whatever was published in between is not announced.
@@ -71,3 +78,4 @@ channel_id = 345678901234567890
 ## Recent Changes
 - Support for ATOM feeds was recently introduced to resolve parsing issues with feeds from YouTube and Flickr.
 - New articles can be published to per-guild channels (`[[guilds.feeds]]`), announced source by source: one message per article for up to three, one message listing them all beyond that.
+- Announcements carry the article's publication date, and `blocked_domains` keeps feeds out of channels by domain — globally under `[[feeds]]`, with more per `[[guilds.feeds]]` section.
