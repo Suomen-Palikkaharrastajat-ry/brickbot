@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{Duration, sleep, timeout};
 
 use crate::config::Config;
 use crate::db::insert_feed_item;
@@ -295,6 +295,25 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Text without emoji, which stop Discord rendering a markdown link whose text
+/// holds them. `©`, `®`, `™` and letters are not emoji and stay.
+fn strip_emoji(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            !matches!(
+                c,
+                '\u{1F000}'..='\u{1FAFF}' // pictographs, flags, faces
+                | '\u{2300}'..='\u{23FF}' // technical symbols (⌚ ⏰)
+                | '\u{2600}'..='\u{27BF}' // misc symbols, dingbats (☀ ✨ ❤)
+                | '\u{2B00}'..='\u{2BFF}' // arrows and stars (⭐)
+                | '\u{200D}'              // zero width joiner
+                | '\u{20E3}'              // combining keycap
+                | '\u{FE0F}' // emoji variation selector
+            )
+        })
+        .collect()
+}
+
 /// A title without the hashtags a video or social post tacks onto its end
 /// (`Title #lego #shorts` → `Title`). Numeric ones such as `#123` are kept,
 /// as are hashtags inside the title.
@@ -339,7 +358,11 @@ fn article_text(entry: &FeedEntry) -> String {
     let linkable = (entry.id.starts_with("http://") || entry.id.starts_with("https://"))
         && !entry.id.contains(|c: char| c.is_whitespace() || c == '>')
         && message_len(&entry.id) <= MAX_LINK_CHARS;
-    let title = inline_text(&strip_trailing_hashtags(&entry.title), MAX_TITLE_CHARS);
+    // Emoji first: one after the last hashtag would otherwise hide it.
+    let title = inline_text(
+        &strip_trailing_hashtags(&strip_emoji(&entry.title)),
+        MAX_TITLE_CHARS,
+    );
 
     // Angle brackets keep Discord from unfurling a preview per article.
     match (linkable, title.is_empty()) {
@@ -1317,6 +1340,23 @@ mod tests {
     }
 
     #[test]
+    fn emoji_are_dropped_from_titles() {
+        assert_eq!(strip_emoji("🚀 LEGO set"), " LEGO set");
+        assert_eq!(strip_emoji("Set ⭐ ✨ 🇫🇮 👨‍👩‍👧 ❤️"), "Set     ");
+        // Text, symbols LEGO fans use and accented letters stay.
+        assert_eq!(strip_emoji("LEGO® Ä™ © 75457"), "LEGO® Ä™ © 75457");
+    }
+
+    #[test]
+    fn emoji_do_not_hide_trailing_hashtags() {
+        let entry = sourced("https://example.com/a", "🎉 Set #lego 🚀 #shorts", "One");
+        assert_eq!(
+            build_updates_messages("en-US", &[entry]),
+            ["[Set](<https://example.com/a>) — One"]
+        );
+    }
+
+    #[test]
     fn announced_titles_carry_no_trailing_hashtags() {
         let video = sourced(
             "https://www.youtube.com/shorts/y_ksgoArnjk",
@@ -1328,7 +1368,7 @@ mod tests {
         assert_eq!(
             build_updates_messages("en-US", &[video, only_tags]),
             [
-                "[🚀 LEGO Super Star Destroyer 75457](<https://www.youtube.com/shorts/y_ksgoArnjk>) — HARKKOLA",
+                "[LEGO Super Star Destroyer 75457](<https://www.youtube.com/shorts/y_ksgoArnjk>) — HARKKOLA",
                 "<https://example.com/t> — One",
             ]
         );
@@ -1487,9 +1527,9 @@ mod tests {
 
     #[test]
     fn the_length_limit_counts_utf16_units() {
-        // Each of these is one `char` but two UTF-16 units.
+        // Each of these is one `char` but two UTF-16 units (and not an emoji).
         let entries: Vec<FeedEntry> = (0..40)
-            .map(|i| entry(&format!("https://example.com/{i}"), &"🧱".repeat(100)))
+            .map(|i| entry(&format!("https://example.com/{i}"), &"𝕃".repeat(100)))
             .collect();
 
         let message = grouped("en-US", &entries);
