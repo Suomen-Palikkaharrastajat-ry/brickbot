@@ -314,18 +314,18 @@ fn strip_emoji(s: &str) -> String {
         .collect()
 }
 
-/// A title without the hashtags a video or social post tacks onto its end
-/// (`Title #lego #shorts` → `Title`). Numeric ones such as `#123` are kept,
-/// as are hashtags inside the title.
-fn strip_trailing_hashtags(title: &str) -> String {
-    let mut words: Vec<&str> = title.split_whitespace().collect();
-    while words.last().is_some_and(|w| {
-        w.strip_prefix('#')
-            .is_some_and(|rest| !rest.chars().all(|c| c.is_ascii_digit()))
-    }) {
-        words.pop();
-    }
-    words.join(" ")
+/// A title without its hashtags (`Title #lego #shorts` → `Title`), wherever
+/// they are in it. Numeric ones such as `#1` or `#123` are numbers, not
+/// hashtags, and stay.
+fn strip_hashtags(title: &str) -> String {
+    title
+        .split_whitespace()
+        .filter(|w| {
+            w.strip_prefix('#')
+                .is_none_or(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Flattens text onto one line and keeps it from closing a markdown link,
@@ -358,9 +358,8 @@ fn article_text(entry: &FeedEntry) -> String {
     let linkable = (entry.id.starts_with("http://") || entry.id.starts_with("https://"))
         && !entry.id.contains(|c: char| c.is_whitespace() || c == '>')
         && message_len(&entry.id) <= MAX_LINK_CHARS;
-    // Emoji first: one after the last hashtag would otherwise hide it.
     let title = inline_text(
-        &strip_trailing_hashtags(&strip_emoji(&entry.title)),
+        &strip_hashtags(&strip_emoji(&entry.title)),
         MAX_TITLE_CHARS,
     );
 
@@ -1331,12 +1330,13 @@ mod tests {
     }
 
     #[test]
-    fn trailing_hashtags_are_dropped_from_titles() {
-        assert_eq!(strip_trailing_hashtags("My post #tag1 #tag2"), "My post");
-        assert_eq!(strip_trailing_hashtags("My post #123 #tag"), "My post #123");
-        assert_eq!(strip_trailing_hashtags("#1 fan #lego"), "#1 fan");
-        assert_eq!(strip_trailing_hashtags("A #lego set"), "A #lego set");
-        assert_eq!(strip_trailing_hashtags("#lego #shorts"), "");
+    fn hashtags_are_dropped_from_titles() {
+        assert_eq!(strip_hashtags("My post #tag1 #tag2"), "My post");
+        assert_eq!(strip_hashtags("My post #123 #tag"), "My post #123");
+        assert_eq!(strip_hashtags("#1 fan #lego"), "#1 fan");
+        assert_eq!(strip_hashtags("A #lego set"), "A set");
+        assert_eq!(strip_hashtags("#lego A #star wars #shorts"), "A wars");
+        assert_eq!(strip_hashtags("#lego #shorts"), "");
     }
 
     #[test]
@@ -1348,7 +1348,7 @@ mod tests {
     }
 
     #[test]
-    fn emoji_do_not_hide_trailing_hashtags() {
+    fn emoji_do_not_hide_hashtags() {
         let entry = sourced("https://example.com/a", "🎉 Set #lego 🚀 #shorts", "One");
         assert_eq!(
             build_updates_messages("en-US", &[entry]),
@@ -1357,7 +1357,7 @@ mod tests {
     }
 
     #[test]
-    fn announced_titles_carry_no_trailing_hashtags() {
+    fn announced_titles_carry_no_hashtags() {
         let video = sourced(
             "https://www.youtube.com/shorts/y_ksgoArnjk",
             "🚀 LEGO Super Star Destroyer 75457 #lego #starwars #legostarwars #legosets #shorts #legosuomi",
