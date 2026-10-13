@@ -296,36 +296,71 @@ fn one_line(s: &str) -> String {
 }
 
 /// Text without emoji, which stop Discord rendering a markdown link whose text
-/// holds them. `©`, `®`, `™` and letters are not emoji and stay.
+/// holds them. `©`, `®`, `™`, letters and symbols like `⌀` or `⌘` are not
+/// emoji and stay; the dingbat and miscellaneous-symbol blocks go whole, so
+/// `★` and `♪` go too.
 fn strip_emoji(s: &str) -> String {
     s.chars()
         .filter(|&c| {
             !matches!(
                 c,
                 '\u{1F000}'..='\u{1FAFF}' // pictographs, flags, faces
-                | '\u{2300}'..='\u{23FF}' // technical symbols (⌚ ⏰)
                 | '\u{2600}'..='\u{27BF}' // misc symbols, dingbats (☀ ✨ ❤)
-                | '\u{2B00}'..='\u{2BFF}' // arrows and stars (⭐)
-                | '\u{200D}'              // zero width joiner
-                | '\u{20E3}'              // combining keycap
+                | '\u{E0020}'..='\u{E007F}' // tags that finish a regional flag
+                | '\u{2194}'..='\u{2199}' // arrows (↔ ↗)
+                | '\u{21A9}'..='\u{21AA}' // return arrows (↩ ↪)
+                | '\u{231A}'..='\u{231B}' // watch, hourglass
+                | '\u{23E9}'..='\u{23F3}' // media controls, alarm clock
+                | '\u{23F8}'..='\u{23FA}' // media controls
+                | '\u{25AA}'..='\u{25AB}' // small squares
+                | '\u{25FB}'..='\u{25FE}' // squares
+                | '\u{2934}'..='\u{2935}' // curved arrows
+                | '\u{2B05}'..='\u{2B07}' // arrows
+                | '\u{2B1B}'..='\u{2B1C}' // large squares
+                | '\u{203C}' | '\u{2049}' // double and mixed punctuation (‼ ⁉)
+                | '\u{2139}' | '\u{2328}' | '\u{23CF}' | '\u{24C2}' // ℹ ⌨ ⏏ Ⓜ
+                | '\u{25B6}' | '\u{25C0}' // play buttons
+                | '\u{2B50}' | '\u{2B55}' // star, circle
+                | '\u{3030}' | '\u{303D}' | '\u{3297}' | '\u{3299}' // wavy dash, ㊗ ㊙
+                | '\u{200D}' // zero width joiner
+                | '\u{20E3}' // combining keycap
                 | '\u{FE0F}' // emoji variation selector
             )
         })
         .collect()
 }
 
+/// A word that is a hashtag: `#` after any opening bracket or quote, with
+/// something other than a number behind it. A bare `#` counts, as the one a
+/// keycap emoji leaves behind. `#1` and `#123` are numbers and are not.
+fn is_hashtag(word: &str) -> bool {
+    let Some(rest) = word
+        .trim_start_matches(['(', '[', '{', '"', '\'', '“', '‘', '«'])
+        .strip_prefix('#')
+    else {
+        return false;
+    };
+    let number = rest.trim_end_matches([
+        ')', ']', '}', '"', '\'', '”', '’', '»', ',', '.', ':', ';', '!', '?',
+    ]);
+    number.is_empty() || !number.chars().all(|c| c.is_ascii_digit())
+}
+
 /// A title without its hashtags (`Title #lego #shorts` → `Title`), wherever
-/// they are in it. Numeric ones such as `#1` or `#123` are numbers, not
-/// hashtags, and stay.
+/// they are in it, and without the separator one leaves hanging at the end
+/// (`Title - #lego` → `Title`).
 fn strip_hashtags(title: &str) -> String {
-    title
+    let mut words: Vec<&str> = title
         .split_whitespace()
-        .filter(|w| {
-            w.strip_prefix('#')
-                .is_none_or(|rest| rest.chars().all(|c| c.is_ascii_digit()))
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+        .filter(|w| !is_hashtag(w))
+        .collect();
+    while words
+        .last()
+        .is_some_and(|w| w.chars().all(|c| "-–—|:·•/,;".contains(c)))
+    {
+        words.pop();
+    }
+    words.join(" ")
 }
 
 /// Flattens text onto one line and keeps it from closing a markdown link,
@@ -358,10 +393,7 @@ fn article_text(entry: &FeedEntry) -> String {
     let linkable = (entry.id.starts_with("http://") || entry.id.starts_with("https://"))
         && !entry.id.contains(|c: char| c.is_whitespace() || c == '>')
         && message_len(&entry.id) <= MAX_LINK_CHARS;
-    let title = inline_text(
-        &strip_hashtags(&strip_emoji(&entry.title)),
-        MAX_TITLE_CHARS,
-    );
+    let title = inline_text(&strip_hashtags(&strip_emoji(&entry.title)), MAX_TITLE_CHARS);
 
     // Angle brackets keep Discord from unfurling a preview per article.
     match (linkable, title.is_empty()) {
@@ -1348,6 +1380,42 @@ mod tests {
     }
 
     #[test]
+    fn hashtags_in_brackets_and_bare_hashes_are_dropped() {
+        assert_eq!(strip_hashtags("Set (#lego)"), "Set");
+        assert_eq!(strip_hashtags("Set “#lego” 75457"), "Set 75457");
+        assert_eq!(strip_hashtags("Set [#lego]"), "Set");
+        assert_eq!(strip_hashtags("Sets # and more"), "Sets and more");
+        assert_eq!(strip_hashtags("Sale #"), "Sale");
+        assert_eq!(strip_hashtags("#lego, #shorts, review"), "review");
+        assert_eq!(strip_hashtags("Set #123abc ##tag"), "Set");
+        assert_eq!(strip_hashtags("Set (#2024)"), "Set (#2024)");
+    }
+
+    #[test]
+    fn separators_left_dangling_are_dropped() {
+        assert_eq!(strip_hashtags("Review - #lego"), "Review");
+        assert_eq!(strip_hashtags("Set | #lego #shorts"), "Set");
+        assert_eq!(strip_hashtags("A - B"), "A - B");
+    }
+
+    #[test]
+    fn more_emoji_are_dropped() {
+        assert_eq!(strip_emoji("▶ Review ‼ ↔ ℹ Ⓜ ⤴ 〽"), " Review      ");
+        assert_eq!(strip_emoji("🏴\u{E0067}\u{E0062}\u{E007F}!"), "!");
+        assert_eq!(strip_emoji("Ø ⌀ 30 mm ⌘"), "Ø ⌀ 30 mm ⌘");
+        assert_eq!(strip_emoji("⌚ ⏰"), " ");
+    }
+
+    #[test]
+    fn a_keycap_emoji_leaves_no_stray_hash() {
+        let entry = sourced("https://example.com/a", "#️⃣ Top 10", "One");
+        assert_eq!(
+            build_updates_messages("en-US", &[entry]),
+            ["[Top 10](<https://example.com/a>) — One"]
+        );
+    }
+
+    #[test]
     fn emoji_do_not_hide_hashtags() {
         let entry = sourced("https://example.com/a", "🎉 Set #lego 🚀 #shorts", "One");
         assert_eq!(
@@ -1412,7 +1480,13 @@ mod tests {
             .map(|i| sourced(&format!("https://example.com/{i}"), "- T", "> Blog_news:"))
             .collect();
 
-        assert_eq!(build_updates_messages("en-US", &[alone]), [r"\# Sale"]);
+        // A bare `#` is a hashtag, so it is gone before it could be a heading.
+        assert_eq!(build_updates_messages("en-US", &[alone]), ["Sale"]);
+        // A source name has no such cleaning and is escaped instead.
+        let headed: Vec<FeedEntry> = (0..4)
+            .map(|i| sourced(&format!("https://example.com/{i}"), "T", "# Blog"))
+            .collect();
+        assert!(grouped("en-US", &headed).starts_with("\\# Blog:\n"));
         let message = grouped("en-US", &listed);
         // The name is escaped, and its own colon is not doubled.
         assert!(message.starts_with("\\> Blog\\_news:\n- [\\- T](<https://example.com/0>)"));
