@@ -1320,7 +1320,7 @@ mod tests {
     fn announced_titles_carry_no_trailing_hashtags() {
         let video = sourced(
             "https://www.youtube.com/shorts/y_ksgoArnjk",
-            "LEGO Super Star Destroyer 75457 #lego #starwars #legosets #shorts #legosuomi",
+            "🚀 LEGO Super Star Destroyer 75457 #lego #starwars #legostarwars #legosets #shorts #legosuomi",
             "HARKKOLA",
         );
         let only_tags = sourced("https://example.com/t", "#lego #shorts", "One");
@@ -1328,7 +1328,7 @@ mod tests {
         assert_eq!(
             build_updates_messages("en-US", &[video, only_tags]),
             [
-                "[LEGO Super Star Destroyer 75457](<https://www.youtube.com/shorts/y_ksgoArnjk>) — HARKKOLA",
+                "[🚀 LEGO Super Star Destroyer 75457](<https://www.youtube.com/shorts/y_ksgoArnjk>) — HARKKOLA",
                 "<https://example.com/t> — One",
             ]
         );
