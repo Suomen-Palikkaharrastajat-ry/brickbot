@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
-use tokio::time::{Duration, sleep, timeout};
+use tokio::time::{sleep, timeout, Duration};
 
 use crate::config::Config;
 use crate::db::insert_feed_item;
@@ -295,6 +295,20 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A title without the hashtags a video or social post tacks onto its end
+/// (`Title #lego #shorts` → `Title`). Numeric ones such as `#123` are kept,
+/// as are hashtags inside the title.
+fn strip_trailing_hashtags(title: &str) -> String {
+    let mut words: Vec<&str> = title.split_whitespace().collect();
+    while words.last().is_some_and(|w| {
+        w.strip_prefix('#')
+            .is_some_and(|rest| !rest.chars().all(|c| c.is_ascii_digit()))
+    }) {
+        words.pop();
+    }
+    words.join(" ")
+}
+
 /// Flattens text onto one line and keeps it from closing a markdown link,
 /// styling the lines after it, or turning its own line into a heading, quote
 /// or list item.
@@ -325,7 +339,7 @@ fn article_text(entry: &FeedEntry) -> String {
     let linkable = (entry.id.starts_with("http://") || entry.id.starts_with("https://"))
         && !entry.id.contains(|c: char| c.is_whitespace() || c == '>')
         && message_len(&entry.id) <= MAX_LINK_CHARS;
-    let title = inline_text(&entry.title, MAX_TITLE_CHARS);
+    let title = inline_text(&strip_trailing_hashtags(&entry.title), MAX_TITLE_CHARS);
 
     // Angle brackets keep Discord from unfurling a preview per article.
     match (linkable, title.is_empty()) {
@@ -1291,6 +1305,33 @@ mod tests {
 
         assert!(grouped("en-US", &entries).starts_with("Other:\n- "));
         assert!(grouped("fi-FI", &entries).starts_with("Muut:\n- "));
+    }
+
+    #[test]
+    fn trailing_hashtags_are_dropped_from_titles() {
+        assert_eq!(strip_trailing_hashtags("My post #tag1 #tag2"), "My post");
+        assert_eq!(strip_trailing_hashtags("My post #123 #tag"), "My post #123");
+        assert_eq!(strip_trailing_hashtags("#1 fan #lego"), "#1 fan");
+        assert_eq!(strip_trailing_hashtags("A #lego set"), "A #lego set");
+        assert_eq!(strip_trailing_hashtags("#lego #shorts"), "");
+    }
+
+    #[test]
+    fn announced_titles_carry_no_trailing_hashtags() {
+        let video = sourced(
+            "https://www.youtube.com/shorts/y_ksgoArnjk",
+            "LEGO Super Star Destroyer 75457 #lego #starwars #legosets #shorts #legosuomi",
+            "HARKKOLA",
+        );
+        let only_tags = sourced("https://example.com/t", "#lego #shorts", "One");
+
+        assert_eq!(
+            build_updates_messages("en-US", &[video, only_tags]),
+            [
+                "[LEGO Super Star Destroyer 75457](<https://www.youtube.com/shorts/y_ksgoArnjk>) — HARKKOLA",
+                "<https://example.com/t> — One",
+            ]
+        );
     }
 
     #[test]
