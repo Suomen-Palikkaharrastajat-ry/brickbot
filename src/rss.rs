@@ -213,18 +213,27 @@ pub fn feeds_to_poll(config: &Config, opml_cache: &OpmlCache) -> BTreeSet<String
 /// of one. A URL without a host is served from nowhere and so never blocked.
 #[must_use]
 pub fn domain_blocked(feed_url: &str, blocked_domains: &[String]) -> bool {
-    let Some(host) = reqwest::Url::parse(feed_url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-    else {
+    let Some(host) = host_of(feed_url) else {
         return false;
     };
-    let host = host.trim_end_matches('.');
-    blocked_domains.iter().any(|domain| {
-        let domain = domain.to_ascii_lowercase();
-        host.strip_suffix(domain.as_str())
-            .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
-    })
+    blocked_domains
+        .iter()
+        .any(|domain| host_is_or_under(&host, &domain.to_ascii_lowercase()))
+}
+
+/// The lowercased host of a URL without any trailing dot, which names the same
+/// host (`example.com.` is `example.com`); `None` when the text is no URL.
+fn host_of(url: &str) -> Option<String> {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .map(|host| host.trim_end_matches('.').to_string())
+}
+
+/// Whether `host` is `domain` or one of its subdomains. Both are lowercase.
+fn host_is_or_under(host: &str, domain: &str) -> bool {
+    host.strip_suffix(domain)
+        .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
 }
 
 /// Which channels each feed's new articles go to, per the guilds' `feeds`
@@ -465,20 +474,36 @@ fn inline_text(s: &str, max_chars: usize) -> String {
 /// more than that are listed in a single message for the source.
 const MAX_INDIVIDUAL_UPDATES: usize = 3;
 
-/// An article as a link (or as plain text when it has no usable one).
+/// The emoji that precedes an article announced from `link`: a video for
+/// `YouTube` (which only ever serves videos), a newspaper for everything else.
+fn kind_emoji(link: &str) -> &'static str {
+    const VIDEO_DOMAINS: [&str; 2] = ["youtube.com", "youtu.be"];
+    let video = host_of(link).is_some_and(|host| {
+        VIDEO_DOMAINS
+            .iter()
+            .any(|domain| host_is_or_under(&host, domain))
+    });
+    if video { "🎬" } else { "📰" }
+}
+
+/// An article as a link (or as plain text when it has no usable one), led by
+/// its kind's emoji. The emoji sits outside the link, so the link text stays
+/// free of emoji.
 fn article_text(entry: &FeedEntry) -> String {
     let linkable = (entry.id.starts_with("http://") || entry.id.starts_with("https://"))
         && !entry.id.contains(|c: char| c.is_whitespace() || c == '>')
         && message_len(&entry.id) <= MAX_LINK_CHARS;
     let title = inline_text(&strip_hashtags(&strip_emoji(&entry.title)), MAX_TITLE_CHARS);
+    let emoji = kind_emoji(&entry.id);
 
     // Angle brackets keep Discord from unfurling a preview per article.
-    match (linkable, title.is_empty()) {
+    let article = match (linkable, title.is_empty()) {
         (true, false) => format!("[{title}](<{}>)", entry.id),
         (true, true) => format!("<{}>", entry.id),
         (false, false) => title,
         (false, true) => inline_text(&entry.id, MAX_TITLE_CHARS),
-    }
+    };
+    format!("{emoji} {article}")
 }
 
 /// What follows an article to say when it was published; nothing when the
@@ -1260,7 +1285,7 @@ mod tests {
     fn one_article_is_announced_on_its_own_without_a_heading() {
         let messages = build_updates_messages("en-US", &[entry("https://example.com/a", "First")]);
 
-        assert_eq!(messages, ["[First](<https://example.com/a>) — Source"]);
+        assert_eq!(messages, ["📰 [First](<https://example.com/a>) — Source"]);
     }
 
     #[test]
@@ -1272,7 +1297,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            ["[First](<https://example.com/a>) — Source · <t:1791810048:d>"]
+            ["📰 [First](<https://example.com/a>) — Source · <t:1791810048:d>"]
         );
     }
 
@@ -1285,7 +1310,7 @@ mod tests {
 
         assert_eq!(
             build_updates_messages("en-US", &[nameless]),
-            ["[First](<https://example.com/a>) · <t:1791810048:d>"]
+            ["📰 [First](<https://example.com/a>) · <t:1791810048:d>"]
         );
     }
 
@@ -1299,10 +1324,10 @@ mod tests {
         assert_eq!(
             grouped("en-US", &entries),
             "Source:\n\
-             - [T](<https://example.com/0>) · <t:1791810048:d>\n\
-             - [T](<https://example.com/1>) · <t:1791810049:d>\n\
-             - [T](<https://example.com/2>) · <t:1791810050:d>\n\
-             - [U](<https://example.com/undated>)"
+             - 📰 [T](<https://example.com/0>) · <t:1791810048:d>\n\
+             - 📰 [T](<https://example.com/1>) · <t:1791810049:d>\n\
+             - 📰 [T](<https://example.com/2>) · <t:1791810050:d>\n\
+             - 📰 [U](<https://example.com/undated>)"
         );
     }
 
@@ -1335,9 +1360,9 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "Third — Source",
-                "[Second](<https://example.com/b>) — Source",
-                "[First](<https://example.com/a>) — Source",
+                "📰 Third — Source",
+                "📰 [Second](<https://example.com/b>) — Source",
+                "📰 [First](<https://example.com/a>) — Source",
             ]
         );
     }
@@ -1369,10 +1394,10 @@ mod tests {
         assert_eq!(
             grouped("en-US", &entries),
             "Brothers Brick:\n\
-             - [A 1](<https://a.example/1>)\n\
-             - [A 2](<https://a.example/2>)\n\
-             - [A 3](<https://a.example/3>)\n\
-             - [A 4](<https://a.example/4>)"
+             - 📰 [A 1](<https://a.example/1>)\n\
+             - 📰 [A 2](<https://a.example/2>)\n\
+             - 📰 [A 3](<https://a.example/3>)\n\
+             - 📰 [A 4](<https://a.example/4>)"
         );
     }
 
@@ -1397,13 +1422,13 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "B 2 — Brickset",
-                "[B 1](<https://b.example/1>) — Brickset",
+                "📰 B 2 — Brickset",
+                "📰 [B 1](<https://b.example/1>) — Brickset",
                 "Brothers Brick:\n\
-                 - [A 1](<https://a.example/1>)\n\
-                 - [A 2](<https://a.example/2>)\n\
-                 - [A 3](<https://a.example/3>)\n\
-                 - [A 4](<https://a.example/4>)",
+                 - 📰 [A 1](<https://a.example/1>)\n\
+                 - 📰 [A 2](<https://a.example/2>)\n\
+                 - 📰 [A 3](<https://a.example/3>)\n\
+                 - 📰 [A 4](<https://a.example/4>)",
             ]
         );
     }
@@ -1464,7 +1489,7 @@ mod tests {
                 "Tom &amp;amp; Jerry",
                 "<item><title>Bricks &amp;amp; Minifigs &amp;#8211; &amp;quot;Q&amp;amp;A&amp;quot; &amp;#x2019;24&amp;nbsp;&amp;hellip;</title><link>https://example.com/a</link></item>"
             ),
-            ["[Bricks & Minifigs – \"Q&A\" ’24 …](<https://example.com/a>) — Tom & Jerry"]
+            ["📰 [Bricks & Minifigs – \"Q&A\" ’24 …](<https://example.com/a>) — Tom & Jerry"]
         );
     }
 
@@ -1475,7 +1500,7 @@ mod tests {
                 "One",
                 "<item><title>&amp;#x1F680; Set &amp;#91;x&amp;#93; &amp;#92;o/ &amp;#35;lego</title><link>https://example.com/a</link></item>"
             ),
-            ["[Set (x) \\\\o/](<https://example.com/a>) — One"]
+            ["📰 [Set (x) \\\\o/](<https://example.com/a>) — One"]
         );
     }
 
@@ -1484,7 +1509,7 @@ mod tests {
         let entry = sourced("https://example.com/a", "Hi <@123> <:lego:1> <t:0>", "<#9>");
         assert_eq!(
             build_updates_messages("en-US", &[entry]),
-            ["[Hi \\<@123> \\<:lego:1> \\<t:0>](<https://example.com/a>) — \\<#9>"]
+            ["📰 [Hi \\<@123> \\<:lego:1> \\<t:0>](<https://example.com/a>) — \\<#9>"]
         );
     }
 
@@ -1565,7 +1590,7 @@ mod tests {
         let entry = sourced("https://example.com/a", "#️⃣ Top 10", "One");
         assert_eq!(
             build_updates_messages("en-US", &[entry]),
-            ["[Top 10](<https://example.com/a>) — One"]
+            ["📰 [Top 10](<https://example.com/a>) — One"]
         );
     }
 
@@ -1574,7 +1599,7 @@ mod tests {
         let entry = sourced("https://example.com/a", "🎉 Set #lego 🚀 #shorts", "One");
         assert_eq!(
             build_updates_messages("en-US", &[entry]),
-            ["[Set](<https://example.com/a>) — One"]
+            ["📰 [Set](<https://example.com/a>) — One"]
         );
     }
 
@@ -1590,8 +1615,8 @@ mod tests {
         assert_eq!(
             build_updates_messages("en-US", &[video, only_tags]),
             [
-                "[LEGO Super Star Destroyer 75457](<https://www.youtube.com/shorts/y_ksgoArnjk>) — HARKKOLA",
-                "<https://example.com/t> — One",
+                "🎬 [LEGO Super Star Destroyer 75457](<https://www.youtube.com/shorts/y_ksgoArnjk>) — HARKKOLA",
+                "📰 <https://example.com/t> — One",
             ]
         );
     }
@@ -1607,9 +1632,9 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "[A (LEGO) review](<https://example.com/a>) — One",
-                "<https://example.com/b> — Two",
-                "urn:c",
+                "📰 [A (LEGO) review](<https://example.com/a>) — One",
+                "📰 <https://example.com/b> — Two",
+                "📰 urn:c",
             ]
         );
     }
@@ -1624,7 +1649,7 @@ mod tests {
         let message = grouped("en-US", &entries);
 
         assert_eq!(message.lines().count(), 5);
-        assert!(message.ends_with("\n- [A (LEGO) review](<https://example.com/odd>)"));
+        assert!(message.ends_with("\n- 📰 [A (LEGO) review](<https://example.com/odd>)"));
     }
 
     #[test]
@@ -1635,7 +1660,7 @@ mod tests {
             .collect();
 
         // A bare `#` is a hashtag, so it is gone before it could be a heading.
-        assert_eq!(build_updates_messages("en-US", &[alone]), ["Sale"]);
+        assert_eq!(build_updates_messages("en-US", &[alone]), ["📰 Sale"]);
         // A source name has no such cleaning and is escaped instead.
         let headed: Vec<FeedEntry> = (0..4)
             .map(|i| sourced(&format!("https://example.com/{i}"), "T", "# Blog"))
@@ -1643,7 +1668,7 @@ mod tests {
         assert!(grouped("en-US", &headed).starts_with("\\# Blog:\n"));
         let message = grouped("en-US", &listed);
         // The name is escaped, and its own colon is not doubled.
-        assert!(message.starts_with("\\> Blog\\_news:\n- [\\- T](<https://example.com/0>)"));
+        assert!(message.starts_with("\\> Blog\\_news:\n- 📰 [\\- T](<https://example.com/0>)"));
     }
 
     #[test]
@@ -1669,7 +1694,7 @@ mod tests {
 
         let message = grouped("en-US", &entries);
 
-        assert!(message.starts_with("Source:\n- Long one\n- [T](<https://example.com/0>)"));
+        assert!(message.starts_with("Source:\n- 📰 Long one\n- 📰 [T](<https://example.com/0>)"));
         assert_eq!(message.lines().count(), 6);
         assert!(!message.contains("more"));
     }
@@ -1681,9 +1706,9 @@ mod tests {
         let messages = build_updates_messages("en-US", &[sourced(&long, "", "")]);
 
         assert_eq!(messages.len(), 1);
-        assert!(messages[0].starts_with("https://example.com/aaa"));
+        assert!(messages[0].starts_with("📰 https://example.com/aaa"));
         assert!(messages[0].ends_with('…'));
-        assert!(message_len(&messages[0]) <= MAX_TITLE_CHARS);
+        assert!(message_len(&messages[0]) <= MAX_TITLE_CHARS + message_len("📰 "));
     }
 
     #[test]
@@ -1702,7 +1727,7 @@ mod tests {
         let messages =
             build_updates_messages("en-US", &[entry("https://example.com/a", &"x".repeat(500))]);
 
-        assert!(messages[0].contains(&format!("[{}…]", "x".repeat(MAX_TITLE_CHARS - 1))));
+        assert!(messages[0].contains(&format!("📰 [{}…]", "x".repeat(MAX_TITLE_CHARS - 1))));
     }
 
     #[test]
@@ -1711,7 +1736,7 @@ mod tests {
 
         let messages = build_updates_messages("en-US", &[entry(&url, "Title")]);
 
-        assert_eq!(messages, ["Title — Source"]);
+        assert_eq!(messages, ["📰 Title — Source"]);
     }
 
     #[test]
@@ -1778,7 +1803,7 @@ mod tests {
 
         assert_eq!(
             messages[0],
-            r"[\*New\* set\_42 \`x\` \|\|y\|\| \~\~z\~\~ \\](<https://example.com/a>) — Source"
+            r"📰 [\*New\* set\_42 \`x\` \|\|y\|\| \~\~z\~\~ \\](<https://example.com/a>) — Source"
         );
     }
 
@@ -1787,7 +1812,7 @@ mod tests {
         let messages =
             build_updates_messages("en-US", &[entry("https://example.com/Lego_(toy)", "Lego")]);
 
-        assert!(messages[0].contains("[Lego](<https://example.com/Lego_(toy)>)"));
+        assert!(messages[0].contains("📰 [Lego](<https://example.com/Lego_(toy)>)"));
     }
 
     const ONE: PublishTarget = PublishTarget {
@@ -1846,5 +1871,79 @@ mod tests {
         assert!(is_due(None, now, 3600));
         assert!(is_due(ago(3600), now, 3600));
         assert!(!is_due(ago(3599), now, 3600));
+    }
+
+    #[test]
+    fn youtube_links_are_marked_as_videos() {
+        assert_eq!(kind_emoji("https://www.youtube.com/watch?v=abc"), "🎬");
+        assert_eq!(kind_emoji("https://youtube.com/shorts/abc"), "🎬");
+        assert_eq!(kind_emoji("https://youtu.be/abc"), "🎬");
+        assert_eq!(kind_emoji("https://m.youtube.com/watch?v=abc"), "🎬");
+    }
+
+    #[test]
+    fn other_links_are_marked_as_articles() {
+        assert_eq!(kind_emoji("https://blog.example/post"), "📰");
+        assert_eq!(kind_emoji("https://notyoutube.com/post"), "📰");
+        assert_eq!(kind_emoji("https://example.com/youtu.be/post"), "📰");
+        assert_eq!(kind_emoji("not a url"), "📰");
+    }
+
+    #[test]
+    fn a_youtube_name_only_as_a_suffix_is_not_youtube() {
+        assert_eq!(kind_emoji("https://youtube.com.evil.example/x"), "📰");
+        assert_eq!(kind_emoji("https://notyoutu.be/x"), "📰");
+    }
+
+    #[test]
+    fn a_fully_qualified_youtube_host_is_youtube() {
+        assert_eq!(kind_emoji("https://www.youtube.com./watch?v=abc"), "🎬");
+        assert_eq!(kind_emoji("https://YOUTU.BE/abc"), "🎬");
+    }
+
+    #[test]
+    fn the_emoji_precedes_the_link_and_is_not_part_of_it() {
+        let video = sourced("https://youtu.be/abc", "Build", "HARKKOLA");
+        let post = sourced("https://blog.example/post", "Build", "Blog");
+
+        assert_eq!(
+            build_updates_messages("en-US", &[video, post]),
+            [
+                "🎬 [Build](<https://youtu.be/abc>) — HARKKOLA",
+                "📰 [Build](<https://blog.example/post>) — Blog",
+            ]
+        );
+    }
+
+    #[test]
+    fn grouped_list_lines_carry_the_emoji_too() {
+        let entries: Vec<FeedEntry> = (1..=4)
+            .map(|i| {
+                sourced(
+                    &format!("https://youtu.be/{i}"),
+                    &format!("Clip {i}"),
+                    "HARKKOLA",
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            grouped("en-US", &entries),
+            "HARKKOLA:\n\
+             - 🎬 [Clip 1](<https://youtu.be/1>)\n\
+             - 🎬 [Clip 2](<https://youtu.be/2>)\n\
+             - 🎬 [Clip 3](<https://youtu.be/3>)\n\
+             - 🎬 [Clip 4](<https://youtu.be/4>)"
+        );
+    }
+
+    #[test]
+    fn a_link_without_a_title_is_marked_too() {
+        let video = sourced("https://youtu.be/abc", "", "HARKKOLA");
+
+        assert_eq!(
+            build_updates_messages("en-US", &[video]),
+            ["🎬 <https://youtu.be/abc> — HARKKOLA"]
+        );
     }
 }
