@@ -89,8 +89,8 @@ pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
                         .or_else(|| item.guid().map(rss::Guid::value))
                         .unwrap_or_default()
                         .to_string(),
-                    source_title: channel.title().to_string(),
-                    title: item.title().unwrap_or_default().to_string(),
+                    source_title: decode_entities(channel.title()),
+                    title: decode_entities(item.title().unwrap_or_default()),
                     description: item.description().unwrap_or_default().to_string(),
                     published: item.pub_date().and_then(parse_feed_date).or_else(|| {
                         item.dublin_core_ext()
@@ -107,8 +107,8 @@ pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
                         .first()
                         .map_or(entry.id.as_str(), |l| l.href.as_str())
                         .to_string(),
-                    source_title: feed.title.to_string(),
-                    title: entry.title.to_string(),
+                    source_title: decode_entities(feed.title.as_str()),
+                    title: decode_entities(entry.title.as_str()),
                     description: entry
                         .summary
                         .as_ref()
@@ -295,6 +295,83 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Longer than the longest name or number a reference is decoded from.
+const MAX_ENTITY_NAME: usize = 10;
+
+/// Text with its HTML character references decoded, once: feeds often escape
+/// titles as HTML inside the XML, so after parsing `Q&A` still reads
+/// `Q&amp;A`. Numeric references and the common named ones are decoded;
+/// anything else, like a bare `&`, is left as it is.
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        // Only a short way ahead, or a run of `&` would be read quadratically.
+        let decoded = rest.as_bytes()[1..]
+            .iter()
+            .take(MAX_ENTITY_NAME + 1)
+            .position(|&b| b == b';')
+            .and_then(|end| Some((entity_char(&rest[1..=end])?, end + 2)));
+        if let Some((c, len)) = decoded {
+            out.push(c);
+            rest = &rest[len..];
+        } else {
+            out.push('&');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A character that is not seen but changes how the text around it shows:
+/// zero-width spaces and joiners, direction marks and overrides that can
+/// reverse the rest of an announcement, word joiners and the byte order mark.
+const fn is_invisible_format(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}')
+}
+
+/// The character a reference names, given what lies between `&` and `;`.
+fn entity_char(name: &str) -> Option<char> {
+    if let Some(number) = name.strip_prefix('#') {
+        let (digits, radix) = number
+            .strip_prefix(['x', 'X'])
+            .map_or((number, 10), |hex| (hex, 16));
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+            return None;
+        }
+        return char::from_u32(u32::from_str_radix(digits, radix).ok()?)
+            .filter(|&c| c.is_whitespace() || !(c.is_control() || is_invisible_format(c)));
+    }
+    Some(match name {
+        "amp" => '&',
+        "lt" => '<',
+        "gt" => '>',
+        "quot" => '"',
+        "apos" => '\'',
+        "nbsp" => '\u{A0}',
+        "ndash" => '–',
+        "mdash" => '—',
+        "hellip" => '…',
+        "lsquo" => '‘',
+        "rsquo" => '’',
+        "ldquo" => '“',
+        "rdquo" => '”',
+        "laquo" => '«',
+        "raquo" => '»',
+        "copy" => '©',
+        "reg" => '®',
+        "trade" => '™',
+        "deg" => '°',
+        "times" => '×',
+        "middot" => '·',
+        "bull" => '•',
+        _ => return None,
+    })
+}
+
 /// Text without emoji, which stop Discord rendering a markdown link whose text
 /// holds them. `©`, `®`, `™`, letters and symbols like `⌀` or `⌘` are not
 /// emoji and stay; the dingbat and miscellaneous-symbol blocks go whole, so
@@ -364,8 +441,8 @@ fn strip_hashtags(title: &str) -> String {
 }
 
 /// Flattens text onto one line and keeps it from closing a markdown link,
-/// styling the lines after it, or turning its own line into a heading, quote
-/// or list item.
+/// styling the lines after it, turning its own line into a heading, quote
+/// or list item, or showing a Discord tag (`<@id>`, `<:emoji:id>`, `<t:…>`).
 fn inline_text(s: &str, max_chars: usize) -> String {
     let flat = one_line(s).replace('[', "(").replace(']', ")");
     let mut cut: String = flat.chars().take(max_chars).collect();
@@ -376,7 +453,7 @@ fn inline_text(s: &str, max_chars: usize) -> String {
     let mut escaped = String::with_capacity(cut.len());
     for (i, c) in cut.chars().enumerate() {
         let leads_a_block = i == 0 && matches!(c, '#' | '>' | '-');
-        if leads_a_block || matches!(c, '\\' | '*' | '_' | '~' | '`' | '|') {
+        if leads_a_block || matches!(c, '\\' | '*' | '_' | '~' | '`' | '|' | '<') {
             escaped.push('\\');
         }
         escaped.push(c);
@@ -1359,6 +1436,83 @@ mod tests {
 
         assert!(grouped("en-US", &entries).starts_with("Other:\n- "));
         assert!(grouped("fi-FI", &entries).starts_with("Muut:\n- "));
+    }
+
+    /// The announcements of an RSS feed holding these items, as XML.
+    fn announced(channel_title: &str, items: &str) -> Vec<String> {
+        let rss = format!(
+            r#"<?xml version="1.0"?><rss version="2.0"><channel><title>{channel_title}</title><link>https://example.com</link><description>d</description>{items}</channel></rss>"#
+        );
+        build_updates_messages("en-US", &feed_entries(&parse_feed(rss.as_bytes()).unwrap()))
+    }
+
+    #[test]
+    fn titles_escaped_twice_are_read_as_text() {
+        let rss = r#"<?xml version="1.0"?><rss version="2.0"><channel>
+          <title>Tom &amp;amp; Jerry</title><link>https://example.com</link><description>d</description>
+          <item><title>Q&amp;amp;A</title><link>https://example.com/a</link></item>
+        </channel></rss>"#;
+        let entries = feed_entries(&parse_feed(rss.as_bytes()).unwrap());
+        assert_eq!(entries[0].title, "Q&A");
+        assert_eq!(entries[0].source_title, "Tom & Jerry");
+    }
+
+    #[test]
+    fn html_entities_in_titles_are_decoded() {
+        assert_eq!(
+            announced(
+                "Tom &amp;amp; Jerry",
+                "<item><title>Bricks &amp;amp; Minifigs &amp;#8211; &amp;quot;Q&amp;amp;A&amp;quot; &amp;#x2019;24&amp;nbsp;&amp;hellip;</title><link>https://example.com/a</link></item>"
+            ),
+            ["[Bricks & Minifigs – \"Q&A\" ’24 …](<https://example.com/a>) — Tom & Jerry"]
+        );
+    }
+
+    #[test]
+    fn decoded_titles_are_cleaned_like_any_other() {
+        assert_eq!(
+            announced(
+                "One",
+                "<item><title>&amp;#x1F680; Set &amp;#91;x&amp;#93; &amp;#92;o/ &amp;#35;lego</title><link>https://example.com/a</link></item>"
+            ),
+            ["[Set (x) \\\\o/](<https://example.com/a>) — One"]
+        );
+    }
+
+    #[test]
+    fn discord_tags_in_titles_do_not_render() {
+        let entry = sourced("https://example.com/a", "Hi <@123> <:lego:1> <t:0>", "<#9>");
+        assert_eq!(
+            build_updates_messages("en-US", &[entry]),
+            ["[Hi \\<@123> \\<:lego:1> \\<t:0>](<https://example.com/a>) — \\<#9>"]
+        );
+    }
+
+    #[test]
+    fn text_that_is_not_an_entity_is_left_alone() {
+        assert_eq!(
+            decode_entities("A & B &amp;amp; &bogus; &#xZZ; &"),
+            "A & B &amp; &bogus; &#xZZ; &"
+        );
+        assert_eq!(decode_entities("&#0; &#1114112;"), "&#0; &#1114112;");
+        assert_eq!(
+            decode_entities("&#+65; &#x+41; &#-1;"),
+            "&#+65; &#x+41; &#-1;"
+        );
+    }
+
+    #[test]
+    fn invisible_and_control_characters_are_not_decoded() {
+        let refs = "&#1; &#x7F; &#x202E; &#x2066; &#x200B; &#xFEFF;";
+        assert_eq!(decode_entities(refs), refs);
+        // Line breaks are whitespace, which titles fold into spaces anyway.
+        assert_eq!(decode_entities("a&#10;b&#x9;c"), "a\nb\tc");
+    }
+
+    #[test]
+    fn many_ampersands_are_decoded_in_linear_time() {
+        let hostile = format!("{};", "&".repeat(200_000));
+        assert_eq!(decode_entities(&hostile), hostile);
     }
 
     #[test]
