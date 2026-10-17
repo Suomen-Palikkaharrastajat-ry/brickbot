@@ -459,10 +459,14 @@ fn inline_text(s: &str, max_chars: usize) -> String {
         cut.pop();
         cut.push('…');
     }
+    let chars: Vec<char> = cut.chars().collect();
     let mut escaped = String::with_capacity(cut.len());
-    for (i, c) in cut.chars().enumerate() {
+    for (i, &c) in chars.iter().enumerate() {
         let leads_a_block = i == 0 && matches!(c, '#' | '>' | '-');
-        if leads_a_block || matches!(c, '\\' | '*' | '_' | '~' | '`' | '|' | '<') {
+        // Only a doubled pipe is markdown (a spoiler); a lone one would show its backslash.
+        let spoiler_pipe =
+            c == '|' && ((i > 0 && chars[i - 1] == '|') || chars.get(i + 1) == Some(&'|'));
+        if leads_a_block || spoiler_pipe || matches!(c, '\\' | '*' | '_' | '~' | '`' | '<') {
             escaped.push('\\');
         }
         escaped.push(c);
@@ -1805,6 +1809,21 @@ mod tests {
             messages[0],
             r"📰 [\*New\* set\_42 \`x\` \|\|y\|\| \~\~z\~\~ \\](<https://example.com/a>) — Source"
         );
+    }
+
+    #[test]
+    fn a_lone_pipe_in_a_title_is_not_escaped() {
+        let messages = build_updates_messages(
+            "fi-FI",
+            &[entry(
+                "https://example.com/a",
+                "Miksi LEGO kiehtoo meitä vuodesta toiseen? | Legokästi #4",
+            )],
+        );
+
+        assert!(messages[0].contains(
+            "[Miksi LEGO kiehtoo meitä vuodesta toiseen? | Legokästi #4](<https://example.com/a>)"
+        ));
     }
 
     #[test]
