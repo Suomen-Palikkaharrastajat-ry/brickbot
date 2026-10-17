@@ -490,6 +490,18 @@ fn kind_emoji(link: &str) -> &'static str {
     if video { "🎬" } else { "📰" }
 }
 
+/// Whether `link` is a `YouTube` Short. A feed gives a Short its `/shorts/`
+/// link and an ordinary video its `/watch` link, so the path alone tells them
+/// apart.
+fn is_short(link: &str) -> bool {
+    host_of(link).is_some_and(|host| host_is_or_under(&host, "youtube.com"))
+        && reqwest::Url::parse(link).is_ok_and(|url| {
+            url.path()
+                .strip_prefix("/shorts/")
+                .is_some_and(|id| !id.is_empty())
+        })
+}
+
 /// An article as a link (or as plain text when it has no usable one), led by
 /// its kind's emoji. The emoji sits outside the link, so the link text stays
 /// free of emoji.
@@ -605,20 +617,22 @@ pub fn build_updates_messages(locale: &str, entries: &[FeedEntry]) -> Vec<String
 /// Adds one feed's unseen articles to the batch of every channel it is
 /// published to. A feed with nothing new adds nothing, not even an empty
 /// batch, and an article already batched for a channel through another feed
-/// is not repeated.
+/// is not repeated. `YouTube` Shorts are left out; they were still recorded as
+/// seen, so they are not announced later either.
 pub fn collect_updates(
     updates: &mut BTreeMap<PublishTarget, Vec<FeedEntry>>,
     targets: Option<&BTreeSet<PublishTarget>>,
     fresh: &[FeedEntry],
 ) {
-    if fresh.is_empty() {
+    let announced: Vec<&FeedEntry> = fresh.iter().filter(|e| !is_short(&e.id)).collect();
+    if announced.is_empty() {
         return;
     }
     for target in targets.into_iter().flatten() {
         let batch = updates.entry(*target).or_default();
-        for entry in fresh {
+        for entry in &announced {
             if !batch.iter().any(|e| e.id == entry.id) {
-                batch.push(entry.clone());
+                batch.push((*entry).clone());
             }
         }
     }
@@ -1883,6 +1897,38 @@ mod tests {
     }
 
     #[test]
+    fn a_feed_whose_new_articles_are_all_shorts_announces_nothing() {
+        let mut updates = BTreeMap::new();
+
+        collect_updates(
+            &mut updates,
+            Some(&BTreeSet::from([ONE])),
+            &[entry("https://www.youtube.com/shorts/a", "A")],
+        );
+
+        assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn shorts_are_left_out_of_the_announcements_of_a_pass() {
+        let mut updates = BTreeMap::new();
+
+        collect_updates(
+            &mut updates,
+            Some(&BTreeSet::from([ONE])),
+            &[
+                entry("https://www.youtube.com/shorts/a", "A"),
+                entry("https://www.youtube.com/watch?v=b", "B"),
+            ],
+        );
+
+        assert_eq!(
+            updates[&ONE],
+            vec![entry("https://www.youtube.com/watch?v=b", "B")]
+        );
+    }
+
+    #[test]
     fn a_feed_is_due_once_its_interval_has_passed() {
         let now = chrono::Utc::now().naive_utc();
         let ago = |secs| Some(now - chrono::Duration::seconds(secs));
@@ -1906,6 +1952,25 @@ mod tests {
         assert_eq!(kind_emoji("https://notyoutube.com/post"), "📰");
         assert_eq!(kind_emoji("https://example.com/youtu.be/post"), "📰");
         assert_eq!(kind_emoji("not a url"), "📰");
+    }
+
+    #[test]
+    fn youtube_shorts_are_recognized_by_their_link() {
+        assert!(is_short("https://www.youtube.com/shorts/IJNkE0tRkoc"));
+        assert!(is_short("https://youtube.com/shorts/abc"));
+        assert!(is_short("https://m.youtube.com/shorts/abc"));
+        assert!(is_short("https://www.youtube.com./shorts/abc"));
+    }
+
+    #[test]
+    fn other_links_are_not_shorts() {
+        assert!(!is_short("https://www.youtube.com/watch?v=abc"));
+        assert!(!is_short("https://youtu.be/abc"));
+        assert!(!is_short("https://www.youtube.com/shortsfoo"));
+        assert!(!is_short("https://www.youtube.com/shorts"));
+        assert!(!is_short("https://blog.example/shorts/post"));
+        assert!(!is_short("https://youtube.com.evil.example/shorts/x"));
+        assert!(!is_short("not a url"));
     }
 
     #[test]
