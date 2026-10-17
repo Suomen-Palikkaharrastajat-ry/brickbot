@@ -1307,6 +1307,8 @@ mod tests {
                     ambient_training_data: None,
                     interactions: None,
                     commands: None,
+                    feed_schedule: None,
+                    feed_timezone: None,
                     feeds: Vec::new(),
                 },
                 GuildConfig {
@@ -1318,6 +1320,8 @@ mod tests {
                     ambient_training_data: None,
                     interactions: None,
                     commands: None,
+                    feed_schedule: None,
+                    feed_timezone: None,
                     feeds: Vec::new(),
                 },
             ],

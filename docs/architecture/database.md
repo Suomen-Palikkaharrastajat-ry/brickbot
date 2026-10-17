@@ -4,12 +4,14 @@ Brickbot relies on an embedded **SQLite** database via `sqlx` to maintain applic
 
 ## Schema & Migrations
 
-The database schema is defined and managed using `sqlx::migrate!`. The migrations live in the `./migrations` directory. `0001_initial.sql` is the squashed original schema; `0002_build_sessions.sql` holds everything `/build` needs (also squashed — it had not reached production) and `0003_feed_sightings.sql` the feed publishing state. A migration that has been applied in production must never be edited: `sqlx` verifies checksums at startup.
+The database schema is defined and managed using `sqlx::migrate!`. The migrations live in the `./migrations` directory. `0001_initial.sql` is the squashed original schema; `0002_build_sessions.sql` holds everything `/build` needs (also squashed — it had not reached production) `0003_feed_sightings.sql` the feed publishing state and `0004_feed_schedule.sql` the digest queue. A migration that has been applied in production must never be edited: `sqlx` verifies checksums at startup.
 
 **Key Tables:**
 - `feed_items`: The articles fetched from RSS/ATOM feeds (title and description), searched by the set command's news lookup.
 - `feed_polls`: Stores the timestamp of the last poll for each feed URL, enabling intelligent, stateful polling loops that survive bot restarts. `baseline_run` is the bot run (process start in Unix milliseconds) that last took the feed's silent baseline for publishing.
 - `feed_sightings`: Per feed, the article ids it has shown (`feed_url`, `item_id`, `last_seen_at`), for feeds published to guild channels. A feed's rows not seen for 30 days are pruned on its own next successful poll; rows of feeds without a baseline in the current run are pruned by any poll.
+- `feed_pending_announcements`: Articles queued for channels with a digest schedule, keyed by (`channel_id`, `item_id`) so an article arriving through several feeds is queued once. Read in `rowid` (arrival) order; rows leave as their digest message is sent, and a channel no longer configured has its rows dropped.
+- `feed_channel_announcements`: Per scheduled channel, when its last digest run happened (`last_announced_at`); a digest is due once a scheduled time has passed since then.
 - `inputs`: Serves as local draft storage for multi-step modal interactions (like event submissions). Submissions are marked as `draft` or `pending` (when sent to Zulip for moderation).
 - `ambient_cooldowns` / `ambient_item_cooldowns`: Implements rate-limiting for the ambient conversational assistant to prevent channel noise.
 - `ambient_user_preferences`: Tracks user opt-outs (`ignore_all`) for the ambient assistant.

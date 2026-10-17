@@ -55,6 +55,7 @@ reqwest-eventsource = "0.6.0"
 futures-util = "0.3.30"
 async-trait = "0.1.77"
 chrono-tz = "0.10.4"
+croner = { version = "4", default-features = false, features = ["chrono"] }
 
 [dev-dependencies]
 mockall = "0.15.0"

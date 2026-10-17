@@ -120,6 +120,9 @@ feed_urls = ["https://example.com/feed1.rss"]
 # More domains or feed URLs to block for this channel only, added to the global ones.
 # blocked_domains = ["flickr.com"]
 # blocked_feed_urls = ["https://example.com/unwanted.rss"]
+# Send a digest at these times instead of announcing articles as found (cron).
+# schedule = "0 9 * * *"
+# timezone = "Europe/Helsinki"
 
 [[feeds]]
     # List of Feed URLs
@@ -226,7 +229,7 @@ Because the bot re-executes the path it was started with, a reload also picks up
 ### RSS, ATOM & OPML Polling
 The bot automatically fetches the defined `feed_urls` and `opml_urls` at the specified `poll_interval`. Feeds are parsed to support both RSS and ATOM formats.
 
-A guild can have new articles posted to its channels with `[[guilds.feeds]]` sections. Each source is announced separately: up to three new articles of a source get one message each, more are listed in a single message for that source. Only articles that appear after the bot was last (re)started are announced. See [`docs/news.md`](docs/news.md).
+A guild can have new articles posted to its channels with `[[guilds.feeds]]` sections. Each source is announced separately: up to three new articles of a source get one message each, more are listed in a single message for that source. Only articles that appear after the bot was last (re)started are announced. A channel can instead get them as a digest on a cron schedule (`feed_schedule`/`feed_timezone` globally or per guild, `schedule`/`timezone` per section). See [`docs/news.md`](docs/news.md).
 
 ### Event Synchronization
 The bot continuously syncs events from PocketBase into Discord's native Scheduled Events system. 

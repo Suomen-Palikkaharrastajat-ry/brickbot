@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::time::{Duration, sleep, timeout};
 
 use crate::config::Config;
-use crate::db::insert_feed_item;
+use crate::db::{PendingAnnouncement, insert_feed_item};
 
 #[derive(Debug)]
 pub enum Feed {
@@ -656,6 +656,146 @@ pub fn build_updates_messages(locale: &str, entries: &[FeedEntry]) -> Vec<String
     messages
 }
 
+/// One message of a digest, with the articles it announces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DigestMessage {
+    pub content: String,
+    pub item_ids: Vec<String>,
+}
+
+/// Formats a channel's queued articles into digest messages grouped by source.
+///
+/// Each source is displayed in bold (`**Source**:`) followed by its articles,
+/// newest first, as bullet points: `- 📰 [Title](<link>) · <t:timestamp:d>`
+/// (or 🎬 for `YouTube`). Sources follow the order they were first queued in.
+///
+/// A digest too long for one message continues in the next, repeating the
+/// heading of a source split between them, rather than leaving articles out:
+/// whatever is not announced would otherwise be dropped from the queue
+/// unseen. Each message says which articles it carries, so a failed send can
+/// keep exactly those queued.
+#[must_use]
+pub fn build_digest_messages(locale: &str, entries: &[FeedEntry]) -> Vec<DigestMessage> {
+    let mut sources: Vec<(String, Vec<&FeedEntry>)> = Vec::new();
+    for entry in entries {
+        let source = one_line(&entry.source_title);
+        match sources.iter_mut().find(|(s, _)| *s == source) {
+            Some((_, group)) => group.push(entry),
+            None => sources.push((source, vec![entry])),
+        }
+    }
+
+    let mut messages = Vec::new();
+    let mut current = DigestMessage {
+        content: String::new(),
+        item_ids: Vec::new(),
+    };
+    for (source, mut group) in sources {
+        // Stable, so undated articles keep the order they were queued in.
+        group.sort_by_key(|e| std::cmp::Reverse(e.published));
+        let name = inline_text(source.trim_end_matches(':'), MAX_TITLE_CHARS);
+        let header = format!(
+            "**{}**:",
+            if name.is_empty() {
+                t!("feeds.updates.other", locale = locale).to_string()
+            } else {
+                name
+            }
+        );
+        let mut source_started = false;
+        for entry in group {
+            let line = format!("\n- {}{}", article_text(entry), date_suffix(entry));
+            let heading = if source_started {
+                String::new()
+            } else if current.content.is_empty() {
+                header.clone()
+            } else {
+                format!("\n\n{header}")
+            };
+            if !current.item_ids.is_empty()
+                && message_len(&current.content) + message_len(&heading) + message_len(&line)
+                    > MAX_MESSAGE_CHARS
+            {
+                messages.push(std::mem::replace(
+                    &mut current,
+                    DigestMessage {
+                        content: header.clone(),
+                        item_ids: Vec::new(),
+                    },
+                ));
+            } else {
+                current.content.push_str(&heading);
+            }
+            source_started = true;
+            current.content.push_str(&line);
+            current.item_ids.push(entry.id.clone());
+        }
+    }
+    if !current.item_ids.is_empty() {
+        messages.push(current);
+    }
+    messages
+}
+
+/// Determines if a scheduled announcement is due for a channel.
+///
+/// Returns `false` if `last_announced_at` is `None` (the channel has not been initialized yet,
+/// so the caller should record `now_utc` as the baseline so historical backlog is not spammed).
+///
+/// Uses `croner::Cron` evaluated in the target `chrono_tz::Tz` timezone.
+/// If `last_announced_at` is `Some(prev)`, checks if there exists a cron occurrence in the interval
+/// `(prev, now_utc]`.
+#[must_use]
+pub fn is_channel_due(
+    cron_expr: &str,
+    tz: chrono_tz::Tz,
+    last_announced_at: Option<chrono::DateTime<chrono::Utc>>,
+    now_utc: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let Some(prev) = last_announced_at else {
+        return false;
+    };
+    if prev >= now_utc {
+        return false;
+    }
+    let Ok(cron) = cron_expr.trim().parse::<croner::Cron>() else {
+        return false;
+    };
+    let prev_tz = prev.with_timezone(&tz);
+    let now_tz = now_utc.with_timezone(&tz);
+    cron.find_next_occurrence(&prev_tz, false)
+        .is_ok_and(|next| next <= now_tz)
+}
+
+/// What a channel's queue calls for on this pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DigestAction {
+    /// The channel has no run on record: its schedule starts counting now,
+    /// so what is already queued waits for the first scheduled time.
+    Baseline,
+    /// Nothing to do until the next scheduled time.
+    Wait,
+    /// Announce everything queued.
+    Send,
+}
+
+/// Decides what a channel with a queue, or a schedule, needs now. A channel
+/// without a schedule (`None`) has a queue only because it had a schedule
+/// until a reload took it away; it is sent at once rather than stranded.
+#[must_use]
+pub fn digest_action(
+    schedule: Option<(&str, chrono_tz::Tz)>,
+    last_announced_at: Option<chrono::DateTime<chrono::Utc>>,
+    now_utc: chrono::DateTime<chrono::Utc>,
+) -> DigestAction {
+    match (schedule, last_announced_at) {
+        (None, _) => DigestAction::Send,
+        (Some(_), None) => DigestAction::Baseline,
+        (Some((cron, tz)), last) if is_channel_due(cron, tz, last, now_utc) => DigestAction::Send,
+        (Some(_), Some(_)) => DigestAction::Wait,
+    }
+}
+
 /// Adds one feed's unseen articles to the batch of every channel it is
 /// published to. A feed with nothing new adds nothing, not even an empty
 /// batch, and an article already batched for a channel through another feed
@@ -696,6 +836,187 @@ fn is_due(
     interval: u64,
 ) -> bool {
     last_polled_at.is_none_or(|last| (now - last).num_seconds() >= interval as i64)
+}
+
+async fn route_unseen_entries(
+    db: &SqlitePool,
+    config: &Config,
+    feed_targets: Option<&BTreeSet<PublishTarget>>,
+    feed_url: &str,
+    fresh: &[FeedEntry],
+    updates: &mut BTreeMap<PublishTarget, Vec<FeedEntry>>,
+) {
+    let mut instant_targets = BTreeSet::new();
+    let mut scheduled = Vec::new();
+
+    for &target in feed_targets.into_iter().flatten() {
+        if config
+            .feed_schedule_for_channel(target.guild_id, target.channel_id)
+            .is_some()
+        {
+            for e in fresh.iter().filter(|e| !is_short(&e.id)) {
+                scheduled.push(PendingAnnouncement {
+                    channel_id: target.channel_id,
+                    guild_id: target.guild_id,
+                    item_id: e.id.clone(),
+                    feed_url: feed_url.to_string(),
+                    source_title: e.source_title.clone(),
+                    item_title: e.title.clone(),
+                    published_at: e.published,
+                });
+            }
+        } else {
+            instant_targets.insert(target);
+        }
+    }
+
+    if !instant_targets.is_empty() {
+        collect_updates(updates, Some(&instant_targets), fresh);
+    }
+    if !scheduled.is_empty() {
+        if let Err(err) = crate::db::queue_pending_announcements(db, &scheduled).await {
+            tracing::error!("failed to queue pending announcements for {feed_url}: {err}");
+        }
+    }
+}
+
+async fn publish_instant_updates(
+    http: &Http,
+    config: &Config,
+    updates: BTreeMap<PublishTarget, Vec<FeedEntry>>,
+) {
+    for (target, entries) in updates {
+        let locale = config.locale_or_default(target.guild_id);
+        // Suppressed outright as well as link by link: a bare URL inside
+        // a title would otherwise still unfurl.
+        for content in build_updates_messages(locale, &entries) {
+            let message = CreateMessage::new()
+                .content(content)
+                .flags(serenity::all::MessageFlags::SUPPRESS_EMBEDS)
+                .allowed_mentions(CreateAllowedMentions::new());
+            if let Err(err) = ChannelId::new(target.channel_id)
+                .send_message(http, message)
+                .await
+            {
+                tracing::error!(
+                    "failed to publish feed updates to channel {}: {}",
+                    target.channel_id,
+                    err
+                );
+                // A channel that refuses one message refuses the rest.
+                break;
+            }
+        }
+    }
+}
+
+/// Sends the queues that are due: those of scheduled channels whose time has
+/// come, and those left behind by a channel that is now instant. A queue of a
+/// channel no longer configured anywhere is dropped.
+async fn publish_scheduled_announcements(
+    http: &Http,
+    db: &SqlitePool,
+    config: &Config,
+    now_utc: chrono::DateTime<chrono::Utc>,
+) {
+    // A channel belongs to one guild, so the first section naming it does.
+    let mut channels: BTreeMap<u64, u64> = BTreeMap::new();
+    for guild in &config.guilds {
+        for section in &guild.feeds {
+            channels.entry(section.channel_id).or_insert(guild.guild_id);
+        }
+    }
+    let pending_channels: BTreeSet<u64> = match crate::db::pending_announcement_channels(db).await {
+        Ok(ids) => ids.into_iter().collect(),
+        Err(err) => {
+            tracing::error!("failed to list pending announcements: {err}");
+            return;
+        }
+    };
+    for &channel_id in pending_channels.difference(&channels.keys().copied().collect()) {
+        if let Err(err) = crate::db::clear_pending_announcements(db, channel_id).await {
+            tracing::error!("failed to clear pending announcements of channel {channel_id}: {err}");
+        }
+    }
+
+    for (channel_id, guild_id) in channels {
+        let schedule = config
+            .feed_schedule_for_channel(guild_id, channel_id)
+            .map(|cron| (cron, config.feed_timezone_for_channel(guild_id, channel_id)));
+        if schedule.is_none() && !pending_channels.contains(&channel_id) {
+            continue;
+        }
+        let last = if schedule.is_some() {
+            match crate::db::get_channel_last_announced_at(db, channel_id).await {
+                Ok(last) => last,
+                Err(err) => {
+                    tracing::error!(
+                        "failed to get last announced time for channel {channel_id}: {err}"
+                    );
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        match digest_action(schedule, last, now_utc) {
+            DigestAction::Wait => continue,
+            DigestAction::Baseline => {}
+            DigestAction::Send => {
+                send_digest(http, db, config, guild_id, channel_id).await;
+            }
+        }
+        // Marked even when a send failed: what was not sent stays queued for
+        // the next scheduled time instead of being retried every minute.
+        if schedule.is_some() {
+            if let Err(err) = crate::db::mark_channel_announced(db, channel_id, now_utc).await {
+                tracing::error!("failed to mark channel {channel_id} announced: {err}");
+            }
+        }
+    }
+}
+
+/// Announces a channel's queue and removes from it what was sent.
+async fn send_digest(
+    http: &Http,
+    db: &SqlitePool,
+    config: &Config,
+    guild_id: u64,
+    channel_id: u64,
+) {
+    let pending = match crate::db::get_pending_announcements(db, channel_id).await {
+        Ok(pending) => pending,
+        Err(err) => {
+            tracing::error!("failed to get pending announcements for channel {channel_id}: {err}");
+            return;
+        }
+    };
+    let entries: Vec<FeedEntry> = pending
+        .into_iter()
+        .map(|a| FeedEntry {
+            id: a.item_id,
+            source_title: a.source_title,
+            title: a.item_title,
+            description: String::new(),
+            published: a.published_at,
+        })
+        .collect();
+    let locale = config.locale_or_default(guild_id);
+    for digest in build_digest_messages(locale, &entries) {
+        let message = CreateMessage::new()
+            .content(digest.content)
+            .flags(serenity::all::MessageFlags::SUPPRESS_EMBEDS)
+            .allowed_mentions(CreateAllowedMentions::new());
+        if let Err(err) = ChannelId::new(channel_id).send_message(http, message).await {
+            tracing::error!("failed to publish digest to channel {channel_id}: {err}");
+            // A channel that refuses one message refuses the rest.
+            return;
+        }
+        let ids: Vec<&str> = digest.item_ids.iter().map(String::as_str).collect();
+        if let Err(err) = crate::db::delete_pending_announcements(db, channel_id, &ids).await {
+            tracing::error!("failed to dequeue announced items of channel {channel_id}: {err}");
+        }
+    }
 }
 
 pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Config>) {
@@ -764,7 +1085,15 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
                     match crate::db::record_feed_sightings(&db, &feed_url, run_id, &ids).await {
                         Ok(unseen) => {
                             let fresh = unseen_entries(entries, &unseen);
-                            collect_updates(&mut updates, feed_targets, &fresh);
+                            route_unseen_entries(
+                                &db,
+                                &config,
+                                feed_targets,
+                                &feed_url,
+                                &fresh,
+                                &mut updates,
+                            )
+                            .await;
                         }
                         Err(err) => {
                             tracing::error!("failed to record sightings of {}: {}", feed_url, err);
@@ -778,29 +1107,8 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
             let _ = crate::db::mark_polled(&db, &feed_url, pass_at).await;
         }
 
-        for (target, entries) in updates {
-            let locale = config.locale_or_default(target.guild_id);
-            // Suppressed outright as well as link by link: a bare URL inside
-            // a title would otherwise still unfurl.
-            for content in build_updates_messages(locale, &entries) {
-                let message = CreateMessage::new()
-                    .content(content)
-                    .flags(serenity::all::MessageFlags::SUPPRESS_EMBEDS)
-                    .allowed_mentions(CreateAllowedMentions::new());
-                if let Err(err) = ChannelId::new(target.channel_id)
-                    .send_message(&http, message)
-                    .await
-                {
-                    tracing::error!(
-                        "failed to publish feed updates to channel {}: {}",
-                        target.channel_id,
-                        err
-                    );
-                    // A channel that refuses one message refuses the rest.
-                    break;
-                }
-            }
-        }
+        publish_instant_updates(&http, &config, updates).await;
+        publish_scheduled_announcements(&http, &db, &config, chrono::Utc::now()).await;
 
         sleep(Duration::from_mins(1)).await;
     }
@@ -2217,5 +2525,226 @@ mod tests {
             build_updates_messages("en-US", &[video]),
             ["🎬 <https://youtu.be/abc> — HARKKOLA"]
         );
+    }
+
+    #[test]
+    fn is_channel_due_returns_false_if_uninitialized() {
+        let now = chrono::Utc::now();
+        assert!(!is_channel_due(
+            "0 9 * * *",
+            chrono_tz::Europe::Helsinki,
+            None,
+            now
+        ));
+    }
+
+    #[test]
+    fn is_channel_due_returns_false_if_last_announced_in_future() {
+        let now = chrono::Utc::now();
+        let future = now + chrono::Duration::hours(1);
+        assert!(!is_channel_due(
+            "0 9 * * *",
+            chrono_tz::Europe::Helsinki,
+            Some(future),
+            now
+        ));
+    }
+
+    #[test]
+    fn is_channel_due_evaluates_cron_with_timezone() {
+        use chrono::TimeZone;
+        let tz = chrono_tz::Europe::Helsinki; // UTC+2 in winter
+        let cron = "0 9 * * *"; // 9:00 AM daily in Helsinki -> 07:00 UTC
+
+        // 2026-01-15 06:30 UTC
+        let prev = chrono::Utc.with_ymd_and_hms(2026, 1, 15, 6, 30, 0).unwrap();
+        // 2026-01-15 06:59 UTC (Helsinki 08:59) -> not due yet
+        let before_due = chrono::Utc.with_ymd_and_hms(2026, 1, 15, 6, 59, 0).unwrap();
+        assert!(!is_channel_due(cron, tz, Some(prev), before_due));
+
+        // 2026-01-15 07:01 UTC (Helsinki 09:01) -> due!
+        let after_due = chrono::Utc.with_ymd_and_hms(2026, 1, 15, 7, 1, 0).unwrap();
+        assert!(is_channel_due(cron, tz, Some(prev), after_due));
+
+        // Next check at 2026-01-15 07:05 UTC with prev = 2026-01-15 07:01 UTC -> not due until tomorrow!
+        let later = chrono::Utc.with_ymd_and_hms(2026, 1, 15, 7, 5, 0).unwrap();
+        assert!(!is_channel_due(cron, tz, Some(after_due), later));
+    }
+
+    #[test]
+    fn build_digest_messages_empty() {
+        assert!(build_digest_messages("en-US", &[]).is_empty());
+    }
+
+    #[test]
+    fn build_digest_messages_formats_grouped_by_source() {
+        use chrono::TimeZone;
+        let date = chrono::Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).unwrap();
+        let entries = vec![
+            FeedEntry {
+                id: "https://blog.example/1".to_string(),
+                source_title: "Brick News".to_string(),
+                title: "Post 1".to_string(),
+                description: String::new(),
+                published: Some(date),
+            },
+            FeedEntry {
+                id: "https://www.youtube.com/watch?v=123".to_string(),
+                source_title: "Brick News".to_string(),
+                title: "Video 1".to_string(),
+                description: String::new(),
+                published: None,
+            },
+            FeedEntry {
+                id: "https://other.example/2".to_string(),
+                source_title: "Other Blog".to_string(),
+                title: "Post 2".to_string(),
+                description: String::new(),
+                published: None,
+            },
+        ];
+        let messages = build_digest_messages("en-US", &entries);
+        assert_eq!(messages.len(), 1);
+        let msg = &messages[0].content;
+        assert!(msg.contains("**Brick News**:"));
+        assert!(msg.contains("- 📰 [Post 1](<https://blog.example/1>) · <t:1768478400:d>"));
+        assert!(msg.contains("- 🎬 [Video 1](<https://www.youtube.com/watch?v=123>)"));
+        assert!(msg.contains("**Other Blog**:"));
+        assert!(msg.contains("- 📰 [Post 2](<https://other.example/2>)"));
+    }
+
+    #[test]
+    fn a_long_digest_continues_in_more_messages_and_loses_nothing() {
+        let entries: Vec<FeedEntry> = (1..=100)
+            .map(|i| FeedEntry {
+                id: format!("https://example.com/article/{i}"),
+                source_title: "Big News".to_string(),
+                title: format!("Long article title number {i} with some descriptive text"),
+                description: String::new(),
+                published: None,
+            })
+            .collect();
+        let messages = build_digest_messages("en-US", &entries);
+        assert!(messages.len() > 1);
+        for message in &messages {
+            assert!(message_len(&message.content) <= MAX_MESSAGE_CHARS);
+            // A source split between messages is named again.
+            assert!(message.content.starts_with("**Big News**:"));
+        }
+        let ids: Vec<&String> = messages.iter().flat_map(|m| &m.item_ids).collect();
+        let expected: Vec<&String> = entries.iter().map(|e| &e.id).collect();
+        assert_eq!(ids, expected);
+    }
+
+    #[test]
+    fn a_digest_lists_each_sources_articles_newest_first() {
+        let entries = [
+            dated("https://example.com/old", "Old", 1_000),
+            dated("https://example.com/new", "New", 2_000),
+        ];
+        let messages = build_digest_messages("en-US", &entries);
+        assert_eq!(
+            messages[0].item_ids,
+            ["https://example.com/new", "https://example.com/old"]
+        );
+    }
+
+    #[test]
+    fn digest_action_follows_the_schedule() {
+        use chrono::TimeZone;
+        let tz = chrono_tz::UTC;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 1, 15, 9, 1, 0).unwrap();
+        let yesterday = chrono::Utc.with_ymd_and_hms(2026, 1, 14, 9, 1, 0).unwrap();
+        let just_now = chrono::Utc.with_ymd_and_hms(2026, 1, 15, 9, 0, 30).unwrap();
+        let schedule = Some(("0 9 * * *", tz));
+        assert_eq!(digest_action(schedule, None, now), DigestAction::Baseline);
+        assert_eq!(
+            digest_action(schedule, Some(yesterday), now),
+            DigestAction::Send
+        );
+        assert_eq!(
+            digest_action(schedule, Some(just_now), now),
+            DigestAction::Wait
+        );
+        // A channel made instant again sends what it still had queued.
+        assert_eq!(digest_action(None, Some(just_now), now), DigestAction::Send);
+        assert_eq!(digest_action(None, None, now), DigestAction::Send);
+    }
+
+    #[tokio::test]
+    async fn route_unseen_entries_partitions_instant_and_scheduled() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+
+            [[guilds.feeds]]
+            channel_id = 20
+            schedule = "0 9 * * *"
+            "#,
+        )
+        .unwrap();
+
+        let targets: BTreeSet<PublishTarget> = [
+            PublishTarget {
+                guild_id: 1,
+                channel_id: 10,
+            },
+            PublishTarget {
+                guild_id: 1,
+                channel_id: 20,
+            },
+        ]
+        .into_iter()
+        .collect();
+
+        let fresh = vec![
+            FeedEntry {
+                id: "https://example.com/item1".to_string(),
+                source_title: "News".to_string(),
+                title: "Item 1".to_string(),
+                description: String::new(),
+                published: None,
+            },
+            FeedEntry {
+                id: "https://www.youtube.com/shorts/abc".to_string(),
+                source_title: "News".to_string(),
+                title: "Short".to_string(),
+                description: String::new(),
+                published: None,
+            },
+        ];
+
+        let mut updates = BTreeMap::new();
+        route_unseen_entries(
+            &pool,
+            &config,
+            Some(&targets),
+            "https://feed.example",
+            &fresh,
+            &mut updates,
+        )
+        .await;
+
+        // Channel 10 is instant: received item1 (shorts excluded)
+        let ch10_target = PublishTarget {
+            guild_id: 1,
+            channel_id: 10,
+        };
+        assert_eq!(updates[&ch10_target].len(), 1);
+        assert_eq!(updates[&ch10_target][0].id, "https://example.com/item1");
+
+        // Channel 20 is scheduled: queued in DB (shorts excluded)
+        let pending = crate::db::get_pending_announcements(&pool, 20)
+            .await
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].item_id, "https://example.com/item1");
     }
 }

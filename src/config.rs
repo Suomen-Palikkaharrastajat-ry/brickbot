@@ -7,6 +7,8 @@ use std::fs;
 /// speaks Finnish. This is the single fallback: nothing else may invent one,
 /// or command names and replies drift into different languages.
 pub const DEFAULT_LOCALE: &str = "fi-FI";
+/// The time zone feed announcement schedules are read in unless configured.
+pub const DEFAULT_FEED_TIMEZONE: chrono_tz::Tz = chrono_tz::Europe::Helsinki;
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct Config {
@@ -27,6 +29,14 @@ pub struct Config {
     pub guilds: Vec<GuildConfig>,
     #[serde(default)]
     pub feeds: Vec<RssFeedConfig>,
+    /// When feed announcements are sent, as a cron expression read in
+    /// `feed_timezone`; every channel's default. Unset, empty, `"instant"` or
+    /// `"none"` announces articles as soon as they are found.
+    #[serde(default)]
+    pub feed_schedule: Option<String>,
+    /// IANA time zone `feed_schedule` is read in (default: Europe/Helsinki).
+    #[serde(default)]
+    pub feed_timezone: Option<String>,
     #[serde(default)]
     pub resource_limits: ResourceLimitsConfig,
     #[serde(default)]
@@ -349,6 +359,14 @@ pub struct GuildConfig {
     pub ambient_training_data: Option<AmbientTrainingDataConfig>,
     pub interactions: Option<GuildInteractionsConfig>,
     pub commands: Option<GuildCommandsConfig>,
+    /// Feed announcement schedule for this guild's channels, overriding the
+    /// global `feed_schedule`.
+    #[serde(default)]
+    pub feed_schedule: Option<String>,
+    /// Time zone for this guild's feed schedules, overriding the global
+    /// `feed_timezone`.
+    #[serde(default)]
+    pub feed_timezone: Option<String>,
     /// Channels of this guild that new feed articles are published to.
     #[serde(default)]
     pub feeds: Vec<GuildFeedConfig>,
@@ -364,6 +382,14 @@ pub struct GuildFeedConfig {
     pub feed_urls: Vec<String>,
     #[serde(default)]
     pub opml_urls: Vec<String>,
+    /// Announcement schedule for this channel, overriding the guild's
+    /// `feed_schedule`. Every section naming the channel must agree.
+    #[serde(default)]
+    pub schedule: Option<String>,
+    /// Time zone for this channel's schedule, overriding the guild's
+    /// `feed_timezone`.
+    #[serde(default)]
+    pub timezone: Option<String>,
     /// Feeds served from these domains, or their subdomains, are not
     /// published to this channel, wherever the section got them from. Added
     /// to the global `[[feeds]]` entries' `blocked_domains`, which always
@@ -590,7 +616,36 @@ impl Config {
             Err(errors)
         }
     }
+}
 
+/// A schedule that asks for no schedule: articles are announced as found.
+fn is_instant(expr: &str) -> bool {
+    let trimmed = expr.trim();
+    trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("instant")
+        || trimmed.eq_ignore_ascii_case("none")
+}
+
+fn validate_schedule(scope: &str, expr: &str, errors: &mut Vec<String>) {
+    if is_instant(expr) {
+        return;
+    }
+    if let Err(e) = expr.trim().parse::<croner::Cron>() {
+        errors.push(format!(
+            "{scope} schedule is not a valid cron expression: {e}"
+        ));
+    }
+}
+
+fn validate_timezone(scope: &str, tz: &str, errors: &mut Vec<String>) {
+    if tz.trim().parse::<chrono_tz::Tz>().is_err() {
+        errors.push(format!(
+            "{scope} timezone is not a valid IANA timezone name: {tz:?}"
+        ));
+    }
+}
+
+impl Config {
     fn validate_feeds(&self, errors: &mut Vec<String>) {
         let guild_feeds = self.guilds.iter().flat_map(|g| &g.feeds);
         let feed_urls = self
@@ -631,6 +686,7 @@ impl Config {
                 ));
             }
         }
+        self.validate_feed_schedules(errors);
         let has_global_feeds = self
             .feeds
             .iter()
@@ -677,6 +733,52 @@ impl Config {
                         "guild {} feeds for channel {} names no URLs and there are no global [[feeds]] to follow",
                         guild.guild_id, section.channel_id
                     ));
+                }
+            }
+        }
+    }
+
+    fn validate_feed_schedules(&self, errors: &mut Vec<String>) {
+        if let Some(sched) = &self.feed_schedule {
+            validate_schedule("global feeds", sched, errors);
+        }
+        if let Some(tz) = &self.feed_timezone {
+            validate_timezone("global feeds", tz, errors);
+        }
+        for guild in &self.guilds {
+            let scope = format!("guild {} feeds", guild.guild_id);
+            if let Some(sched) = &guild.feed_schedule {
+                validate_schedule(&scope, sched, errors);
+            }
+            if let Some(tz) = &guild.feed_timezone {
+                validate_timezone(&scope, tz, errors);
+            }
+            // A channel named by several sections has one schedule; sections
+            // that disagree on it would leave it to whichever is read first.
+            let mut schedules = std::collections::HashMap::new();
+            let mut timezones = std::collections::HashMap::new();
+            for section in &guild.feeds {
+                let scope = format!(
+                    "guild {} feeds for channel {}",
+                    guild.guild_id, section.channel_id
+                );
+                if let Some(sched) = &section.schedule {
+                    validate_schedule(&scope, sched, errors);
+                    let first = *schedules.entry(section.channel_id).or_insert(sched);
+                    if first.trim() != sched.trim() {
+                        errors.push(format!(
+                            "{scope} has conflicting schedules {first:?} and {sched:?}"
+                        ));
+                    }
+                }
+                if let Some(tz) = &section.timezone {
+                    validate_timezone(&scope, tz, errors);
+                    let first = *timezones.entry(section.channel_id).or_insert(tz);
+                    if first.trim() != tz.trim() {
+                        errors.push(format!(
+                            "{scope} has conflicting timezones {first:?} and {tz:?}"
+                        ));
+                    }
                 }
             }
         }
@@ -785,6 +887,62 @@ impl Config {
     #[must_use]
     pub fn default_locale(&self) -> &str {
         self.locale.as_deref().unwrap_or(DEFAULT_LOCALE)
+    }
+
+    /// The first of a channel's settings that is set: any of its own
+    /// `[[guilds.feeds]]` sections, then its guild, then the global one.
+    fn feed_setting<'a>(
+        &'a self,
+        guild_id: u64,
+        channel_id: u64,
+        section: impl Fn(&'a GuildFeedConfig) -> Option<&'a String>,
+        guild: impl Fn(&'a GuildConfig) -> Option<&'a String>,
+        global: Option<&'a String>,
+    ) -> Option<&'a str> {
+        self.guilds
+            .iter()
+            .find(|g| g.guild_id == guild_id)
+            .and_then(|g| {
+                g.feeds
+                    .iter()
+                    .filter(|f| f.channel_id == channel_id)
+                    .find_map(&section)
+                    .or_else(|| guild(g))
+            })
+            .or(global)
+            .map(String::as_str)
+    }
+
+    /// Resolves the announcement schedule for a channel: channel override, then
+    /// guild override, then global setting. An empty schedule or `"instant"` /
+    /// `"none"` means instant announcements (`None`), whichever level says so.
+    #[must_use]
+    pub fn feed_schedule_for_channel(&self, guild_id: u64, channel_id: u64) -> Option<&str> {
+        self.feed_setting(
+            guild_id,
+            channel_id,
+            |f| f.schedule.as_ref(),
+            |g| g.feed_schedule.as_ref(),
+            self.feed_schedule.as_ref(),
+        )
+        .filter(|s| !is_instant(s))
+        .map(str::trim)
+    }
+
+    /// Resolves the timezone for a channel's announcement schedule: channel
+    /// override, then guild override, then global setting, falling back to
+    /// [`DEFAULT_FEED_TIMEZONE`].
+    #[must_use]
+    pub fn feed_timezone_for_channel(&self, guild_id: u64, channel_id: u64) -> chrono_tz::Tz {
+        self.feed_setting(
+            guild_id,
+            channel_id,
+            |f| f.timezone.as_ref(),
+            |g| g.feed_timezone.as_ref(),
+            self.feed_timezone.as_ref(),
+        )
+        .and_then(|tz| tz.trim().parse().ok())
+        .unwrap_or(DEFAULT_FEED_TIMEZONE)
     }
 }
 
@@ -1552,5 +1710,220 @@ mod tests {
 
         let errors = config.validate().unwrap_err();
         assert!(errors[0].contains("names no URLs"));
+    }
+
+    #[test]
+    fn feeds_schedule_and_timezone_validation() {
+        // Valid cron and timezone
+        let config: Config = toml::from_str(
+            r#"
+            feed_schedule = "0 8 * * *"
+            feed_timezone = "Europe/Helsinki"
+
+            [[guilds]]
+            guild_id = 1
+            feed_schedule = "@daily"
+            feed_timezone = "UTC"
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/rss"]
+            schedule = "0 12 * * 1-5"
+            timezone = "America/New_York"
+            "#,
+        )
+        .unwrap();
+        assert!(config.validate().is_ok());
+
+        // Invalid cron
+        let bad_cron: Config = toml::from_str(
+            r#"
+            feed_schedule = "not a cron"
+
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/rss"]
+            "#,
+        )
+        .unwrap();
+        let errors = bad_cron.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("not a valid cron expression"))
+        );
+
+        // Invalid timezone
+        let bad_tz: Config = toml::from_str(
+            r#"
+            feed_timezone = "Mars/Phobos"
+
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/rss"]
+            "#,
+        )
+        .unwrap();
+        let errors = bad_tz.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("not a valid IANA timezone name"))
+        );
+    }
+
+    #[test]
+    fn feeds_schedule_and_timezone_resolution() {
+        let config: Config = toml::from_str(
+            r#"
+            feed_schedule = "0 8 * * *"
+            feed_timezone = "UTC"
+
+            [[guilds]]
+            guild_id = 1
+            feed_schedule = "0 9 * * *"
+            feed_timezone = "Europe/Berlin"
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/rss"]
+            schedule = "0 10 * * *"
+            timezone = "America/New_York"
+
+            [[guilds.feeds]]
+            channel_id = 11
+            feed_urls = ["https://example.com/rss"]
+
+            [[guilds.feeds]]
+            channel_id = 12
+            feed_urls = ["https://example.com/rss"]
+            schedule = "instant"
+
+            [[guilds]]
+            guild_id = 2
+
+            [[guilds.feeds]]
+            channel_id = 20
+            feed_urls = ["https://example.com/rss"]
+            "#,
+        )
+        .unwrap();
+
+        // Channel 10: channel override
+        assert_eq!(config.feed_schedule_for_channel(1, 10), Some("0 10 * * *"));
+        assert_eq!(
+            config.feed_timezone_for_channel(1, 10),
+            chrono_tz::America::New_York
+        );
+
+        // Channel 11: guild override
+        assert_eq!(config.feed_schedule_for_channel(1, 11), Some("0 9 * * *"));
+        assert_eq!(
+            config.feed_timezone_for_channel(1, 11),
+            chrono_tz::Europe::Berlin
+        );
+
+        // Channel 12: explicit instant
+        assert_eq!(config.feed_schedule_for_channel(1, 12), None);
+
+        // Channel 20: global override
+        assert_eq!(config.feed_schedule_for_channel(2, 20), Some("0 8 * * *"));
+        assert_eq!(config.feed_timezone_for_channel(2, 20), chrono_tz::UTC);
+
+        // Empty config: default fallback (None and Europe/Helsinki)
+        let empty_config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 3
+
+            [[guilds.feeds]]
+            channel_id = 30
+            feed_urls = ["https://example.com/rss"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(empty_config.feed_schedule_for_channel(3, 30), None);
+        assert_eq!(
+            empty_config.feed_timezone_for_channel(3, 30),
+            chrono_tz::Europe::Helsinki
+        );
+    }
+
+    #[test]
+    fn a_channel_takes_its_schedule_from_any_of_its_sections() {
+        let config: Config = toml::from_str(
+            r#"
+            feed_schedule = "0 8 * * *"
+
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/a"]
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/b"]
+            schedule = "0 18 * * *"
+            timezone = "UTC"
+            "#,
+        )
+        .unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.feed_schedule_for_channel(1, 10), Some("0 18 * * *"));
+        assert_eq!(config.feed_timezone_for_channel(1, 10), chrono_tz::UTC);
+    }
+
+    #[test]
+    fn sections_of_one_channel_must_agree_on_its_schedule() {
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/a"]
+            schedule = "0 8 * * *"
+            timezone = "UTC"
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/b"]
+            schedule = "0 18 * * *"
+            timezone = "Europe/Berlin"
+            "#,
+        )
+        .unwrap();
+        let errors = config.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("conflicting schedules")));
+        assert!(errors.iter().any(|e| e.contains("conflicting timezones")));
+    }
+
+    #[test]
+    fn an_instant_guild_overrides_a_global_schedule() {
+        let config: Config = toml::from_str(
+            r#"
+            feed_schedule = "0 8 * * *"
+
+            [[guilds]]
+            guild_id = 1
+            feed_schedule = "Instant"
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/a"]
+            "#,
+        )
+        .unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.feed_schedule_for_channel(1, 10), None);
     }
 }

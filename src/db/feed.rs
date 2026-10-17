@@ -1,4 +1,15 @@
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 use sqlx::SqlitePool;
+
+type PendingRow = (
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
 
 pub struct FeedItem {
     pub id: String,
@@ -250,6 +261,165 @@ pub async fn record_feed_sightings(
 
     tx.commit().await?;
     Ok(unseen)
+}
+
+/// An unseen article queued for a channel waiting to be announced at its scheduled time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAnnouncement {
+    pub channel_id: u64,
+    pub guild_id: u64,
+    pub item_id: String,
+    pub feed_url: String,
+    pub source_title: String,
+    pub item_title: String,
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Queues unseen articles for a channel. Duplicate items are silently ignored.
+pub async fn queue_pending_announcements(
+    db: &SqlitePool,
+    announcements: &[PendingAnnouncement],
+) -> Result<(), sqlx::Error> {
+    if announcements.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.begin().await?;
+    for a in announcements {
+        let channel_id = a.channel_id as i64;
+        let guild_id = a.guild_id as i64;
+        sqlx::query(
+            "INSERT INTO feed_pending_announcements
+             (channel_id, guild_id, item_id, feed_url, source_title, item_title, published_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(channel_id, item_id) DO NOTHING",
+        )
+        .bind(channel_id)
+        .bind(guild_id)
+        .bind(&a.item_id)
+        .bind(&a.feed_url)
+        .bind(&a.source_title)
+        .bind(&a.item_title)
+        .bind(a.published_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Fetches all pending announcements queued for a channel in arrival order.
+/// `rowid`, not `created_at`: the timestamp has whole seconds only, so it
+/// cannot order the articles one pass queues together.
+pub async fn get_pending_announcements(
+    db: &SqlitePool,
+    channel_id: u64,
+) -> Result<Vec<PendingAnnouncement>, sqlx::Error> {
+    let rows: Vec<PendingRow> = sqlx::query_as(
+        "SELECT channel_id, guild_id, item_id, feed_url, source_title, item_title, published_at
+         FROM feed_pending_announcements
+         WHERE channel_id = ?
+         ORDER BY rowid ASC",
+    )
+    .bind(channel_id as i64)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(cid, gid, item_id, feed_url, source_title, item_title, published_at)| {
+                PendingAnnouncement {
+                    channel_id: cid as u64,
+                    guild_id: gid as u64,
+                    item_id,
+                    feed_url,
+                    source_title,
+                    item_title,
+                    published_at,
+                }
+            },
+        )
+        .collect())
+}
+
+/// Deletes announced items from a channel's pending queue.
+pub async fn delete_pending_announcements(
+    db: &SqlitePool,
+    channel_id: u64,
+    item_ids: &[&str],
+) -> Result<u64, sqlx::Error> {
+    if item_ids.is_empty() {
+        return Ok(0);
+    }
+    let mut tx = db.begin().await?;
+    let mut deleted = 0;
+    for id in item_ids {
+        deleted += sqlx::query(
+            "DELETE FROM feed_pending_announcements WHERE channel_id = ? AND item_id = ?",
+        )
+        .bind(channel_id as i64)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
+    tx.commit().await?;
+    Ok(deleted)
+}
+
+/// Every channel with something queued, whether or not it is still configured.
+pub async fn pending_announcement_channels(db: &SqlitePool) -> Result<Vec<u64>, sqlx::Error> {
+    let rows: Vec<(i64,)> =
+        sqlx::query_as("SELECT DISTINCT channel_id FROM feed_pending_announcements")
+            .fetch_all(db)
+            .await?;
+    Ok(rows.into_iter().map(|(id,)| id as u64).collect())
+}
+
+/// Drops everything queued for a channel no longer configured.
+pub async fn clear_pending_announcements(
+    db: &SqlitePool,
+    channel_id: u64,
+) -> Result<u64, sqlx::Error> {
+    Ok(
+        sqlx::query("DELETE FROM feed_pending_announcements WHERE channel_id = ?")
+            .bind(channel_id as i64)
+            .execute(db)
+            .await?
+            .rows_affected(),
+    )
+}
+
+/// When a channel last completed a scheduled announcement run.
+pub async fn get_channel_last_announced_at(
+    db: &SqlitePool,
+    channel_id: u64,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, sqlx::Error> {
+    let row: Option<(chrono::DateTime<chrono::Utc>,)> = sqlx::query_as(
+        "SELECT last_announced_at FROM feed_channel_announcements WHERE channel_id = ?",
+    )
+    .bind(channel_id as i64)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(dt,)| dt))
+}
+
+/// Marks that a scheduled announcement run completed for `channel_id` at `at`.
+pub async fn mark_channel_announced(
+    db: &SqlitePool,
+    channel_id: u64,
+    at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO feed_channel_announcements (channel_id, last_announced_at)
+         VALUES (?, ?)
+         ON CONFLICT(channel_id) DO UPDATE SET last_announced_at = excluded.last_announced_at",
+    )
+    .bind(channel_id as i64)
+    .bind(at)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -510,5 +680,130 @@ mod tests {
         pool.close().await;
 
         assert!(!needs_baseline_poll(&pool, "feed", 1, chrono::Utc::now().naive_utc()).await);
+    }
+
+    #[tokio::test]
+    async fn pending_announcements_can_be_queued_retrieved_and_deleted() {
+        let pool = setup_db().await;
+        let published = chrono::DateTime::parse_from_rfc3339("2026-10-17T12:00:00Z")
+            .unwrap()
+            .to_utc();
+
+        let item1 = PendingAnnouncement {
+            channel_id: 100,
+            guild_id: 10,
+            item_id: "https://example.com/item1".to_string(),
+            feed_url: "https://example.com/feed".to_string(),
+            source_title: "Example Source".to_string(),
+            item_title: "Item 1".to_string(),
+            published_at: Some(published),
+        };
+        let item2 = PendingAnnouncement {
+            channel_id: 100,
+            guild_id: 10,
+            item_id: "https://example.com/item2".to_string(),
+            feed_url: "https://example.com/feed".to_string(),
+            source_title: "Example Source".to_string(),
+            item_title: "Item 2".to_string(),
+            published_at: None,
+        };
+
+        queue_pending_announcements(&pool, &[item1.clone(), item2.clone()])
+            .await
+            .unwrap();
+
+        // Duplicate queueing is ignored (deduplicated by channel_id and item_id)
+        queue_pending_announcements(&pool, std::slice::from_ref(&item1))
+            .await
+            .unwrap();
+
+        let pending = get_pending_announcements(&pool, 100).await.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].item_id, item1.item_id);
+        assert_eq!(pending[0].source_title, item1.source_title);
+        assert_eq!(pending[0].published_at, Some(published));
+        assert_eq!(pending[1].item_id, item2.item_id);
+        assert_eq!(pending[1].published_at, None);
+
+        // Another channel has no pending announcements
+        let other_pending = get_pending_announcements(&pool, 200).await.unwrap();
+        assert!(other_pending.is_empty());
+
+        // Deleting item1 removes only item1
+        delete_pending_announcements(&pool, 100, &[&item1.item_id])
+            .await
+            .unwrap();
+        let remaining = get_pending_announcements(&pool, 100).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].item_id, item2.item_id);
+    }
+
+    #[tokio::test]
+    async fn pending_announcements_keep_arrival_order_within_a_second() {
+        let pool = setup_db().await;
+        let item = |id: &str, channel_id| PendingAnnouncement {
+            channel_id,
+            guild_id: 1,
+            item_id: id.to_string(),
+            feed_url: "https://example.com/feed".to_string(),
+            source_title: "Source".to_string(),
+            item_title: id.to_string(),
+            published_at: None,
+        };
+        queue_pending_announcements(&pool, &[item("z", 1), item("a", 1), item("m", 2)])
+            .await
+            .unwrap();
+
+        let ids: Vec<String> = get_pending_announcements(&pool, 1)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| a.item_id)
+            .collect();
+        assert_eq!(ids, ["z", "a"]);
+
+        let mut channels = pending_announcement_channels(&pool).await.unwrap();
+        channels.sort_unstable();
+        assert_eq!(channels, [1, 2]);
+
+        assert_eq!(clear_pending_announcements(&pool, 1).await.unwrap(), 2);
+        assert_eq!(pending_announcement_channels(&pool).await.unwrap(), [2]);
+    }
+
+    #[tokio::test]
+    async fn channel_announcements_last_announced_tracking() {
+        let pool = setup_db().await;
+        let channel_id = 42;
+
+        assert_eq!(
+            get_channel_last_announced_at(&pool, channel_id)
+                .await
+                .unwrap(),
+            None
+        );
+
+        let t1 = chrono::DateTime::parse_from_rfc3339("2026-10-17T08:00:00Z")
+            .unwrap()
+            .to_utc();
+        mark_channel_announced(&pool, channel_id, t1).await.unwrap();
+
+        assert_eq!(
+            get_channel_last_announced_at(&pool, channel_id)
+                .await
+                .unwrap(),
+            Some(t1)
+        );
+
+        let t2 = chrono::DateTime::parse_from_rfc3339("2026-10-18T08:00:00Z")
+            .unwrap()
+            .to_utc();
+        mark_channel_announced(&pool, channel_id, t2).await.unwrap();
+
+        assert_eq!(
+            get_channel_last_announced_at(&pool, channel_id)
+                .await
+                .unwrap(),
+            Some(t2)
+        );
     }
 }

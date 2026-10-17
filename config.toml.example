@@ -13,6 +13,12 @@
 
 # poll_interval = 3600
 # cache_ttl_secs = 600
+# # Send feed articles as a digest at these times instead of as soon as they
+# # are found (cron, read in feed_timezone). Overridable per guild with the
+# # same keys, and per [[guilds.feeds]] section with schedule/timezone.
+# # "instant" turns a schedule set further up back off.
+# feed_schedule = "0 9 * * *"
+# feed_timezone = "Europe/Helsinki"
 
 # Zulip Integration (optional)
 # [zulip]
@@ -147,6 +153,9 @@
 # # global [[feeds]] defaults.
 # # blocked_domains = ["kuvat.fi"]
 # # blocked_feed_urls = ["https://example.com/unwanted.rss"]
+# # Digest schedule for this channel only (see feed_schedule above).
+# # schedule = "0 18 * * 1-5"
+# # timezone = "UTC"
 
 # [[feeds]]
 # # List of Feed URLs

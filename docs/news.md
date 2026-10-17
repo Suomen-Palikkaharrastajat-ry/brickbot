@@ -66,8 +66,46 @@ blocked_feed_urls = ["https://example.com/other-unwanted.xml"]
 - Every feed polled in a pass is stamped with the time the pass began, so feeds that are polled together fall due together again — which is what lets a channel's updates be batched together. A feed that does not answer within 30 seconds is skipped for that pass.
 - A `channel_id` may appear in several sections of one guild, but not under two guilds. A section naming no URLs is rejected when there are no global `[[feeds]]` to follow.
 
+### Scheduled Announcements (Digests)
+
+By default a channel's new articles are announced on the pass that finds them. A channel can instead collect them and get them as a digest at scheduled times.
+
+```toml
+# Every channel's default; unset means instant.
+feed_schedule = "0 9 * * *"
+feed_timezone = "Europe/Helsinki"
+
+[[guilds]]
+guild_id = 123456789012345678
+# This guild's channels, overriding the global setting.
+feed_schedule = "0 18 * * 1-5"
+feed_timezone = "UTC"
+
+[[guilds.feeds]]
+channel_id = 234567890123456789
+# This channel only, overriding the guild.
+schedule = "instant"
+```
+
+- **Schedule.** A cron expression (`"0 9 * * *"` daily at 09:00, `"0 18 * * 1-5"` weekdays at 18:00, `@daily`), read in the channel's time zone, daylight saving included. The channel's own `schedule` wins over its guild's `feed_schedule`, which wins over the global `feed_schedule`. An empty value, `"instant"` or `"none"` means instant announcements, so a channel can opt out of a schedule set above it. A channel named in several `[[guilds.feeds]]` sections may set `schedule` and `timezone` in any one of them, but sections that set different values for one channel are rejected at startup and on reload; so is an invalid cron expression.
+- **Time zone.** An IANA name (`"Europe/Helsinki"`, `"America/New_York"`, `"UTC"`), resolved the same way (`timezone`, then the guild's and the global `feed_timezone`), defaulting to `Europe/Helsinki`.
+- **Queue.** Articles a scheduled channel would have been sent are queued in `feed_pending_announcements` instead — after the same filtering (blocked domains and feeds, `YouTube` Shorts) — once per channel however many feeds bring them. The queue survives restarts and reloads.
+- **When it is sent.** The bot checks once a minute. The first time a channel is seen with a schedule, its last run is recorded as now (`feed_channel_announcements`), so its first digest comes at the next scheduled time. After that a digest is sent whenever a scheduled time has passed since the last run, so a time missed while the bot was down is caught up on start, once however many were missed. A run with an empty queue sends nothing.
+- **Format.** One block per source, sources in the order their articles were queued, each source's articles newest first:
+  ```markdown
+  **Lego News**:
+  - 📰 [New Castle Set Announced](<https://example.com/castle>) · <t:1768478400:d>
+  - 🎬 [Speed Build & Review](<https://www.youtube.com/watch?v=123>) · <t:1768478400:d>
+
+  **Other Blog**:
+  - 📰 [Modular Building Guide](<https://other.example/guide>)
+  ```
+  Titles are cleaned and escaped as in instant announcements. A digest too long for one message continues in the next, repeating the heading of a source split between them; nothing is left out.
+- **Failures.** Each message's articles leave the queue once it is sent. If Discord refuses one, the rest stay queued for the channel's next scheduled time rather than being retried every minute.
+- **Changing the schedule.** A channel switched back to instant sends whatever it still had queued on the next pass. A channel removed from the configuration has its queue dropped.
+
 **Known limitations**
-- An article that reaches a channel through two different feeds in *different* passes is announced twice; duplicates are only merged within one pass.
+- An article that reaches a channel through two different feeds in *different* passes is announced twice; duplicates are only merged within one pass (or, for a scheduled channel, within one digest).
 - An article is identified by its link (its GUID only when it has none), so a feed that rewrites its links re-announces them.
 - A message Discord rejects (missing permission, outage) is logged and not retried, and the rest of that pass's messages for the channel are dropped with it.
 - There is no cap on messages per pass: N sources with news mean up to 3N messages, paced by Discord's rate limit.
@@ -86,4 +124,5 @@ blocked_feed_urls = ["https://example.com/other-unwanted.xml"]
 ## Recent Changes
 - Support for ATOM feeds was recently introduced to resolve parsing issues with feeds from YouTube and Flickr.
 - New articles can be published to per-guild channels (`[[guilds.feeds]]`), announced source by source: one message per article for up to three, one message listing them all beyond that.
+- Channels can get their articles as a digest on a cron schedule (`feed_schedule`, `schedule`).
 - Announcements carry the article's publication date, and `blocked_domains` / `blocked_feed_urls` keep feeds out of channels by domain or complete feed URL — globally under `[[feeds]]`, with more per `[[guilds.feeds]]` section.
