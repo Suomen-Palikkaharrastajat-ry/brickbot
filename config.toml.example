@@ -143,9 +143,10 @@
 # channel_id = 234567890123456789
 # feed_urls = ["https://example.com/feed1.rss"]
 # # opml_urls = ["https://example.com/feeds.opml"]
-# # More domains to block for this channel only, added to the global
-# # [[feeds]] blocked_domains.
+# # More domains or feed URLs to block for this channel only, added to the
+# # global [[feeds]] defaults.
 # # blocked_domains = ["kuvat.fi"]
+# # blocked_feed_urls = ["https://example.com/unwanted.rss"]
 
 # [[feeds]]
 # # List of Feed URLs
@@ -157,3 +158,7 @@
 # # Feeds served from these domains (or their subdomains) are never published
 # # to any channel; a [[guilds.feeds]] section can block more for its own.
 # # blocked_domains = ["flickr.com"]
+# # Complete feed URLs that are never published to any channel.
+# # blocked_feed_urls = ["https://example.com/unwanted.rss"]
+
+

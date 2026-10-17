@@ -236,11 +236,46 @@ fn host_is_or_under(host: &str, domain: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
 }
 
+/// Whether a feed URL matches one of the blocked feed URLs.
+///
+/// Matching checks exact URL strings as well as normalized URLs (ignoring
+/// trailing slashes, host case differences, and trailing dots on hosts).
+#[must_use]
+pub fn feed_blocked(feed_url: &str, blocked_feed_urls: &[String]) -> bool {
+    if blocked_feed_urls.is_empty() {
+        return false;
+    }
+    let parsed_feed = reqwest::Url::parse(feed_url).ok();
+    blocked_feed_urls.iter().any(|blocked| {
+        if feed_url == blocked {
+            return true;
+        }
+        if feed_url.trim_end_matches('/') == blocked.trim_end_matches('/') {
+            return true;
+        }
+        if let Some(feed_u) = &parsed_feed {
+            if let Ok(blocked_u) = reqwest::Url::parse(blocked) {
+                let feed_host = feed_u.host_str().map(|h| h.trim_end_matches('.'));
+                let blocked_host = blocked_u.host_str().map(|h| h.trim_end_matches('.'));
+                if feed_u.scheme() == blocked_u.scheme()
+                    && feed_host == blocked_host
+                    && feed_u.port_or_known_default() == blocked_u.port_or_known_default()
+                    && feed_u.query() == blocked_u.query()
+                    && feed_u.path().trim_end_matches('/') == blocked_u.path().trim_end_matches('/')
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+}
+
 /// Which channels each feed's new articles go to, per the guilds' `feeds`
 /// sections. A section naming no URLs follows every global feed; whichever
-/// it follows, feeds from its `blocked_domains` are left out, and so are
-/// those from the global `[[feeds]]` entries' `blocked_domains`, which are
-/// every section's defaults.
+/// it follows, feeds from its `blocked_domains` and `blocked_feed_urls` are left
+/// out, and so are those from the global `[[feeds]]` entries' `blocked_domains`
+/// and `blocked_feed_urls`, which are every section's defaults.
 #[must_use]
 pub fn publish_targets(
     config: &Config,
@@ -251,6 +286,11 @@ pub fn publish_targets(
         .feeds
         .iter()
         .flat_map(|f| f.blocked_domains.iter().cloned())
+        .collect();
+    let feeds_blocked_everywhere: Vec<String> = config
+        .feeds
+        .iter()
+        .flat_map(|f| f.blocked_feed_urls.iter().cloned())
         .collect();
     for guild in &config.guilds {
         for section in &guild.feeds {
@@ -271,6 +311,8 @@ pub fn publish_targets(
             for url in urls {
                 if domain_blocked(url, &blocked_everywhere)
                     || domain_blocked(url, &section.blocked_domains)
+                    || feed_blocked(url, &feeds_blocked_everywhere)
+                    || feed_blocked(url, &section.blocked_feed_urls)
                 {
                     continue;
                 }
@@ -1157,6 +1199,152 @@ mod tests {
         ));
         assert!(!domain_blocked("not a url", &blocked));
         assert!(!domain_blocked("https://kuvat.fi/rss", &[]));
+    }
+
+    #[test]
+    fn feed_blocks_exact_url_and_normalized_variants() {
+        let blocked = vec![
+            "https://example.com/feed.xml".to_string(),
+            "https://youtube.com/feeds/videos.xml?channel_id=123".to_string(),
+            "https://blog.example/atom/".to_string(),
+            "http://example.org:80/rss".to_string(),
+            "https://example.net/feed/".to_string(),
+        ];
+
+        // Exact match
+        assert!(feed_blocked("https://example.com/feed.xml", &blocked));
+        // Trailing slash differences
+        assert!(feed_blocked("https://example.com/feed.xml/", &blocked));
+        assert!(feed_blocked("https://blog.example/atom", &blocked));
+        assert!(feed_blocked("https://blog.example/atom/", &blocked));
+        // Scheme & host case differences
+        assert!(feed_blocked("HTTPS://EXAMPLE.COM/feed.xml", &blocked));
+        // Trailing dot on host
+        assert!(feed_blocked("https://example.com./feed.xml", &blocked));
+        // Query param match
+        assert!(feed_blocked(
+            "https://youtube.com/feeds/videos.xml?channel_id=123",
+            &blocked
+        ));
+        // Trailing slash with query
+        assert!(feed_blocked(
+            "https://example.net/feed?format=xml",
+            &["https://example.net/feed/?format=xml".to_string()]
+        ));
+        // Default port matching
+        assert!(feed_blocked("http://example.org/rss", &blocked));
+        assert!(feed_blocked("http://example.org:80/rss", &blocked));
+        // Root domain trailing slash
+        assert!(feed_blocked(
+            "https://root.example.com",
+            &["https://root.example.com/".to_string()]
+        ));
+        assert!(feed_blocked(
+            "https://root.example.com/",
+            &["https://root.example.com".to_string()]
+        ));
+
+        // Different query param
+        assert!(!feed_blocked(
+            "https://youtube.com/feeds/videos.xml?channel_id=456",
+            &blocked
+        ));
+        // Different path
+        assert!(!feed_blocked("https://example.com/other.xml", &blocked));
+        // Different host
+        assert!(!feed_blocked("https://other.com/feed.xml", &blocked));
+        // Empty list
+        assert!(!feed_blocked("https://example.com/feed.xml", &[]));
+    }
+
+    #[test]
+    fn a_blocked_feed_is_not_published_to_that_channel() {
+        let config: Config = toml::from_str(
+            r#"
+            [[feeds]]
+            feed_urls = ["https://example.com/global1.xml", "https://example.com/global2.xml"]
+
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            blocked_feed_urls = ["https://example.com/global1.xml", "https://blog.example/from-opml-bad.xml"]
+            opml_urls = ["https://own/opml"]
+
+            [[guilds]]
+            guild_id = 2
+
+            [[guilds.feeds]]
+            channel_id = 20
+            opml_urls = ["https://own/opml"]
+            "#,
+        )
+        .unwrap();
+        let cache = HashMap::from([(
+            "https://own/opml".to_string(),
+            vec![
+                "https://blog.example/from-opml-good.xml".to_string(),
+                "https://blog.example/from-opml-bad.xml".to_string(),
+            ],
+        )]);
+        let target = |channel_id, guild_id| PublishTarget {
+            channel_id,
+            guild_id,
+        };
+
+        let targets = publish_targets(&config, &cache);
+
+        // Guild 1 channel 10 blocked global1.xml and from-opml-bad.xml
+        assert_eq!(targets.get("https://example.com/global1.xml"), None);
+        assert_eq!(
+            targets["https://blog.example/from-opml-good.xml"],
+            BTreeSet::from([target(10, 1), target(20, 2)])
+        );
+        // Guild 2 channel 20 still gets from-opml-bad.xml
+        assert_eq!(
+            targets["https://blog.example/from-opml-bad.xml"],
+            BTreeSet::from([target(20, 2)])
+        );
+        // Both feeds in OPML are still polled
+        assert!(feeds_to_poll(&config, &cache).contains("https://blog.example/from-opml-bad.xml"));
+        assert!(feeds_to_poll(&config, &cache).contains("https://blog.example/from-opml-good.xml"));
+    }
+
+    #[test]
+    fn globally_blocked_feeds_are_every_channels_default() {
+        let config: Config = toml::from_str(
+            r#"
+            [[feeds]]
+            feed_urls = ["https://example.com/global1.xml", "https://example.com/global2.xml"]
+            blocked_feed_urls = ["https://example.com/global1.xml"]
+
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+
+            [[guilds.feeds]]
+            channel_id = 11
+            blocked_feed_urls = ["https://example.com/global2.xml"]
+            "#,
+        )
+        .unwrap();
+        let target = |channel_id| PublishTarget {
+            channel_id,
+            guild_id: 1,
+        };
+
+        let targets = publish_targets(&config, &HashMap::new());
+
+        // global1.xml blocked everywhere
+        assert!(!targets.contains_key("https://example.com/global1.xml"));
+        // global2.xml received by channel 10, but blocked by channel 11
+        assert_eq!(
+            targets["https://example.com/global2.xml"],
+            BTreeSet::from([target(10)])
+        );
     }
 
     #[test]

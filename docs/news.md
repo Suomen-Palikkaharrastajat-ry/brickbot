@@ -22,8 +22,9 @@ feed_urls = [
 opml_urls = [
     "https://example.com/subscriptions.opml"
 ]
-# Never published to any channel (see "Blocked domains" below).
+# Never published to any channel (see "Blocked domains" and "Blocked feeds" below).
 blocked_domains = ["flickr.com"]
+blocked_feed_urls = ["https://example.com/unwanted.xml"]
 ```
 
 ## Publishing New Articles to a Guild
@@ -46,6 +47,9 @@ channel_id = 345678901234567890
 # Feeds served from these domains are not published to this channel, on top
 # of the domains the global [[feeds]] block everywhere.
 blocked_domains = ["kuvat.fi"]
+# Complete feed URLs to block for this channel only, on top of the feeds
+# the global [[feeds]] block everywhere.
+blocked_feed_urls = ["https://example.com/other-unwanted.xml"]
 ```
 
 - A guild may have any number of sections, and feeds named only here are polled too — they need not be repeated under the global `[[feeds]]`.
@@ -55,6 +59,7 @@ blocked_domains = ["kuvat.fi"]
 - **Titles.** Emoji and hashtags are removed from announced titles (`🚀 Set (#lego) #shorts` → `Set`): Discord fails to render a markdown link whose text contains an emoji, and the tags are noise. Hashtags are dropped wherever they stand, in brackets or quotes too, along with a bare `#` (what a keycap emoji leaves) and a separator left hanging at the end (`Title - #lego` → `Title`). Numbers such as `#123` stay. The emoji blocks go whole, so symbols like `★` and `♪` go with them, while `©`, `®`, `™`, `⌀` and letters stay. A title left empty is announced as the bare link. Source names, which sit outside the link, are not cleaned of emoji or hashtags. Both titles and source names have HTML character references decoded once when a feed is read (`Q&amp;amp;A` in the XML, which parses to `Q&amp;A`, is stored, searched by `/set` and announced as `Q&A`), since many feeds escape their titles as HTML; numeric references and the common named ones are decoded, anything else — and references to control or invisible direction characters — is left as written. Articles stored before this were stored undecoded. A `<` in a title or source name is escaped, so a Discord tag (`<@id>`, `<:emoji:id>`, `<t:…>`) shows as text.
 - **Publication dates.** The date is the feed's own (`pubDate`, or failing that `dc:date`, in RSS; `published`, or failing that `updated`, in Atom; RFC 2822 or RFC 3339), sent as a Discord timestamp (`<t:…:d>`) so that each reader sees it in their own language and time zone. An article whose feed gives no date, one that cannot be read, or a placeholder (the Unix epoch or earlier, year 2100 or later) is announced without one.
 - **Blocked domains.** `blocked_domains` keeps feeds out of a channel by where they are served from: the host of the *feed URL* (not of the article links) is compared case-insensitively, and a domain covers its subdomains — `kuvat.fi` blocks `palikkatakomo.kuvat.fi`, `flickr.com` does not block `notflickr.com`. The global `[[feeds]]` entries' `blocked_domains` are the defaults: together they apply to every section of every guild. A section's own `blocked_domains` are added to them for that section's channel only; a section cannot take a default away. Either way the list applies to whatever the section follows — its own `feed_urls`, the feeds of its `opml_urls`, or the global `[[feeds]]`. Entries must be bare domains (no scheme, port, path or wildcard; an internationalized name in its `xn--` form); anything else is rejected at startup and on reload. A blocked feed is still polled and stored, so its articles keep turning up in `/set`; it is only never announced.
+- **Blocked feeds.** `blocked_feed_urls` keeps individual feeds out of a channel by matching their feed URL. This makes it easy to blacklist complete feeds from OPML subscription lists (or anywhere else) without having to block their entire hosting domain (for instance, blocking a single YouTube channel, Substack blog or Flickr feed while keeping the rest). Matching compares URLs case-insensitively for scheme and host, ignoring trailing slashes, default ports, and host trailing dots. Just like `blocked_domains`, the global `[[feeds]]` entries' `blocked_feed_urls` are the defaults that apply to every channel, and a section's own `blocked_feed_urls` add to them for that channel. Entries must start with `http://` or `https://`; anything else is rejected at startup and on reload. A blocked feed is still polled and stored, so its articles keep turning up in `/set`; it is only never announced.
 - **Only articles that appear after startup.** What a feed has already shown is recorded in the `feed_sightings` table (`db::record_feed_sightings`), and `feed_polls.baseline_run` names the bot run that last took the feed's baseline. A feed's first successful poll in a run is that baseline and is silent; only articles first seen on a later poll of the same run are announced. Anything published before or while the bot was down is never mentioned — and since a `SIGHUP` reload re-executes the bot, a reload starts a fresh baseline as well.
 - Sightings are kept only for feeds some guild publishes. A row is refreshed while its feed still lists the article and pruned 30 days after it last did, so the table is bounded by what the feeds carry.
 - A published feed is polled once right at startup, regardless of its last poll time, so the baseline is taken immediately rather than up to one `poll_interval` later. That is one attempt: if it fails, the baseline is taken by the feed's next regular poll instead, and whatever was published in between is not announced.
@@ -81,4 +86,4 @@ blocked_domains = ["kuvat.fi"]
 ## Recent Changes
 - Support for ATOM feeds was recently introduced to resolve parsing issues with feeds from YouTube and Flickr.
 - New articles can be published to per-guild channels (`[[guilds.feeds]]`), announced source by source: one message per article for up to three, one message listing them all beyond that.
-- Announcements carry the article's publication date, and `blocked_domains` keeps feeds out of channels by domain — globally under `[[feeds]]`, with more per `[[guilds.feeds]]` section.
+- Announcements carry the article's publication date, and `blocked_domains` / `blocked_feed_urls` keep feeds out of channels by domain or complete feed URL — globally under `[[feeds]]`, with more per `[[guilds.feeds]]` section.

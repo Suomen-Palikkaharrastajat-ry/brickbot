@@ -370,6 +370,11 @@ pub struct GuildFeedConfig {
     /// apply.
     #[serde(default)]
     pub blocked_domains: Vec<String>,
+    /// Feeds whose URLs match these are not published to this channel,
+    /// wherever the section got them from. Added to the global `[[feeds]]`
+    /// entries' `blocked_feed_urls`, which always apply.
+    #[serde(default)]
+    pub blocked_feed_urls: Vec<String>,
 }
 
 /// Whether a `blocked_domains` entry is a plain host name such as
@@ -396,6 +401,10 @@ pub struct RssFeedConfig {
     /// section's own `blocked_domains` add to these.
     #[serde(default)]
     pub blocked_domains: Vec<String>,
+    /// Feeds blocked in every guild's `feeds` sections by default; a
+    /// section's own `blocked_feed_urls` add to these.
+    #[serde(default)]
+    pub blocked_feed_urls: Vec<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -615,6 +624,13 @@ impl Config {
                 ));
             }
         }
+        for url in self.feeds.iter().flat_map(|f| &f.blocked_feed_urls) {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                errors.push(format!(
+                    "feeds blocked_feed_urls entry must start with http:// or https://: {url}"
+                ));
+            }
+        }
         let has_global_feeds = self
             .feeds
             .iter()
@@ -643,6 +659,14 @@ impl Config {
                     if !is_bare_domain(domain) {
                         errors.push(format!(
                             "guild {} feeds blocked_domains entry must be a bare domain such as example.com: {domain:?}",
+                            guild.guild_id
+                        ));
+                    }
+                }
+                for url in &section.blocked_feed_urls {
+                    if !url.starts_with("http://") && !url.starts_with("https://") {
+                        errors.push(format!(
+                            "guild {} feeds blocked_feed_urls entry must start with http:// or https://: {url}",
                             guild.guild_id
                         ));
                     }
@@ -1336,6 +1360,85 @@ mod tests {
         assert_eq!(
             config.guilds[0].feeds[0].blocked_domains,
             ["kuvat.fi", "Flickr.com", "xn--hkyrinen-0zab.fi"]
+        );
+    }
+
+    #[test]
+    fn a_feeds_section_may_block_feed_urls() {
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/rss"]
+            blocked_feed_urls = ["https://example.com/bad-feed.xml", "http://example.com/other.xml"]
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.validate().is_ok());
+        assert_eq!(
+            config.guilds[0].feeds[0].blocked_feed_urls,
+            [
+                "https://example.com/bad-feed.xml",
+                "http://example.com/other.xml"
+            ]
+        );
+    }
+
+    #[test]
+    fn global_feeds_may_block_feed_urls_too() {
+        let config: Config = toml::from_str(
+            r#"
+            [[feeds]]
+            feed_urls = ["https://example.com/rss"]
+            blocked_feed_urls = ["https://example.com/bad.xml"]
+
+            [[feeds]]
+            blocked_feed_urls = ["ftp://example.com/bad.xml"]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.feeds[0].blocked_feed_urls,
+            ["https://example.com/bad.xml"]
+        );
+        let errors = config.validate().unwrap_err();
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|e| e.contains("blocked_feed_urls"))
+                .collect::<Vec<_>>(),
+            [
+                "feeds blocked_feed_urls entry must start with http:// or https://: ftp://example.com/bad.xml"
+            ]
+        );
+    }
+
+    #[test]
+    fn guild_blocked_feed_urls_must_start_with_http_or_https() {
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/rss"]
+            blocked_feed_urls = ["not-a-url"]
+            "#,
+        )
+        .unwrap();
+
+        let errors = config.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("blocked_feed_urls") && e.contains("guild 1")),
+            "expected error for blocked_feed_urls, got {errors:?}"
         );
     }
 
