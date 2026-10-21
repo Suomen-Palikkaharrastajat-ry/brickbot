@@ -29,14 +29,15 @@ The `/part` command provides an easy way to search and display information about
 The command can be enabled or disabled globally or on a per-guild basis using the `config.toml` file:
 
 ```toml
-[commands.part]
-enabled = true
+[commands]
+part.enabled = true
 
 [[guilds]]
 guild_id = 123456789
-[guilds.commands.part]
-enabled = false # Disables /part for this specific guild
+commands.part.enabled = false # Disables /part for this specific guild
 ```
+
+If your `config.toml` already has a `[commands]` table, add these keys to it rather than repeating the header, which TOML rejects.
 
 ## Appendix: Understanding LEGO Part Numbering Systems
 

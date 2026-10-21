@@ -9,7 +9,7 @@ The bot supports background polling of RSS and ATOM feeds, as well as OPML subsc
 - **OPML 1.1/2.0**: Subscription lists parsed using the `opml` crate. The bot recursively extracts all `xmlUrl` attributes from the nested outline nodes to discover all subscribed feeds.
 
 ## Configuration
-Feeds are configured in the `config.toml` file under the `[feeds]` table. A key it does not know is rejected at startup and on reload, rather than ignored. Its `poll_interval` sets the seconds between polls (default 3600).
+Feeds are configured in the `config.toml` file under the `[feeds]` table. A key it does not know is rejected at startup and on reload, rather than ignored. Its `poll_interval` sets the seconds between polls (default 3600). Values below 10, including 0, are rejected; the poll loop wakes once a minute, so anything under 60 behaves as 60.
 
 ```toml
 [feeds]
@@ -28,7 +28,7 @@ blocked_feed_urls = ["https://example.com/unwanted.xml"]
 
 ## Publishing New Articles to a Guild
 
-A guild opts in by naming a channel in a `[[guilds.feeds]]` section. Nothing is published anywhere without one.
+A guild opts in by naming a channel in a `[[guilds.feeds]]` section of its `[[guilds]]` block. Nothing is published anywhere without one. Keep these sections last in the guild's block: TOML files every key below a `[[guilds.feeds]]` header under that feed channel, so a guild setting written after it is rejected as unknown. A channel that only follows the global `[feeds]` can instead be written inline, before any section, as `feeds = [{ channel_id = 345678901234567890 }]` — but one guild cannot mix the inline form with sections.
 
 ```toml
 [[guilds]]

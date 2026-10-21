@@ -31,8 +31,10 @@ pub fn parse_feed(body: &[u8]) -> Result<Feed> {
     anyhow::bail!("the input could not be parsed as RSS or Atom");
 }
 
+/// Bypasses the response cache: a feed is only fetched once it is due, so a
+/// cached body would just delay new articles by up to `cache_ttl_secs`.
 pub async fn fetch_feed(client: &HttpClient, url: &str, limit: u64) -> Result<Feed> {
-    let body = client.get_bounded_bytes(url, limit, false).await?;
+    let body = client.get_bounded_bytes(url, limit, true).await?;
     parse_feed(&body[..])
 }
 
@@ -1028,7 +1030,8 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
             }
             let fetched = timeout(
                 FETCH_TIMEOUT,
-                client.get_bounded_text(opml_url, limit, false),
+                // Due already, like a feed, so not served from the cache.
+                client.get_bounded_text(opml_url, limit, true),
             )
             .await;
             if let Ok(Ok(opml_content)) = fetched {

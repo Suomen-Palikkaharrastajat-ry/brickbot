@@ -62,4 +62,4 @@ The bot uses SQLite (`data/bot.db`).
 
 - The bot features an **Ambient Assistant** that triggers ephemeral interactions (only visible to the user) to protect privacy.
 - Ambient training data is not logged by default. If enabled via `[ambient.training_data]`, data is retained based on `retention_days` and cleaned up automatically every 24 hours.
-- Every ambient setting can be scoped to one guild in its `[guilds.ambient]` table: `channel_ids`, `set`, `part`, `debug_logging` and `[guilds.ambient.training_data]`. A guild's `[guilds.ambient.training_data]` replaces the global section for that guild, so `enabled = false` there opts a guild out of a global capture.
+- Every ambient setting can be scoped to one guild with `ambient.*` keys in its `[[guilds]]` block: `ambient.channel_ids`, `ambient.set`, `ambient.part`, `ambient.debug_logging` and `ambient.training_data.*`. A guild's `ambient.training_data` replaces the global `[ambient] training_data` for that guild, so `ambient.training_data.enabled = false` opts a guild out of a global capture.

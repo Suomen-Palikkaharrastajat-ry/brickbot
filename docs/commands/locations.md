@@ -69,20 +69,21 @@ collection = "events"
 # Optional; defaults to "locations"
 locations_collection = "locations"
 
-[commands.locations]
-enabled = true
-enable_edit = true             # show the "Propose Changes" flow
-enable_propose = true          # show the "Propose New" flow
-enable_fallback_mention = false # @-mention the submitter if a DM cannot be delivered
+[commands]
+locations.enabled = true
+locations.enable_edit = true              # show the "Propose Changes" flow
+locations.enable_propose = true           # show the "Propose New" flow
+locations.enable_fallback_mention = false # @-mention the submitter if a DM cannot be delivered
 
 [[guilds]]
 guild_id = 123456789
-[guilds.commands.locations]
-enabled = false # Disables /locations for this specific guild
-enable_fallback_mention = false
+commands.locations.enabled = false # Disables /locations for this specific guild
+commands.locations.enable_fallback_mention = false
 ```
 
-A guild's `[guilds.commands.locations]` section replaces the global one as a whole: a flag it leaves out takes its default, not the global value. The defaults are `enabled`, `enable_edit` and `enable_propose` **off** and `enable_fallback_mention` **on**, so repeat `enable_fallback_mention = false` in every guild section if public mentions should stay off.
+If your `config.toml` already has a `[commands]` table, add these keys to it rather than repeating the header, which TOML rejects.
+
+A guild's `commands.locations` table replaces the global one as a whole: a flag it leaves out takes its default, not the global value. The defaults are `enabled`, `enable_edit` and `enable_propose` **off** and `enable_fallback_mention` **on**, so repeat `commands.locations.enable_fallback_mention = false` in every guild if public mentions should stay off.
 
 A `[zulip]` section is required for the moderation flow; without it submissions are dropped.
 

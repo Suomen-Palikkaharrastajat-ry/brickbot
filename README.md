@@ -65,6 +65,8 @@ bot_name = "Palikkaharrastaja"
 # Global default locale (optional; guild config wins, and "fi-FI" applies when neither is set)
 locale = "fi-FI"
 
+# --- Global settings: every guild's defaults ---
+
 # Zulip Integration (optional)
 [zulip]
 url = "https://forum.palikkaharrastajat.fi"
@@ -77,6 +79,27 @@ moderators = ["moderator@example.com"]
 url = "https://data.palikkaharrastajat.fi"
 collection = "events"
 
+[feeds]
+# Seconds between polls of each feed (optional, default 3600, at least 10;
+# polls run at most once a minute)
+poll_interval = 3600
+# List of Feed URLs
+feed_urls = [
+    "https://example.com/feed1.rss",
+    "https://example.com/feed2.rss"
+]
+# List of OPML URLs
+opml_urls = ["https://example.com/feeds.opml"]
+# Feeds served from these domains (or their subdomains) are never
+# published to any channel (optional).
+# blocked_domains = ["kuvat.fi"]
+# Complete feed URLs that are never published to any channel (optional).
+# blocked_feed_urls = ["https://example.com/unwanted.rss"]
+# Send every channel a digest at these times instead of announcing
+# articles as found (optional; cron, default time zone Europe/Helsinki).
+# schedule = "0 9 * * *"
+# timezone = "Europe/Helsinki"
+
 # Ambient assistant: which commands it offers when chat looks like it needs
 # them (default is true), and whether it explains its decisions in the log
 [ambient]
@@ -84,33 +107,34 @@ set = true
 part = true
 debug_logging = true
 
-# Command toggles
-[commands.events]
-enabled = true
-enable_edit = true
-enable_propose = true
-enable_fallback_mention = false
+# Command toggles, all in one table
+[commands]
+events.enabled = true
+events.enable_edit = true
+events.enable_propose = true
+events.enable_fallback_mention = false
 
-# Same switches as [commands.events]; off by default
-[commands.locations]
-enabled = true
-enable_edit = true
-enable_propose = true
-enable_fallback_mention = false
+# Same switches as events; off by default
+locations.enabled = true
+locations.enable_edit = true
+locations.enable_propose = true
+locations.enable_fallback_mention = false
+
+# --- Guilds: one self-contained [[guilds]] block each ---
 
 [[guilds]]
 guild_id = 123456789012345678 # Your Guild ID here
 locale = "fi-FI"
 
-# Any [commands.*] section can be overridden for one guild (optional).
-# A guild section replaces the global one whole, so flags left out take
+# Any command can be overridden for one guild (optional).
+# A guild's command replaces the global one whole, so flags left out take
 # their defaults; enable_fallback_mention defaults to true.
-[guilds.commands.locations]
-enabled = false
-enable_fallback_mention = false
+commands.locations.enabled = false
+commands.locations.enable_fallback_mention = false
 
 # Publish new feed articles to a channel of this guild (optional, repeatable).
-# Without feed_urls/opml_urls the section follows the global [feeds].
+# Without feed_urls/opml_urls the channel follows the global [feeds].
+# Keep these sections last in the guild's block.
 [[guilds.feeds]]
 channel_id = 234567890123456789
 feed_urls = ["https://example.com/feed1.rss"]
@@ -120,29 +144,11 @@ feed_urls = ["https://example.com/feed1.rss"]
 # Send a digest at these times instead of announcing articles as found (cron).
 # schedule = "0 9 * * *"
 # timezone = "Europe/Helsinki"
-
-[feeds]
-    # Seconds between polls of each feed (optional, default 3600)
-    poll_interval = 3600
-    # List of Feed URLs
-    feed_urls = [
-        "https://example.com/feed1.rss",
-        "https://example.com/feed2.rss"
-    ]
-    # List of OPML URLs
-    opml_urls = ["https://example.com/feeds.opml"]
-    # Feeds served from these domains (or their subdomains) are never
-    # published to any channel (optional).
-    # blocked_domains = ["kuvat.fi"]
-    # Complete feed URLs that are never published to any channel (optional).
-    # blocked_feed_urls = ["https://example.com/unwanted.rss"]
-    # Send every channel a digest at these times instead of announcing
-    # articles as found (optional; cron, default time zone Europe/Helsinki).
-    # schedule = "0 9 * * *"
-    # timezone = "Europe/Helsinki"
 ```
 > [!IMPORTANT]
 > The `guild_id` must be a valid, non-zero numeric ID.
+
+**Layout.** Put the global settings first and give each guild one self-contained `[[guilds]]` block. Inside it, override settings with dotted keys — `ambient.set = false`, `ambient.training_data.enabled = true`, `commands.events.enabled = false` — rather than `[guilds.ambient]` or `[guilds.commands.events]` headers: TOML reads both the same, but a header looks like a new top-level section, and a global table written after it is easy to mistake for part of the guild. Likewise the global commands share one `[commands]` table with keys such as `events.enabled`; TOML allows a table header only once, so when copying a snippet from `docs/commands/*.md`, merge its keys into your existing `[commands]` table instead of adding a second header. The only header a guild needs is `[[guilds.feeds]]`, for a feed channel with settings of its own; keep those last in the guild's block, because every key below such a header belongs to that channel. A channel that just follows the global `[feeds]` can be written inline instead, `feeds = [{ channel_id = 234567890123456789 }]` (a guild uses one form or the other, not both). Top-level keys (`bot_name`, `locale`) must come before the first header.
 
 Every table refuses keys it does not know, so a key written under the wrong table header (TOML files a key under the last header above it) stops the bot at startup with the key's name, rather than being ignored. See `config.toml.example` for every key.
 
@@ -152,11 +158,11 @@ Upgrading a configuration written before keys were grouped by feature:
 |---|---|
 | `[[feeds]]` | `[feeds]` (one table) |
 | `poll_interval`, `feed_schedule`, `feed_timezone` | `[feeds]` `poll_interval`, `schedule`, `timezone` |
-| guild `feed_schedule` / `feed_timezone` | `schedule` / `timezone` in each `[[guilds.feeds]]` section |
+| guild `feed_schedule` / `feed_timezone` | `schedule` / `timezone` in each of the guild's `[[guilds.feeds]]` sections |
 | `ambient_debug_logging`, `[interactions]` `set`/`part` | `[ambient]` `debug_logging`, `set`, `part` |
-| `[ambient_training_data]` | `[ambient.training_data]`. `allowed_guild_ids` is gone: to capture in some guilds only, **remove** the global section (or set `enabled = false`) and give each of those guilds `[guilds.ambient.training_data]` with `enabled = true`. Keeping the global section enabled captures in every guild. |
-| guild `ambient_channel_ids`, `ambient_debug_logging`, `[guilds.interactions]` | `[guilds.ambient]` `channel_ids`, `debug_logging`, `set`, `part` |
-| `[guilds.ambient_training_data]` | `[guilds.ambient.training_data]` |
+| `[ambient_training_data]` | `[ambient.training_data]`. `allowed_guild_ids` is gone: to capture in some guilds only, **remove** the global section (or set `enabled = false`) and give each of those guilds `ambient.training_data.enabled = true` in its `[[guilds]]` block. Keeping the global section enabled captures in every guild. |
+| guild `ambient_channel_ids`, `ambient_debug_logging`, `[guilds.interactions]` | `ambient.channel_ids`, `ambient.debug_logging`, `ambient.set`, `ambient.part` in the guild's block |
+| `[guilds.ambient_training_data]` | `ambient.training_data.*` in the guild's block |
 | `cache_ttl_secs` | `[resource_limits]` `cache_ttl_secs` |
 | `[resource_limits]` `max_feed_items_per_sync`, `max_worker_concurrency` | removed (they were never read) |
 

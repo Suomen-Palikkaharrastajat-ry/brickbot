@@ -44,7 +44,7 @@ When an event or edit is proposed, it appears in Zulip with its full JSON payloa
 - **Any other text**: Treated as a direct reply. The bot will forward the message back to the original Discord user via Direct Message, allowing for two-way communication between the user and moderation team.
 
 > [!NOTE]
-> **Moderation Notifications**: The bot attempts to notify users of moderation actions via private Direct Messages. If the user has disabled server DMs, the bot will fall back to sending a public ping in the Discord channel where the interaction originally occurred (omitting details for privacy, prompting them to use `/events status`). This public fallback behavior can be disabled in `config.toml` by setting `enable_fallback_mention = false` under `[commands.events]`.
+> **Moderation Notifications**: The bot attempts to notify users of moderation actions via private Direct Messages. If the user has disabled server DMs, the bot will fall back to sending a public ping in the Discord channel where the interaction originally occurred (omitting details for privacy, prompting them to use `/events status`). This public fallback behavior can be disabled in `config.toml` by setting `events.enable_fallback_mention = false` in `[commands]` — and `commands.events.enable_fallback_mention = false` in every guild that overrides `commands.events` (see Configuration below).
 
 ## Event Cover Images
 Due to Discord's Modal interaction framework lacking support for file attachments, the bot uses a hybrid approach to support event cover images:
@@ -63,20 +63,21 @@ Due to Discord's Modal interaction framework lacking support for file attachment
 The command is disabled by default. Enable it globally or per guild in `config.toml`:
 
 ```toml
-[commands.events]
-enabled = true
-enable_edit = true             # show the "Propose Changes" flow
-enable_propose = true          # show the "Propose New" flow
-enable_fallback_mention = false # @-mention the submitter if a DM cannot be delivered
+[commands]
+events.enabled = true
+events.enable_edit = true              # show the "Propose Changes" flow
+events.enable_propose = true           # show the "Propose New" flow
+events.enable_fallback_mention = false # @-mention the submitter if a DM cannot be delivered
 
 [[guilds]]
 guild_id = 123456789
-[guilds.commands.events]
-enabled = false # Disables /events for this specific guild
-enable_fallback_mention = false
+commands.events.enabled = false # Disables /events for this specific guild
+commands.events.enable_fallback_mention = false
 ```
 
-A guild's `[guilds.commands.events]` section replaces the global one as a whole: a flag the guild section leaves out takes its default, not the global value. The defaults are `enabled`, `enable_edit` and `enable_propose` **off** and `enable_fallback_mention` **on** — so repeat `enable_fallback_mention = false` in every guild section if public mentions should stay off. It still matters in a guild where the command is disabled, because submissions made earlier can be moderated later.
+If your `config.toml` already has a `[commands]` table, add these keys to it rather than repeating the header, which TOML rejects.
+
+A guild's `commands.events` table replaces the global one as a whole: a flag the guild leaves out takes its default, not the global value. The defaults are `enabled`, `enable_edit` and `enable_propose` **off** and `enable_fallback_mention` **on** — so repeat `commands.events.enable_fallback_mention = false` in every guild if public mentions should stay off. It still matters in a guild where the command is disabled, because submissions made earlier can be moderated later.
 
 The slash command is registered only in guilds where it is enabled: a guild can switch it on while it is off globally, and a guild that switches it off no longer lists it.
 

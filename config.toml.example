@@ -6,25 +6,18 @@
 # Every table refuses keys it does not know, so a key written under the wrong
 # table header is reported at startup instead of silently ignored. Run
 # `brickbot --explain-config` to see what the file enables in each guild.
-
-# Ambient assistant: offers /set and /part when chat looks like it needs them.
-# Every key can be overridden per guild in [guilds.ambient]; see [[guilds]].
-# [ambient]
-# set = true
-# part = true
-# debug_logging = false
 #
-# # Training-data capture for every guild (off unless enabled). A guild's own
-# # [guilds.ambient.training_data] replaces this one for that guild.
-# [ambient.training_data]
-# enabled = false
-# retention_days = 30
-# store_raw_text = false
+# Layout: global settings first, then one [[guilds]] block per guild. A guild
+# block overrides settings with dotted keys (`ambient.set = false`,
+# `commands.events.enabled = false`), so nothing in it opens a table header a
+# reader could mistake for a global one. The only sub-table header a guild
+# needs is [[guilds.feeds]], for a feed channel with settings beyond
+# `channel_id`; keep those last in the guild's block, because every key below
+# one belongs to that feed channel.
 
-# [resource_limits]
-# max_http_body_bytes = 10485760   # 10 MiB
-# max_cache_memory_bytes = 52428800 # 50 MiB of cached HTTP responses
-# cache_ttl_secs = 600
+# ---------------------------------------------------------------------------
+# Global settings: every guild's defaults
+# ---------------------------------------------------------------------------
 
 # Zulip Integration (optional)
 # [zulip]
@@ -40,6 +33,78 @@
 # # Collection holding map locations (optional, defaults to "locations")
 # locations_collection = "locations"
 
+# [feeds]
+# # Seconds between polls of each feed (at least 10; polls run at most once
+# # a minute).
+# # poll_interval = 3600
+# # List of Feed URLs
+# # feed_urls = [
+# #     "https://example.com/feed2.rss"
+# # ]
+# # List of OPML URLs
+# # opml_urls = ["https://example.com/feeds.opml"]
+# # Feeds served from these domains (or their subdomains) are never published
+# # to any channel; a guild's feed channel can block more for its own.
+# # blocked_domains = ["flickr.com"]
+# # Complete feed URLs that are never published to any channel.
+# # blocked_feed_urls = ["https://example.com/unwanted.rss"]
+# # Send feed articles as a digest at these times instead of as soon as they
+# # are found (cron, read in timezone). Overridable per guild feed channel
+# # with schedule/timezone, where "instant" turns it back off.
+# # schedule = "0 9 * * *"
+# # timezone = "Europe/Helsinki"
+
+# Ambient assistant: offers /set and /part when chat looks like it needs them.
+# Every key can be overridden per guild with `ambient.*` keys; see [[guilds]].
+# [ambient]
+# set = true
+# part = true
+# debug_logging = false
+# # Training-data capture for every guild (off unless enabled). A guild's own
+# # `ambient.training_data.*` replaces this one for that guild.
+# training_data.enabled = false
+# training_data.retention_days = 30
+# training_data.store_raw_text = false
+
+# Command toggles, all in one table. Each can be overridden per guild with
+# `commands.<name>.*` keys; see [[guilds]].
+# [commands]
+# events.enabled = true
+# events.enable_edit = true
+# events.enable_propose = true
+# events.enable_fallback_mention = false
+#
+# # Same switches as events; off by default
+# locations.enabled = true
+# locations.enable_edit = true
+# locations.enable_propose = true
+# locations.enable_fallback_mention = false
+#
+# # On by default
+# set.enabled = true
+# part.enabled = true
+#
+# # Off by default
+# diagnostics.enabled = false
+#
+# # Collaborative LEGO building in a thread. Off by default: it opens threads
+# # and listens to the conversation in them, so switch it on deliberately.
+# # Install the LDraw library with `make fetch-ldraw` for real part shapes;
+# # without it /build renders simple boxes.
+# build.enabled = true
+# build.session_ttl_hours = 24
+# build.render_width = 800
+# build.render_height = 600
+# build.supersample = 2
+# build.render_debounce_ms = 1200
+# build.enable_io_export = true
+# build.max_model_size = 100
+
+# [resource_limits]
+# max_http_body_bytes = 10485760   # 10 MiB
+# max_cache_memory_bytes = 52428800 # 50 MiB of cached HTTP responses
+# cache_ttl_secs = 600
+
 # LDraw part library, used to render /build models.
 # Install it once with `make fetch-ldraw`; until then /build renders simple
 # boxes instead of real part geometry.
@@ -47,6 +112,7 @@
 # data_dir = "data/ldraw"
 # library_url = "https://library.ldraw.org/library/updates/complete.zip"
 # max_files = 200
+# max_download_bytes = 268435456 # 256 MiB
 
 # Sticky cache of part lookups, in its own SQLite database.
 #
@@ -65,85 +131,63 @@
 # warm_concurrency = 2
 # warm_timeout_secs = 5
 
-# [commands.events]
-# enabled = true
-# enable_edit = true
-# enable_propose = true
-# enable_fallback_mention = false
-
-# [commands.locations]
-# enabled = true
-# enable_edit = true
-# enable_propose = true
-# enable_fallback_mention = false
-
-# [commands.set]
-# enabled = true
-
-# Collaborative LEGO building in a thread. Off by default: it opens threads and
-# listens to the conversation in them, so switch it on deliberately.
-# Install the LDraw library with `make fetch-ldraw` for real part shapes;
-# without it /build renders simple boxes.
-# [commands.build]
-# enabled = true
-# session_ttl_hours = 24
-# render_width = 800
-# render_height = 600
-# supersample = 2
-# render_debounce_ms = 1200
-# enable_io_export = true
-# max_model_size = 10
+# ---------------------------------------------------------------------------
+# Guilds: one self-contained [[guilds]] block each
+# ---------------------------------------------------------------------------
 
 # [[guilds]]
 # guild_id = 1424873309325234220
 # locale = "fi-FI"
+# # Name the bot uses in this guild (optional; overrides the global bot_name)
+# bot_name = "Palikkaharrastaja"
 #
 # # Ambient assistant settings for this guild only (optional); each key left
 # # out follows the global [ambient].
-# [guilds.ambient]
 # # Channels where ambient detection runs; omit to listen in every channel.
-# channel_ids = [111111111111111111]
-# set = false
-# part = true
-# debug_logging = true
+# ambient.channel_ids = [111111111111111111]
+# ambient.set = false
+# ambient.part = true
+# ambient.debug_logging = true
 #
-# # Replaces the global [ambient.training_data] for this guild as a whole:
-# # omitted fields take their defaults, not the global values.
-# [guilds.ambient.training_data]
-# enabled = true
-# retention_days = 30
-# store_raw_text = false
+# # Replaces the global training_data for this guild as a whole: omitted
+# # fields take their defaults, not the global values.
+# ambient.training_data.enabled = true
+# ambient.training_data.retention_days = 30
+# ambient.training_data.store_raw_text = false
 #
-# # Override commands specifically for this guild (optional). A guild section
-# # replaces the global one whole: flags left out take their defaults, and
-# # enable_fallback_mention defaults to true.
-# [guilds.commands.events]
-# enabled = false
-# enable_fallback_mention = false
-# [guilds.commands.locations]
-# enabled = false
-# [guilds.commands.set]
-# enabled = false
-# [guilds.commands.build]
-# enabled = false
+# # Override commands specifically for this guild (optional). A guild's
+# # command replaces the global one whole: flags left out take their
+# # defaults, and enable_fallback_mention defaults to true.
+# commands.events.enabled = false
+# commands.events.enable_fallback_mention = false
+# commands.locations.enabled = false
+# commands.set.enabled = false
+# commands.part.enabled = false
+# commands.diagnostics.enabled = true
+# commands.build.enabled = false
+#
+# # Publish new feed articles to channels of this guild. A channel with no
+# # settings beyond its feeds fits on one line; one naming no URLs at all,
+# # `{ channel_id = ... }`, follows the global [feeds].
+# feeds = [{ channel_id = 345678901234567890, opml_urls = ["https://example.com/feeds.opml"] }]
 #
 # [[guilds]]
 # guild_id = 987654321098765432
 # locale = "en-US"
 #
 # # You can omit ambient or commands to use global defaults
-# [guilds.commands.events]
-# enabled = true
-# enable_edit = true
-# enable_propose = true
-# enable_fallback_mention = false
+# commands.events.enabled = true
+# commands.events.enable_edit = true
+# commands.events.enable_propose = true
+# commands.events.enable_fallback_mention = false
 #
-# # Publish new feed articles to a channel of this guild (repeatable).
+# # A feed channel with its own settings (repeatable). Keep these last in the
+# # guild's block: every key below the header belongs to that channel.
 # # Each source is announced separately: up to three new articles of a source
 # # are posted one message each, more are listed in one message for that
 # # source. Only articles appearing after the bot was last (re)started are
 # # announced.
-# # Without feed_urls/opml_urls the section follows the global [feeds].
+# # Without feed_urls/opml_urls the channel follows the global [feeds].
 # [[guilds.feeds]]
 # channel_id = 234567890123456789
 # feed_urls = ["https://example.com/feed1.rss"]
@@ -152,28 +196,6 @@
 # # global [feeds] defaults.
 # # blocked_domains = ["kuvat.fi"]
 # # blocked_feed_urls = ["https://example.com/unwanted.rss"]
-# # Digest schedule for this channel only (see [feeds] schedule below).
+# # Digest schedule for this channel only (see [feeds] schedule above).
 # # schedule = "0 18 * * 1-5"
 # # timezone = "UTC"
-
-# [feeds]
-# # Seconds between polls of each feed.
-# # poll_interval = 3600
-# # List of Feed URLs
-# # feed_urls = [
-# #     "https://example.com/feed2.rss"
-# # ]
-# # List of OPML URLs
-# # opml_urls = ["https://example.com/feeds.opml"]
-# # Feeds served from these domains (or their subdomains) are never published
-# # to any channel; a [[guilds.feeds]] section can block more for its own.
-# # blocked_domains = ["flickr.com"]
-# # Complete feed URLs that are never published to any channel.
-# # blocked_feed_urls = ["https://example.com/unwanted.rss"]
-# # Send feed articles as a digest at these times instead of as soon as they
-# # are found (cron, read in timezone). Overridable per [[guilds.feeds]]
-# # section with schedule/timezone, where "instant" turns it back off.
-# # schedule = "0 9 * * *"
-# # timezone = "Europe/Helsinki"
-
-

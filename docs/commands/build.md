@@ -29,7 +29,7 @@ The `size` argument on `/build` sets this box for the session, in three shapes:
   (12 bricks here) since a rectangle names nothing to be tall by.
 - `8x12x6` — width, depth and height given outright: 8 studs, 12 studs, 6 bricks.
 
-Left out, the session uses the guild's configured `max_model_size` (a cube, default 10). The
+Left out, the session uses the guild's configured `max_model_size` (a cube, default 100). The
 size is fixed for the life of the session — it cannot be changed after `/build` opens the
 thread, since a shrink would leave earlier revisions validated against a limit that no longer
 applies.
@@ -126,21 +126,24 @@ applies.
 The command can be enabled or disabled globally or on a per-guild basis using the `config.toml` file. It is **off by default**, because it opens threads and listens to the conversation in them:
 
 ```toml
-[commands.build]
-enabled = true
-session_ttl_hours = 24
-render_width = 800
-render_height = 600
-supersample = 2
-render_debounce_ms = 1200
-enable_io_export = true
-max_model_size = 10
+[commands]
+build.enabled = true
+build.session_ttl_hours = 24
+build.render_width = 800
+build.render_height = 600
+build.supersample = 2
+build.render_debounce_ms = 1200
+build.enable_io_export = true
+build.max_model_size = 100
 
 [[guilds]]
 guild_id = 123456789
-[guilds.commands.build]
-enabled = false # Disables /build for this specific guild
+commands.build.enabled = false # Disables /build for this specific guild
 ```
+
+If your `config.toml` already has a `[commands]` table, add these keys to it rather than repeating the header, which TOML rejects.
+
+A guild's `commands.build` table replaces the global one as a whole: a key it leaves out takes its default, not the global value. With `build.max_model_size = 50` globally, a guild that sets only `commands.build.enabled = true` gets the default of 100, so repeat any non-default setting in the guild.
 
 `max_model_size` is the size cap a session gets when `/build` is not given its own `size`
 argument: a cube of this many studs on X/Z and bricks on Y. See
@@ -153,6 +156,7 @@ The LDraw part library is configured separately, and is shared by every guild:
 data_dir = "data/ldraw"
 library_url = "https://library.ldraw.org/library/updates/complete.zip"
 max_files = 200
+max_download_bytes = 268435456 # 256 MiB
 ```
 
 Install it once with `make fetch-ldraw`. See [ADR-003](../ADR-003-LDraw-Rendering-And-Studio-Export.md) for why it is fetched rather than bundled.

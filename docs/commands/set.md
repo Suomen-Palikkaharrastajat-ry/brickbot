@@ -34,11 +34,12 @@ The `/set` command provides an easy way to search and display information about 
 The command can be enabled or disabled globally or on a per-guild basis using the `config.toml` file:
 
 ```toml
-[commands.set]
-enabled = true
+[commands]
+set.enabled = true
 
 [[guilds]]
 guild_id = 123456789
-[guilds.commands.set]
-enabled = false # Disables /set for this specific guild
+commands.set.enabled = false # Disables /set for this specific guild
 ```
+
+If your `config.toml` already has a `[commands]` table, add these keys to it rather than repeating the header, which TOML rejects.

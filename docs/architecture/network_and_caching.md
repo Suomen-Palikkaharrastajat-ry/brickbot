@@ -24,8 +24,8 @@ Both must be at least 1. Code that runs without `init_cache` (unit tests) gets t
 
 ### Supported Operations
 The `HttpClient` currently caches the following operations:
-- `get_bytes`: Fetches raw bytes (e.g., for downloading event cover images or OPML feeds).
-- `get_text`: Fetches UTF-8 strings (e.g., for RSS feeds).
+- `get_bytes`: Fetches raw bytes (e.g., for downloading event cover images).
+- `get_text`: Fetches UTF-8 strings.
 - `get_json_with_auth`: Fetches and deserializes JSON payloads using a Bearer token.
 - `post_form_json`: Submits a form payload and caches the response.
 
@@ -66,7 +66,7 @@ The negative entry matters: without it a typo would re-ask the API on every keys
 Expired searches are swept daily alongside `cleanup_expired_rows`; part records are never swept.
 
 ### Bypassing the Cache
-For operations where fresh data is strictly required, the client provides un-cached variants like `get_bytes_no_cache` and `get_text_no_cache`. These methods execute the network request directly and then insert the fresh result into the cache.
+For operations where fresh data is strictly required, the bounded fetches (`get_bounded_bytes`, `get_bounded_text`) take a `skip_cache` flag. With it set the request goes straight to the network and the response is neither read from nor written to the cache. Feed and OPML polls (`rss::fetch_feed`, `global_poll_loop`) set it: they only run once `[feeds] poll_interval` says they are due, so a cached body would only delay new articles by up to `cache_ttl_secs`.
 
 ## Testability
 The `HttpClient` is abstracted behind the `HttpProvider` trait (`automock` via `mockall`). This allows for seamless dependency injection during unit testing, meaning tests for RSS polling, event syncing, or LEGO API parsing do not require a live network connection.

@@ -26,11 +26,12 @@ The command verifies the connectivity and basic operational status of the follow
 The `/diagnostics` command is **disabled by default** to keep the command list clean. It can be enabled globally or per-guild using `config.toml`:
 
 ```toml
-[commands.diagnostics]
-enabled = true
+[commands]
+diagnostics.enabled = true
 
 [[guilds]]
 guild_id = 123456789
-[guilds.commands.diagnostics]
-enabled = true # Or false to disable just for this guild
+commands.diagnostics.enabled = true # Or false to disable just for this guild
 ```
+
+If your `config.toml` already has a `[commands]` table, add these keys to it rather than repeating the header, which TOML rejects.

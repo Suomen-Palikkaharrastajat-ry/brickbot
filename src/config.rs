@@ -594,7 +594,7 @@ impl Config {
         self.validate_feeds(&mut errors);
 
         if let Some(interval) = self.feeds.poll_interval {
-            if interval > 0 && interval < 10 {
+            if interval < 10 {
                 errors.push("feeds poll_interval must be at least 10 seconds".to_string());
             }
         }
@@ -765,7 +765,13 @@ impl Config {
                 if let Some(sched) = &section.schedule {
                     validate_schedule(&scope, sched, errors);
                     let first = *schedules.entry(section.channel_id).or_insert(sched);
-                    if first.trim() != sched.trim() {
+                    // "", "instant" and "none" are one setting, spelled three ways.
+                    let same = if is_instant(first) {
+                        is_instant(sched)
+                    } else {
+                        first.trim() == sched.trim()
+                    };
+                    if !same {
                         errors.push(format!(
                             "{scope} has conflicting schedules {first:?} and {sched:?}"
                         ));
@@ -1895,6 +1901,33 @@ mod tests {
     }
 
     #[test]
+    fn spellings_of_instant_do_not_conflict() {
+        let config: Config = toml::from_str(
+            r#"
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/a"]
+            schedule = ""
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/b"]
+            schedule = "instant"
+
+            [[guilds.feeds]]
+            channel_id = 10
+            feed_urls = ["https://example.com/c"]
+            schedule = "None"
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+    }
+
+    #[test]
     fn an_instant_channel_overrides_a_global_schedule() {
         let config: Config = toml::from_str(
             r#"
@@ -2014,14 +2047,16 @@ mod tests {
         assert_eq!(config.feeds.poll_interval_secs(), 600);
         assert_eq!(Config::default().feeds.poll_interval_secs(), 3600);
 
-        let too_fast: Config = toml::from_str("[feeds]\npoll_interval = 5").unwrap();
-        assert!(
-            too_fast
-                .validate()
-                .unwrap_err()
-                .iter()
-                .any(|e| e.contains("poll_interval"))
-        );
+        for too_fast in ["[feeds]\npoll_interval = 5", "[feeds]\npoll_interval = 0"] {
+            let too_fast: Config = toml::from_str(too_fast).unwrap();
+            assert!(
+                too_fast
+                    .validate()
+                    .unwrap_err()
+                    .iter()
+                    .any(|e| e.contains("poll_interval"))
+            );
+        }
     }
 
     #[test]
@@ -2122,7 +2157,10 @@ mod tests {
                 let rest = line.strip_prefix("# ").unwrap_or(line);
                 let is_setting = rest.starts_with('[')
                     || rest.split_once(" =").is_some_and(|(key, _)| {
-                        !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                        !key.is_empty()
+                            && key
+                                .chars()
+                                .all(|c| c.is_ascii_lowercase() || c == '_' || c == '.')
                     });
                 if line.starts_with("# ") && is_setting {
                     rest
@@ -2142,5 +2180,12 @@ mod tests {
         assert!(config.zulip.is_some());
         assert_eq!(config.guilds.len(), 2);
         assert!(config.guilds[0].ambient.is_some());
+        // The dotted keys inside [[guilds]] land on the guild, not globally.
+        let commands = config.guilds[0].commands.as_ref().unwrap();
+        assert!(commands.diagnostics.as_ref().unwrap().enabled);
+        assert_eq!(config.guilds[0].feeds.len(), 1);
+        assert_eq!(config.guilds[1].feeds.len(), 1);
+        assert!(config.commands.build.enabled);
+        assert!(config.ambient.training_data.is_some());
     }
 }

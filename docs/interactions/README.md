@@ -66,15 +66,15 @@ This implementation guarantees that the ambient assistant remains helpful and un
 
 ## Per-Guild Configuration
 
-Every ambient setting lives in `[ambient]` and can be set for a single guild in that guild's `[guilds.ambient]`; a key a guild leaves out follows the global value. Resolution lives in `src/config.rs` (`ambient_topics_for`, `ambient_channel_ids_for`, `ambient_debug_logging_for`, `ambient_training_data_for`). `brickbot --explain-config` prints the result for every guild.
+Every ambient setting lives in `[ambient]` and can be set for a single guild with `ambient.*` keys in that guild's `[[guilds]]` block; a key a guild leaves out follows the global value. Resolution lives in `src/config.rs` (`ambient_topics_for`, `ambient_channel_ids_for`, `ambient_debug_logging_for`, `ambient_training_data_for`). `brickbot --explain-config` prints the result for every guild.
 
 | Setting | Global | Per guild |
 |---|---|---|
-| Which topics are offered | `[ambient]` `set` / `part` | `[guilds.ambient]` `set` / `part`, per key |
-| Which channels are listened to | — (every channel) | `[guilds.ambient]` `channel_ids` |
-| Detection debug logging | `[ambient]` `debug_logging` | `[guilds.ambient]` `debug_logging` |
-| Training-data capture | `[ambient.training_data]` | `[guilds.ambient.training_data]` |
+| Which topics are offered | `[ambient]` `set` / `part` | `ambient.set` / `ambient.part`, per key |
+| Which channels are listened to | — (every channel) | `ambient.channel_ids` |
+| Detection debug logging | `[ambient]` `debug_logging` | `ambient.debug_logging` |
+| Training-data capture | `[ambient]` `training_data.*` | `ambient.training_data.*` |
 
 Unknown keys are rejected in every table, so a key written below the wrong header stops the bot at startup instead of being ignored.
 
-A guild's `[guilds.ambient.training_data]` replaces the global section for that guild as a whole: fields it leaves out take their defaults rather than the global values. To capture in some guilds only, leave the global section out and give those guilds a section of their own. The ambient assistant does not run in direct messages.
+A guild's `ambient.training_data` replaces the global one for that guild as a whole: fields it leaves out take their defaults rather than the global values. To capture in some guilds only, leave the global `training_data` out and give those guilds `ambient.training_data.enabled = true`. The ambient assistant does not run in direct messages.
