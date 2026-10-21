@@ -38,5 +38,5 @@ That makes its silence policy the most important thing about it. A build thread 
 - `src/build/session/` — the Discord shell: thread creation, persistence, the render loop and the buttons. Its only decisions are about pacing and locking, both of which are separated into pure helpers (`plan_render`, `should_render_now`).
 - `src/commands/build.rs` — the command declaration and the pure message builders.
 - `src/db/build.rs` — session and revision storage, looked up by channel id.
-- `src/main.rs` — the session lookup is hoisted **above** the `ambient_channel_ids` gate in the `message` handler. A thread has its own channel id, so it is never in that list; without the hoist every build command would be silently dropped. Returning early also keeps build traffic out of the ambient assistant's two-hour per-user cooldown.
+- `src/main.rs` — the session lookup is hoisted **above** the `[guilds.ambient] channel_ids` gate in the `message` handler. A thread has its own channel id, so it is never in that list; without the hoist every build command would be silently dropped. Returning early also keeps build traffic out of the ambient assistant's two-hour per-user cooldown.
 - `src/workflows/mod.rs` — routes the three `build_*` button ids to `handle_build_button`, and `build_part_pick` to `handle_part_choice`.

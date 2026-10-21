@@ -97,13 +97,13 @@ mod tests {
 
         let config = wait_for_valid_reload(rx, || {
             Ok(Config {
-                poll_interval: Some(42),
+                bot_name: Some("reloaded".to_string()),
                 ..Config::default()
             })
         })
         .await;
 
-        assert_eq!(config.poll_interval, Some(42));
+        assert_eq!(config.bot_name.as_deref(), Some("reloaded"));
     }
 
     #[tokio::test]

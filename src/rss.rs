@@ -185,7 +185,7 @@ fn resolve_feed_urls<'a>(
 /// Every OPML URL in the configuration, global and per guild.
 #[must_use]
 pub fn configured_opml_urls(config: &Config) -> BTreeSet<&str> {
-    let global = config.feeds.iter().flat_map(|f| &f.opml_urls);
+    let global = config.feeds.opml_urls.iter();
     let guild = config
         .guilds
         .iter()
@@ -197,10 +197,7 @@ pub fn configured_opml_urls(config: &Config) -> BTreeSet<&str> {
 /// Every feed to poll: the global ones plus those only a guild subscribes to.
 #[must_use]
 pub fn feeds_to_poll(config: &Config, opml_cache: &OpmlCache) -> BTreeSet<String> {
-    let global = config
-        .feeds
-        .iter()
-        .flat_map(|f| resolve_feed_urls(&f.feed_urls, &f.opml_urls, opml_cache));
+    let global = resolve_feed_urls(&config.feeds.feed_urls, &config.feeds.opml_urls, opml_cache);
     let guild = config
         .guilds
         .iter()
@@ -274,24 +271,16 @@ pub fn feed_blocked(feed_url: &str, blocked_feed_urls: &[String]) -> bool {
 /// Which channels each feed's new articles go to, per the guilds' `feeds`
 /// sections. A section naming no URLs follows every global feed; whichever
 /// it follows, feeds from its `blocked_domains` and `blocked_feed_urls` are left
-/// out, and so are those from the global `[[feeds]]` entries' `blocked_domains`
-/// and `blocked_feed_urls`, which are every section's defaults.
+/// out, and so are those from the global `[feeds]` `blocked_domains` and
+/// `blocked_feed_urls`, which are every section's defaults.
 #[must_use]
 pub fn publish_targets(
     config: &Config,
     opml_cache: &OpmlCache,
 ) -> HashMap<String, BTreeSet<PublishTarget>> {
     let mut targets: HashMap<String, BTreeSet<PublishTarget>> = HashMap::new();
-    let blocked_everywhere: Vec<String> = config
-        .feeds
-        .iter()
-        .flat_map(|f| f.blocked_domains.iter().cloned())
-        .collect();
-    let feeds_blocked_everywhere: Vec<String> = config
-        .feeds
-        .iter()
-        .flat_map(|f| f.blocked_feed_urls.iter().cloned())
-        .collect();
+    let blocked_everywhere = &config.feeds.blocked_domains;
+    let feeds_blocked_everywhere = &config.feeds.blocked_feed_urls;
     for guild in &config.guilds {
         for section in &guild.feeds {
             let target = PublishTarget {
@@ -300,18 +289,15 @@ pub fn publish_targets(
             };
             let urls: Vec<&String> = if section.feed_urls.is_empty() && section.opml_urls.is_empty()
             {
-                config
-                    .feeds
-                    .iter()
-                    .flat_map(|f| resolve_feed_urls(&f.feed_urls, &f.opml_urls, opml_cache))
+                resolve_feed_urls(&config.feeds.feed_urls, &config.feeds.opml_urls, opml_cache)
                     .collect()
             } else {
                 resolve_feed_urls(&section.feed_urls, &section.opml_urls, opml_cache).collect()
             };
             for url in urls {
-                if domain_blocked(url, &blocked_everywhere)
+                if domain_blocked(url, blocked_everywhere)
                     || domain_blocked(url, &section.blocked_domains)
-                    || feed_blocked(url, &feeds_blocked_everywhere)
+                    || feed_blocked(url, feeds_blocked_everywhere)
                     || feed_blocked(url, &section.blocked_feed_urls)
                 {
                     continue;
@@ -1025,7 +1011,7 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
     // Identifies this run in `feed_polls.baseline_run`.
     let run_id = chrono::Utc::now().timestamp_millis();
     let started_at = whole_seconds(chrono::Utc::now());
-    let interval = config.poll_interval.unwrap_or(3600);
+    let interval = config.feeds.poll_interval_secs();
     let limit = config.resource_limits.max_http_body_bytes;
 
     loop {
@@ -1382,7 +1368,7 @@ mod tests {
     fn feeds_config() -> Config {
         toml::from_str(
             r#"
-            [[feeds]]
+            [feeds]
             feed_urls = ["https://global/rss"]
             opml_urls = ["https://global/opml"]
 
@@ -1467,7 +1453,7 @@ mod tests {
     fn without_guild_sections_nothing_is_published() {
         let config: Config = toml::from_str(
             r#"
-            [[feeds]]
+            [feeds]
             feed_urls = ["https://global/rss"]
 
             [[guilds]]
@@ -1569,7 +1555,7 @@ mod tests {
     fn a_blocked_feed_is_not_published_to_that_channel() {
         let config: Config = toml::from_str(
             r#"
-            [[feeds]]
+            [feeds]
             feed_urls = ["https://example.com/global1.xml", "https://example.com/global2.xml"]
 
             [[guilds]]
@@ -1623,7 +1609,7 @@ mod tests {
     fn globally_blocked_feeds_are_every_channels_default() {
         let config: Config = toml::from_str(
             r#"
-            [[feeds]]
+            [feeds]
             feed_urls = ["https://example.com/global1.xml", "https://example.com/global2.xml"]
             blocked_feed_urls = ["https://example.com/global1.xml"]
 
@@ -1659,7 +1645,7 @@ mod tests {
     fn a_blocked_domain_is_not_published_to_that_channel() {
         let config: Config = toml::from_str(
             r#"
-            [[feeds]]
+            [feeds]
             feed_urls = ["https://www.flickr.com/global", "https://blog.example/global"]
 
             [[guilds]]
@@ -1726,13 +1712,13 @@ mod tests {
     fn globally_blocked_domains_are_every_channels_default() {
         let config: Config = toml::from_str(
             r#"
-            [[feeds]]
-            feed_urls = ["https://www.flickr.com/global", "https://blog.example/global"]
-            blocked_domains = ["flickr.com"]
-
-            [[feeds]]
-            feed_urls = ["https://a.kuvat.fi/global"]
-            blocked_domains = ["youtube.com"]
+            [feeds]
+            feed_urls = [
+                "https://www.flickr.com/global",
+                "https://blog.example/global",
+                "https://a.kuvat.fi/global",
+            ]
+            blocked_domains = ["flickr.com", "youtube.com"]
 
             [[guilds]]
             guild_id = 1

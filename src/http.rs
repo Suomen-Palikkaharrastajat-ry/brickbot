@@ -32,20 +32,13 @@ pub fn init_cache(ttl_secs: u64, max_memory: u64) {
 fn get_cache() -> Cache<CacheKey, Bytes> {
     CACHE
         .get_or_init(|| {
-            let max_memory = std::env::var("CACHE_MAX_MEMORY_BYTES")
-                .ok()
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(50 * 1024 * 1024); // Default 50MB
-
-            let ttl_secs = std::env::var("CACHE_TTL_SECS")
-                .ok()
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(600); // 10 minutes TTL by default
-
+            // Only reached before `init_cache` (tests): the
+            // `[resource_limits]` defaults.
+            let limits = crate::config::ResourceLimitsConfig::default();
             Cache::builder()
                 .weigher(|_key, value: &Bytes| value.len() as u32)
-                .max_capacity(max_memory)
-                .time_to_live(Duration::from_secs(ttl_secs))
+                .max_capacity(limits.max_cache_memory_bytes)
+                .time_to_live(Duration::from_secs(limits.cache_ttl_secs))
                 .build()
         })
         .clone()

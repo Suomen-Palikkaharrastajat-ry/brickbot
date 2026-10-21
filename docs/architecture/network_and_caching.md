@@ -16,9 +16,11 @@ Agents and developers **MUST NOT** use raw `reqwest::Client` directly in busines
 To reduce bandwidth, rate limiting issues, and latency (e.g., when multiple polling loops request the same RSS feed or API data), Brickbot utilizes `moka` for fast, concurrent, in-memory caching.
 
 ### Cache Configuration
-The `moka` cache is lazily initialized via a `OnceLock` and is configured via environment variables (with sensible defaults):
-- `CACHE_MAX_MEMORY_BYTES`: Defines the maximum memory capacity (Default: 50MB). The `weigher` function calculates size based on the byte length of the HTTP response.
-- `CACHE_TTL_SECS`: Defines how long an item lives in the cache before expiring (Default: 10 minutes).
+The `moka` cache lives in a `OnceLock`, set by `init_cache` at startup (before `--fetch-ldraw` or any other request) from `[resource_limits]` in `config.toml`:
+- `max_cache_memory_bytes`: the maximum memory capacity (default: 50 MiB). The `weigher` function calculates size based on the byte length of the HTTP response.
+- `cache_ttl_secs`: how long an item lives in the cache before expiring (default: 10 minutes).
+
+Both must be at least 1. Code that runs without `init_cache` (unit tests) gets the same defaults. The former `CACHE_MAX_MEMORY_BYTES` / `CACHE_TTL_SECS` environment variables are no longer read.
 
 ### Supported Operations
 The `HttpClient` currently caches the following operations:

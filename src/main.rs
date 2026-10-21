@@ -6,6 +6,7 @@ mod brick;
 pub mod build;
 mod commands;
 pub mod config;
+mod config_report;
 pub mod db;
 pub mod events_sync;
 pub mod http;
@@ -44,6 +45,13 @@ struct Cli {
 
     #[arg(long, help = "Validate configuration and exit")]
     check_config: bool,
+
+    #[arg(
+        long,
+        help = "Validate configuration, print what it enables in each guild, and exit",
+        conflicts_with = "check_config"
+    )]
+    explain_config: bool,
 
     #[arg(
         long,
@@ -196,7 +204,7 @@ impl EventHandler for Handler {
         }
 
         // Build sessions live in threads, and a thread has its own channel id,
-        // so it is never in `ambient_channel_ids`. This lookup must therefore
+        // so it is never in `[guilds.ambient] channel_ids`. This lookup must therefore
         // come *before* that gate below, or every build command would be
         // silently dropped. Returning early also keeps build traffic out of the
         // ambient assistant, whose two-hour per-user cooldown would otherwise
@@ -226,19 +234,10 @@ impl EventHandler for Handler {
 
         if let Some(guild_id) = msg.guild_id {
             let guild_id_u64 = guild_id.get();
-            if let Some(guild_config) = self
-                .config
-                .guilds
-                .iter()
-                .find(|g| g.guild_id == guild_id_u64)
-            {
-                let channel_id_u64 = msg.channel_id.get();
-
-                // Align ambient assistant with the consent/noise design
-                if let Some(ambient_ids) = &guild_config.ambient_channel_ids {
-                    if !ambient_ids.contains(&channel_id_u64) {
-                        return; // Ignore if not in explicit ambient channels
-                    }
+            // Align ambient assistant with the consent/noise design
+            if let Some(ambient_ids) = self.config.ambient_channel_ids_for(guild_id_u64) {
+                if !ambient_ids.contains(&msg.channel_id.get()) {
+                    return; // Ignore if not in explicit ambient channels
                 }
             }
         } else {
@@ -445,10 +444,10 @@ impl EventHandler for Handler {
                 if !on_cooldown {
                     let is_enabled = match detection.topic {
                         crate::ambient::Topic::LegoSet => {
-                            self.config.interactions_for(guild_id_u64).set
+                            self.config.ambient_topics_for(guild_id_u64).set
                         }
                         crate::ambient::Topic::LegoPart => {
-                            self.config.interactions_for(guild_id_u64).part
+                            self.config.ambient_topics_for(guild_id_u64).part
                         }
                     };
 
@@ -1020,6 +1019,18 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(0);
     }
 
+    if cli.explain_config {
+        print!("{}", crate::config_report::explain(&config));
+        std::process::exit(0);
+    }
+
+    // Before any request: the first one would otherwise size the cache with
+    // the built-in defaults.
+    crate::http::init_cache(
+        config.resource_limits.cache_ttl_secs,
+        config.resource_limits.max_cache_memory_bytes,
+    );
+
     // Installing the part library needs neither a database nor a Discord
     // token, so it runs before either is set up.
     if cli.fetch_ldraw {
@@ -1034,8 +1045,6 @@ async fn main() -> anyhow::Result<()> {
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
     let build_debug_log = open_build_debug_log(cli.build_debug_log.as_deref()).await;
-
-    crate::http::init_cache(config.cache_ttl_secs.unwrap_or(600), 50 * 1024 * 1024);
 
     let intents = GatewayIntents::GUILDS
         | GatewayIntents::GUILD_MESSAGES
@@ -1174,6 +1183,14 @@ mod tests {
     use super::*;
     use crate::config::{Config, GuildConfig};
 
+    #[test]
+    fn explaining_and_checking_the_config_are_exclusive() {
+        // `--check-config` exits before anything is printed, so asking for
+        // both would silently drop the report.
+        assert!(Cli::try_parse_from(["brickbot", "--check-config", "--explain-config"]).is_err());
+        assert!(Cli::try_parse_from(["brickbot", "--explain-config"]).is_ok());
+    }
+
     fn command_names(config: &Config, guild_id: u64) -> Vec<String> {
         build_guild_commands(config, guild_id)
             .iter()
@@ -1302,26 +1319,16 @@ mod tests {
                     guild_id: 12345,
                     locale: None,
                     bot_name: None,
-                    ambient_channel_ids: None,
-                    ambient_debug_logging: None,
-                    ambient_training_data: None,
-                    interactions: None,
+                    ambient: None,
                     commands: None,
-                    feed_schedule: None,
-                    feed_timezone: None,
                     feeds: Vec::new(),
                 },
                 GuildConfig {
                     guild_id: 67890,
                     locale: None,
                     bot_name: None,
-                    ambient_channel_ids: None,
-                    ambient_debug_logging: None,
-                    ambient_training_data: None,
-                    interactions: None,
+                    ambient: None,
                     commands: None,
-                    feed_schedule: None,
-                    feed_timezone: None,
                     feeds: Vec::new(),
                 },
             ],

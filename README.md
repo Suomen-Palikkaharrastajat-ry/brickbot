@@ -65,11 +65,6 @@ bot_name = "Palikkaharrastaja"
 # Global default locale (optional; guild config wins, and "fi-FI" applies when neither is set)
 locale = "fi-FI"
 
-ambient_debug_logging = true
-
-poll_interval = 3600
-cache_ttl_secs = 600
-
 # Zulip Integration (optional)
 [zulip]
 url = "https://forum.palikkaharrastajat.fi"
@@ -82,10 +77,12 @@ moderators = ["moderator@example.com"]
 url = "https://data.palikkaharrastajat.fi"
 collection = "events"
 
-# Interaction toggles (default is true)
-[interactions]
+# Ambient assistant: which commands it offers when chat looks like it needs
+# them (default is true), and whether it explains its decisions in the log
+[ambient]
 set = true
 part = true
+debug_logging = true
 
 # Command toggles
 [commands.events]
@@ -113,7 +110,7 @@ enabled = false
 enable_fallback_mention = false
 
 # Publish new feed articles to a channel of this guild (optional, repeatable).
-# Without feed_urls/opml_urls the section follows every global [[feeds]] entry.
+# Without feed_urls/opml_urls the section follows the global [feeds].
 [[guilds.feeds]]
 channel_id = 234567890123456789
 feed_urls = ["https://example.com/feed1.rss"]
@@ -124,7 +121,9 @@ feed_urls = ["https://example.com/feed1.rss"]
 # schedule = "0 9 * * *"
 # timezone = "Europe/Helsinki"
 
-[[feeds]]
+[feeds]
+    # Seconds between polls of each feed (optional, default 3600)
+    poll_interval = 3600
     # List of Feed URLs
     feed_urls = [
         "https://example.com/feed1.rss",
@@ -137,9 +136,31 @@ feed_urls = ["https://example.com/feed1.rss"]
     # blocked_domains = ["kuvat.fi"]
     # Complete feed URLs that are never published to any channel (optional).
     # blocked_feed_urls = ["https://example.com/unwanted.rss"]
+    # Send every channel a digest at these times instead of announcing
+    # articles as found (optional; cron, default time zone Europe/Helsinki).
+    # schedule = "0 9 * * *"
+    # timezone = "Europe/Helsinki"
 ```
 > [!IMPORTANT]
 > The `guild_id` must be a valid, non-zero numeric ID.
+
+Every table refuses keys it does not know, so a key written under the wrong table header (TOML files a key under the last header above it) stops the bot at startup with the key's name, rather than being ignored. See `config.toml.example` for every key.
+
+Upgrading a configuration written before keys were grouped by feature:
+
+| Old | New |
+|---|---|
+| `[[feeds]]` | `[feeds]` (one table) |
+| `poll_interval`, `feed_schedule`, `feed_timezone` | `[feeds]` `poll_interval`, `schedule`, `timezone` |
+| guild `feed_schedule` / `feed_timezone` | `schedule` / `timezone` in each `[[guilds.feeds]]` section |
+| `ambient_debug_logging`, `[interactions]` `set`/`part` | `[ambient]` `debug_logging`, `set`, `part` |
+| `[ambient_training_data]` | `[ambient.training_data]`. `allowed_guild_ids` is gone: to capture in some guilds only, **remove** the global section (or set `enabled = false`) and give each of those guilds `[guilds.ambient.training_data]` with `enabled = true`. Keeping the global section enabled captures in every guild. |
+| guild `ambient_channel_ids`, `ambient_debug_logging`, `[guilds.interactions]` | `[guilds.ambient]` `channel_ids`, `debug_logging`, `set`, `part` |
+| `[guilds.ambient_training_data]` | `[guilds.ambient.training_data]` |
+| `cache_ttl_secs` | `[resource_limits]` `cache_ttl_secs` |
+| `[resource_limits]` `max_feed_items_per_sync`, `max_worker_concurrency` | removed (they were never read) |
+
+To see what a configuration actually switches on, run `brickbot --explain-config` (with `--config <path>` for another file). It validates the file and prints the global settings, then a table per guild listing its commands, ambient assistant, training-data capture and feed channels, each value marked as coming from the guild's own entry or from the global settings.
 
 ### 5. Run the Bot
 To run the bot locally using the Nix devShell:
@@ -227,9 +248,9 @@ Because the bot re-executes the path it was started with, a reload also picks up
 ## Features & Commands
 
 ### RSS, ATOM & OPML Polling
-The bot automatically fetches the defined `feed_urls` and `opml_urls` at the specified `poll_interval`. Feeds are parsed to support both RSS and ATOM formats.
+The bot automatically fetches the defined `feed_urls` and `opml_urls` every `[feeds] poll_interval` seconds. Feeds are parsed to support both RSS and ATOM formats.
 
-A guild can have new articles posted to its channels with `[[guilds.feeds]]` sections. Each source is announced separately: up to three new articles of a source get one message each, more are listed in a single message for that source. Only articles that appear after the bot was last (re)started are announced. A channel can instead get them as a digest on a cron schedule (`feed_schedule`/`feed_timezone` globally or per guild, `schedule`/`timezone` per section). See [`docs/news.md`](docs/news.md).
+A guild can have new articles posted to its channels with `[[guilds.feeds]]` sections. Each source is announced separately: up to three new articles of a source get one message each, more are listed in a single message for that source. Only articles that appear after the bot was last (re)started are announced. A channel can instead get them as a digest on a cron schedule (`schedule`/`timezone` under `[feeds]`, overridable per `[[guilds.feeds]]` section). See [`docs/news.md`](docs/news.md).
 
 ### Event Synchronization
 The bot continuously syncs events from PocketBase into Discord's native Scheduled Events system. 

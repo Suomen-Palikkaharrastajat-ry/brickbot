@@ -10,33 +10,24 @@ pub const DEFAULT_LOCALE: &str = "fi-FI";
 /// The time zone feed announcement schedules are read in unless configured.
 pub const DEFAULT_FEED_TIMEZONE: chrono_tz::Tz = chrono_tz::Europe::Helsinki;
 
+/// Every table refuses keys it does not know: TOML files a key under the
+/// last table header above it, so a key written in the wrong place would
+/// otherwise be dropped without a word.
 #[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub locale: Option<String>,
     pub bot_name: Option<String>,
     #[serde(default)]
-    pub ambient_debug_logging: bool,
-    pub ambient_training_data: Option<AmbientTrainingDataConfig>,
+    pub ambient: AmbientConfig,
     pub zulip: Option<ZulipConfig>,
     pub pocketbase: Option<PocketBaseConfig>,
-    pub poll_interval: Option<u64>,
-    pub cache_ttl_secs: Option<u64>,
-    #[serde(default)]
-    pub interactions: InteractionsConfig,
     #[serde(default)]
     pub commands: CommandsConfig,
     #[serde(default)]
     pub guilds: Vec<GuildConfig>,
     #[serde(default)]
-    pub feeds: Vec<RssFeedConfig>,
-    /// When feed announcements are sent, as a cron expression read in
-    /// `feed_timezone`; every channel's default. Unset, empty, `"instant"` or
-    /// `"none"` announces articles as soon as they are found.
-    #[serde(default)]
-    pub feed_schedule: Option<String>,
-    /// IANA time zone `feed_schedule` is read in (default: Europe/Helsinki).
-    #[serde(default)]
-    pub feed_timezone: Option<String>,
+    pub feeds: FeedsConfig,
     #[serde(default)]
     pub resource_limits: ResourceLimitsConfig,
     #[serde(default)]
@@ -53,6 +44,7 @@ pub struct Config {
 /// survives restarts. It lives in its own database because all of it is
 /// derived and disposable — deleting the file is a clean rebuild.
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PartsCacheConfig {
     /// With this off, autocomplete falls back to the built-in catalogue alone.
     #[serde(default = "default_true")]
@@ -117,6 +109,7 @@ const fn default_parts_cache_warm_timeout_secs() -> u64 {
 /// render: an operator installs it once with `brickbot --fetch-ldraw`, and
 /// renders read it from disk. Until then the bot renders in box mode.
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct LdrawConfig {
     /// Directory holding the installed library.
     #[serde(default = "default_ldraw_data_dir")]
@@ -160,32 +153,55 @@ const fn default_ldraw_max_download_bytes() -> u64 {
     256 * 1024 * 1024 // 256 MB; the official archive is well under this.
 }
 
+/// The ambient assistant: which topics it offers help on, whether it explains
+/// its decisions in the log, and whether it keeps training data.
 #[derive(Deserialize, Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)]
-pub struct InteractionsConfig {
+#[serde(deny_unknown_fields)]
+pub struct AmbientConfig {
+    /// Offer `/set` when a message looks like it is about a set.
     #[serde(default = "default_true")]
     pub set: bool,
+    /// Offer `/part` when a message looks like it is about a part.
     #[serde(default = "default_true")]
     pub part: bool,
+    #[serde(default)]
+    pub debug_logging: bool,
+    /// Every guild's capture, unless a guild has a section of its own.
+    pub training_data: Option<AmbientTrainingDataConfig>,
 }
 
-/// Unknown keys are refused here: a guild-level key written below this
-/// table belongs to it as far as TOML is concerned, and would otherwise be
-/// dropped without a word.
-#[derive(Deserialize, Debug, Clone, Default)]
-#[serde(deny_unknown_fields)]
-pub struct GuildInteractionsConfig {
-    pub set: Option<bool>,
-    pub part: Option<bool>,
-}
-
-impl Default for InteractionsConfig {
+impl Default for AmbientConfig {
     fn default() -> Self {
         Self {
             set: true,
             part: true,
+            debug_logging: false,
+            training_data: None,
         }
     }
+}
+
+/// One guild's `[guilds.ambient]`. Each key left out follows the global
+/// `[ambient]`, except `training_data`, which replaces the global section
+/// whole.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GuildAmbientConfig {
+    /// Listen in these channels only; every channel when unset.
+    pub channel_ids: Option<Vec<u64>>,
+    pub set: Option<bool>,
+    pub part: Option<bool>,
+    pub debug_logging: Option<bool>,
+    /// Replaces the global `[ambient.training_data]` for this guild, whole:
+    /// fields left out take their defaults, not the global values.
+    pub training_data: Option<AmbientTrainingDataConfig>,
+}
+
+/// The ambient topics offered in one guild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AmbientTopics {
+    pub set: bool,
+    pub part: bool,
 }
 
 const fn default_true() -> bool {
@@ -193,15 +209,16 @@ const fn default_true() -> bool {
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CommandsConfig {
     #[serde(default)]
-    pub events: EventsCommandConfig,
+    pub events: WorkflowCommandConfig,
     #[serde(default)]
-    pub locations: LocationsCommandConfig,
+    pub locations: WorkflowCommandConfig,
     #[serde(default)]
-    pub set: SetCommandConfig,
+    pub set: LookupCommandConfig,
     #[serde(default)]
-    pub part: PartCommandConfig,
+    pub part: LookupCommandConfig,
     #[serde(default)]
     pub diagnostics: DiagnosticsCommandConfig,
     #[serde(default)]
@@ -209,18 +226,21 @@ pub struct CommandsConfig {
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct GuildCommandsConfig {
-    pub events: Option<EventsCommandConfig>,
-    pub locations: Option<LocationsCommandConfig>,
-    pub set: Option<SetCommandConfig>,
-    pub part: Option<PartCommandConfig>,
+    pub events: Option<WorkflowCommandConfig>,
+    pub locations: Option<WorkflowCommandConfig>,
+    pub set: Option<LookupCommandConfig>,
+    pub part: Option<LookupCommandConfig>,
     pub diagnostics: Option<DiagnosticsCommandConfig>,
     pub build: Option<BuildCommandConfig>,
 }
 
+/// `/events` and `/locations`: the wizard-backed commands.
 #[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)]
-pub struct EventsCommandConfig {
+pub struct WorkflowCommandConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -231,44 +251,22 @@ pub struct EventsCommandConfig {
     pub enable_fallback_mention: bool,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
-#[allow(clippy::struct_excessive_bools)]
-pub struct LocationsCommandConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub enable_edit: bool,
-    #[serde(default)]
-    pub enable_propose: bool,
-    #[serde(default = "default_true")]
-    pub enable_fallback_mention: bool,
-}
-
+/// `/set` and `/part`: on unless switched off.
 #[derive(Deserialize, Debug, Clone)]
-pub struct SetCommandConfig {
+#[serde(deny_unknown_fields)]
+pub struct LookupCommandConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
 
-impl Default for SetCommandConfig {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct PartCommandConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-impl Default for PartCommandConfig {
+impl Default for LookupCommandConfig {
     fn default() -> Self {
         Self { enabled: true }
     }
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DiagnosticsCommandConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -276,6 +274,7 @@ pub struct DiagnosticsCommandConfig {
 
 /// Settings for the collaborative `/build` command.
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct BuildCommandConfig {
     /// Off by default, like `events` and `diagnostics`: it opens threads and
     /// listens to chat, so it should be switched on deliberately.
@@ -345,28 +344,13 @@ const fn default_build_max_model_size() -> u32 {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct GuildConfig {
     pub guild_id: u64,
     pub locale: Option<String>,
     pub bot_name: Option<String>,
-    #[serde(default)]
-    pub ambient_channel_ids: Option<Vec<u64>>,
-    /// Overrides the global `ambient_debug_logging` for this guild.
-    pub ambient_debug_logging: Option<bool>,
-    /// Replaces the global `[ambient_training_data]` for this guild, whole:
-    /// fields left out take their defaults, not the global values, and the
-    /// global `allowed_guild_ids` no longer applies.
-    pub ambient_training_data: Option<AmbientTrainingDataConfig>,
-    pub interactions: Option<GuildInteractionsConfig>,
+    pub ambient: Option<GuildAmbientConfig>,
     pub commands: Option<GuildCommandsConfig>,
-    /// Feed announcement schedule for this guild's channels, overriding the
-    /// global `feed_schedule`.
-    #[serde(default)]
-    pub feed_schedule: Option<String>,
-    /// Time zone for this guild's feed schedules, overriding the global
-    /// `feed_timezone`.
-    #[serde(default)]
-    pub feed_timezone: Option<String>,
     /// Channels of this guild that new feed articles are published to.
     #[serde(default)]
     pub feeds: Vec<GuildFeedConfig>,
@@ -374,31 +358,30 @@ pub struct GuildConfig {
 
 /// One channel of a guild and the feeds whose new articles are posted there.
 ///
-/// A section naming no URLs at all follows every global `[[feeds]]` entry.
+/// A section naming no URLs at all follows the global `[feeds]`.
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct GuildFeedConfig {
     pub channel_id: u64,
     #[serde(default)]
     pub feed_urls: Vec<String>,
     #[serde(default)]
     pub opml_urls: Vec<String>,
-    /// Announcement schedule for this channel, overriding the guild's
-    /// `feed_schedule`. Every section naming the channel must agree.
+    /// Announcement schedule for this channel, overriding `[feeds]
+    /// schedule`. Every section naming the channel must agree.
     #[serde(default)]
     pub schedule: Option<String>,
-    /// Time zone for this channel's schedule, overriding the guild's
-    /// `feed_timezone`.
+    /// Time zone for this channel's schedule, overriding `[feeds] timezone`.
     #[serde(default)]
     pub timezone: Option<String>,
     /// Feeds served from these domains, or their subdomains, are not
     /// published to this channel, wherever the section got them from. Added
-    /// to the global `[[feeds]]` entries' `blocked_domains`, which always
-    /// apply.
+    /// to the global `[feeds]` `blocked_domains`, which always apply.
     #[serde(default)]
     pub blocked_domains: Vec<String>,
     /// Feeds whose URLs match these are not published to this channel,
-    /// wherever the section got them from. Added to the global `[[feeds]]`
-    /// entries' `blocked_feed_urls`, which always apply.
+    /// wherever the section got them from. Added to the global `[feeds]`
+    /// `blocked_feed_urls`, which always apply.
     #[serde(default)]
     pub blocked_feed_urls: Vec<String>,
 }
@@ -417,8 +400,11 @@ fn is_bare_domain(domain: &str) -> bool {
         })
 }
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct RssFeedConfig {
+/// The global `[feeds]`: feeds every guild's sections follow by default, and
+/// the defaults those sections add to.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct FeedsConfig {
     #[serde(default)]
     pub feed_urls: Vec<String>,
     #[serde(default)]
@@ -431,17 +417,36 @@ pub struct RssFeedConfig {
     /// section's own `blocked_feed_urls` add to these.
     #[serde(default)]
     pub blocked_feed_urls: Vec<String>,
+    /// When feed announcements are sent, as a cron expression read in
+    /// `timezone`; every channel's default. Unset, empty, `"instant"` or
+    /// `"none"` announces articles as soon as they are found.
+    #[serde(default)]
+    pub schedule: Option<String>,
+    /// IANA time zone `schedule` is read in (default: Europe/Helsinki).
+    #[serde(default)]
+    pub timezone: Option<String>,
+    /// Seconds between polls of each feed (default: an hour).
+    pub poll_interval: Option<u64>,
 }
 
+impl FeedsConfig {
+    /// How often each feed is polled.
+    #[must_use]
+    pub fn poll_interval_secs(&self) -> u64 {
+        self.poll_interval
+            .unwrap_or(DEFAULT_FEED_POLL_INTERVAL_SECS)
+    }
+}
+
+const DEFAULT_FEED_POLL_INTERVAL_SECS: u64 = 3600;
+
 #[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct AmbientTrainingDataConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
-    /// Read on the global section only; a guild's own section already names
-    /// its guild.
-    pub allowed_guild_ids: Option<Vec<u64>>,
     #[serde(default)]
     pub store_raw_text: bool,
 }
@@ -451,6 +456,7 @@ const fn default_retention_days() -> u32 {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ZulipConfig {
     pub url: String,
     pub bot_email: String,
@@ -460,6 +466,7 @@ pub struct ZulipConfig {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PocketBaseConfig {
     pub url: String,
     pub collection: String,
@@ -481,15 +488,16 @@ impl PocketBaseConfig {
 const DEFAULT_LOCATIONS_COLLECTION: &str = "locations";
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceLimitsConfig {
     #[serde(default = "default_max_http_body_bytes")]
     pub max_http_body_bytes: u64,
+    /// Size of the in-memory cache of HTTP responses (`src/http.rs`).
     #[serde(default = "default_max_cache_memory_bytes")]
     pub max_cache_memory_bytes: u64,
-    #[serde(default = "default_max_feed_items_per_sync")]
-    pub max_feed_items_per_sync: usize,
-    #[serde(default = "default_max_worker_concurrency")]
-    pub max_worker_concurrency: usize,
+    /// How long a cached HTTP response is reused.
+    #[serde(default = "default_cache_ttl_secs")]
+    pub cache_ttl_secs: u64,
 }
 
 impl Default for ResourceLimitsConfig {
@@ -497,8 +505,7 @@ impl Default for ResourceLimitsConfig {
         Self {
             max_http_body_bytes: default_max_http_body_bytes(),
             max_cache_memory_bytes: default_max_cache_memory_bytes(),
-            max_feed_items_per_sync: default_max_feed_items_per_sync(),
-            max_worker_concurrency: default_max_worker_concurrency(),
+            cache_ttl_secs: default_cache_ttl_secs(),
         }
     }
 }
@@ -511,12 +518,8 @@ const fn default_max_cache_memory_bytes() -> u64 {
     50 * 1024 * 1024 // 50 MB
 }
 
-const fn default_max_feed_items_per_sync() -> usize {
-    1000
-}
-
-const fn default_max_worker_concurrency() -> usize {
-    4
+const fn default_cache_ttl_secs() -> u64 {
+    600
 }
 
 impl Config {
@@ -590,10 +593,17 @@ impl Config {
 
         self.validate_feeds(&mut errors);
 
-        if let Some(interval) = self.poll_interval {
+        if let Some(interval) = self.feeds.poll_interval {
             if interval > 0 && interval < 10 {
-                errors.push("poll_interval must be at least 10 seconds".to_string());
+                errors.push("feeds poll_interval must be at least 10 seconds".to_string());
             }
+        }
+
+        if self.resource_limits.cache_ttl_secs == 0 {
+            errors.push("resource_limits cache_ttl_secs must be at least 1".to_string());
+        }
+        if self.resource_limits.max_cache_memory_bytes == 0 {
+            errors.push("resource_limits max_cache_memory_bytes must be at least 1".to_string());
         }
 
         if self.commands.build.max_model_size == 0 {
@@ -650,8 +660,8 @@ impl Config {
         let guild_feeds = self.guilds.iter().flat_map(|g| &g.feeds);
         let feed_urls = self
             .feeds
+            .feed_urls
             .iter()
-            .flat_map(|f| &f.feed_urls)
             .chain(guild_feeds.clone().flat_map(|f| &f.feed_urls));
         for url in feed_urls {
             if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -662,8 +672,8 @@ impl Config {
         }
         let opml_urls = self
             .feeds
+            .opml_urls
             .iter()
-            .flat_map(|f| &f.opml_urls)
             .chain(guild_feeds.flat_map(|f| &f.opml_urls));
         for url in opml_urls {
             if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -672,14 +682,14 @@ impl Config {
                 ));
             }
         }
-        for domain in self.feeds.iter().flat_map(|f| &f.blocked_domains) {
+        for domain in &self.feeds.blocked_domains {
             if !is_bare_domain(domain) {
                 errors.push(format!(
                     "feeds blocked_domains entry must be a bare domain such as example.com: {domain:?}"
                 ));
             }
         }
-        for url in self.feeds.iter().flat_map(|f| &f.blocked_feed_urls) {
+        for url in &self.feeds.blocked_feed_urls {
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 errors.push(format!(
                     "feeds blocked_feed_urls entry must start with http:// or https://: {url}"
@@ -687,10 +697,7 @@ impl Config {
             }
         }
         self.validate_feed_schedules(errors);
-        let has_global_feeds = self
-            .feeds
-            .iter()
-            .any(|f| !f.feed_urls.is_empty() || !f.opml_urls.is_empty());
+        let has_global_feeds = !self.feeds.feed_urls.is_empty() || !self.feeds.opml_urls.is_empty();
         let mut channel_guilds = std::collections::HashMap::new();
         for guild in &self.guilds {
             for section in &guild.feeds {
@@ -730,7 +737,7 @@ impl Config {
                 if section.feed_urls.is_empty() && section.opml_urls.is_empty() && !has_global_feeds
                 {
                     errors.push(format!(
-                        "guild {} feeds for channel {} names no URLs and there are no global [[feeds]] to follow",
+                        "guild {} feeds for channel {} names no URLs and there are no global [feeds] to follow",
                         guild.guild_id, section.channel_id
                     ));
                 }
@@ -739,20 +746,13 @@ impl Config {
     }
 
     fn validate_feed_schedules(&self, errors: &mut Vec<String>) {
-        if let Some(sched) = &self.feed_schedule {
+        if let Some(sched) = &self.feeds.schedule {
             validate_schedule("global feeds", sched, errors);
         }
-        if let Some(tz) = &self.feed_timezone {
+        if let Some(tz) = &self.feeds.timezone {
             validate_timezone("global feeds", tz, errors);
         }
         for guild in &self.guilds {
-            let scope = format!("guild {} feeds", guild.guild_id);
-            if let Some(sched) = &guild.feed_schedule {
-                validate_schedule(&scope, sched, errors);
-            }
-            if let Some(tz) = &guild.feed_timezone {
-                validate_timezone(&scope, tz, errors);
-            }
             // A channel named by several sections has one schedule; sections
             // that disagree on it would leave it to whichever is read first.
             let mut schedules = std::collections::HashMap::new();
@@ -794,15 +794,28 @@ impl Config {
         self.guilds.iter().find(|g| g.guild_id == guild_id)
     }
 
+    fn guild_ambient(&self, guild_id: u64) -> Option<&GuildAmbientConfig> {
+        self.get_guild_config(guild_id)
+            .and_then(|g| g.ambient.as_ref())
+    }
+
+    /// The ambient topics offered in a guild: its own `[guilds.ambient]`
+    /// keys, else the global `[ambient]` ones.
     #[must_use]
-    pub fn interactions_for(&self, guild_id: u64) -> InteractionsConfig {
-        let g = self
-            .get_guild_config(guild_id)
-            .and_then(|g| g.interactions.as_ref());
-        InteractionsConfig {
-            set: g.and_then(|c| c.set).unwrap_or(self.interactions.set),
-            part: g.and_then(|c| c.part).unwrap_or(self.interactions.part),
+    pub fn ambient_topics_for(&self, guild_id: u64) -> AmbientTopics {
+        let g = self.guild_ambient(guild_id);
+        AmbientTopics {
+            set: g.and_then(|a| a.set).unwrap_or(self.ambient.set),
+            part: g.and_then(|a| a.part).unwrap_or(self.ambient.part),
         }
+    }
+
+    /// The only channels of a guild the ambient assistant listens in, or
+    /// `None` for all of them.
+    #[must_use]
+    pub fn ambient_channel_ids_for(&self, guild_id: u64) -> Option<&[u64]> {
+        self.guild_ambient(guild_id)
+            .and_then(|a| a.channel_ids.as_deref())
     }
 
     #[must_use]
@@ -836,31 +849,20 @@ impl Config {
     /// message from `guild_id`: the guild's own setting, else the global one.
     #[must_use]
     pub fn ambient_debug_logging_for(&self, guild_id: u64) -> bool {
-        self.get_guild_config(guild_id)
-            .and_then(|g| g.ambient_debug_logging)
-            .unwrap_or(self.ambient_debug_logging)
+        self.guild_ambient(guild_id)
+            .and_then(|a| a.debug_logging)
+            .unwrap_or(self.ambient.debug_logging)
     }
 
     /// The training-data settings in force for a message from `guild_id`, or
-    /// `None` when nothing may be captured there.
-    ///
-    /// A guild's own section wins outright. Otherwise the global section
-    /// applies, narrowed by its `allowed_guild_ids` when that is set.
+    /// `None` when nothing may be captured there: the guild's own section
+    /// if it has one, else the global one.
     #[must_use]
     pub fn ambient_training_data_for(&self, guild_id: u64) -> Option<&AmbientTrainingDataConfig> {
-        let own = self
-            .get_guild_config(guild_id)
-            .and_then(|g| g.ambient_training_data.as_ref());
-        if let Some(own) = own {
-            return own.enabled.then_some(own);
-        }
-
-        let global = self.ambient_training_data.as_ref()?;
-        let allowed = global
-            .allowed_guild_ids
-            .as_ref()
-            .is_none_or(|ids| ids.contains(&guild_id));
-        (global.enabled && allowed).then_some(global)
+        self.guild_ambient(guild_id)
+            .and_then(|a| a.training_data.as_ref())
+            .or(self.ambient.training_data.as_ref())
+            .filter(|t| t.enabled)
     }
 
     /// The locale configured for a guild, if any.
@@ -890,31 +892,27 @@ impl Config {
     }
 
     /// The first of a channel's settings that is set: any of its own
-    /// `[[guilds.feeds]]` sections, then its guild, then the global one.
+    /// `[[guilds.feeds]]` sections, then the global `[feeds]`.
     fn feed_setting<'a>(
         &'a self,
         guild_id: u64,
         channel_id: u64,
         section: impl Fn(&'a GuildFeedConfig) -> Option<&'a String>,
-        guild: impl Fn(&'a GuildConfig) -> Option<&'a String>,
         global: Option<&'a String>,
     ) -> Option<&'a str> {
-        self.guilds
-            .iter()
-            .find(|g| g.guild_id == guild_id)
+        self.get_guild_config(guild_id)
             .and_then(|g| {
                 g.feeds
                     .iter()
                     .filter(|f| f.channel_id == channel_id)
                     .find_map(&section)
-                    .or_else(|| guild(g))
             })
             .or(global)
             .map(String::as_str)
     }
 
-    /// Resolves the announcement schedule for a channel: channel override, then
-    /// guild override, then global setting. An empty schedule or `"instant"` /
+    /// Resolves the announcement schedule for a channel: channel override,
+    /// then global setting. An empty schedule or `"instant"` /
     /// `"none"` means instant announcements (`None`), whichever level says so.
     #[must_use]
     pub fn feed_schedule_for_channel(&self, guild_id: u64, channel_id: u64) -> Option<&str> {
@@ -922,15 +920,14 @@ impl Config {
             guild_id,
             channel_id,
             |f| f.schedule.as_ref(),
-            |g| g.feed_schedule.as_ref(),
-            self.feed_schedule.as_ref(),
+            self.feeds.schedule.as_ref(),
         )
         .filter(|s| !is_instant(s))
         .map(str::trim)
     }
 
     /// Resolves the timezone for a channel's announcement schedule: channel
-    /// override, then guild override, then global setting, falling back to
+    /// override, then global setting, falling back to
     /// [`DEFAULT_FEED_TIMEZONE`].
     #[must_use]
     pub fn feed_timezone_for_channel(&self, guild_id: u64, channel_id: u64) -> chrono_tz::Tz {
@@ -938,8 +935,7 @@ impl Config {
             guild_id,
             channel_id,
             |f| f.timezone.as_ref(),
-            |g| g.feed_timezone.as_ref(),
-            self.feed_timezone.as_ref(),
+            self.feeds.timezone.as_ref(),
         )
         .and_then(|tz| tz.trim().parse().ok())
         .unwrap_or(DEFAULT_FEED_TIMEZONE)
@@ -964,7 +960,9 @@ mod tests {
             r"
             [[guilds]]
             guild_id = 1
-            ambient_debug_logging = true
+
+            [guilds.ambient]
+            debug_logging = true
 
             [[guilds]]
             guild_id = 2
@@ -982,11 +980,14 @@ mod tests {
     fn a_guild_can_opt_out_of_global_ambient_debug_logging() {
         let config: Config = toml::from_str(
             r"
-            ambient_debug_logging = true
+            [ambient]
+            debug_logging = true
 
             [[guilds]]
             guild_id = 1
-            ambient_debug_logging = false
+
+            [guilds.ambient]
+            debug_logging = false
 
             [[guilds]]
             guild_id = 2
@@ -1005,7 +1006,7 @@ mod tests {
             [[guilds]]
             guild_id = 1
 
-            [guilds.ambient_training_data]
+            [guilds.ambient.training_data]
             enabled = true
             retention_days = 7
             store_raw_text = true
@@ -1026,15 +1027,14 @@ mod tests {
     fn a_guild_training_section_replaces_the_global_one() {
         let config: Config = toml::from_str(
             r"
-            [ambient_training_data]
+            [ambient.training_data]
             enabled = true
             retention_days = 30
-            allowed_guild_ids = [2]
 
             [[guilds]]
             guild_id = 1
 
-            [guilds.ambient_training_data]
+            [guilds.ambient.training_data]
             enabled = true
             retention_days = 7
 
@@ -1042,28 +1042,24 @@ mod tests {
             guild_id = 2
 
             [[guilds]]
-            guild_id = 3
-
-            [[guilds]]
             guild_id = 4
 
-            [guilds.ambient_training_data]
+            [guilds.ambient.training_data]
             enabled = false
             ",
         )
         .unwrap();
 
-        // Its own section wins outright, including over the global allow-list.
+        // Its own section wins outright.
         assert_eq!(
             config.ambient_training_data_for(1).unwrap().retention_days,
             7
         );
-        // No section of its own: the global one applies, allow-list and all.
+        // No section of its own: the global one applies.
         assert_eq!(
             config.ambient_training_data_for(2).unwrap().retention_days,
             30
         );
-        assert!(config.ambient_training_data_for(3).is_none());
         assert!(config.ambient_training_data_for(4).is_none());
     }
 
@@ -1071,13 +1067,13 @@ mod tests {
     fn a_guild_can_opt_out_of_global_training_data() {
         let config: Config = toml::from_str(
             r"
-            [ambient_training_data]
+            [ambient.training_data]
             enabled = true
 
             [[guilds]]
             guild_id = 1
 
-            [guilds.ambient_training_data]
+            [guilds.ambient.training_data]
             enabled = false
 
             [[guilds]]
@@ -1094,7 +1090,7 @@ mod tests {
     fn a_guild_training_section_does_not_inherit_global_fields() {
         let config: Config = toml::from_str(
             r"
-            [ambient_training_data]
+            [ambient.training_data]
             enabled = true
             retention_days = 90
             store_raw_text = true
@@ -1102,7 +1098,7 @@ mod tests {
             [[guilds]]
             guild_id = 1
 
-            [guilds.ambient_training_data]
+            [guilds.ambient.training_data]
             enabled = true
             ",
         )
@@ -1115,17 +1111,17 @@ mod tests {
     }
 
     #[test]
-    fn guild_keys_placed_under_the_interactions_table_are_rejected() {
-        // TOML reads a key written below `[guilds.interactions]` as part of
-        // that table; refusing it beats silently ignoring the setting.
+    fn guild_keys_placed_under_the_ambient_table_are_rejected() {
+        // TOML reads a key written below `[guilds.ambient]` as part of that
+        // table; refusing it beats silently ignoring the setting.
         let misplaced = toml::from_str::<Config>(
             r"
             [[guilds]]
             guild_id = 1
 
-            [guilds.interactions]
+            [guilds.ambient]
             set = true
-            ambient_debug_logging = true
+            bot_name = 'x'
             ",
         );
 
@@ -1133,10 +1129,10 @@ mod tests {
     }
 
     #[test]
-    fn global_training_data_without_an_allow_list_covers_everything() {
+    fn global_training_data_covers_every_guild() {
         let config: Config = toml::from_str(
             r"
-            [ambient_training_data]
+            [ambient.training_data]
             enabled = true
 
             [[guilds]]
@@ -1153,7 +1149,7 @@ mod tests {
     fn disabled_global_training_data_covers_nothing() {
         let config: Config = toml::from_str(
             r"
-            [ambient_training_data]
+            [ambient.training_data]
             enabled = false
             ",
         )
@@ -1317,15 +1313,13 @@ mod tests {
         let toml_str = r#"
         locale = "fi-FI"
         bot_name = "Global Bot"
-        poll_interval = 300
-
         [[guilds]]
         guild_id = 123
         bot_name = "Server Bot"
         locale = "fi-FI"
-        ambient_channel_ids = [300]
 
-        [guilds.interactions]
+        [guilds.ambient]
+        channel_ids = [300]
         set = false
 
         [guilds.commands.events]
@@ -1334,10 +1328,11 @@ mod tests {
         [guilds.commands.locations]
         enabled = false
 
-        [[feeds]]
+        [feeds]
         feed_urls = ["http://example.com/rss"]
+        poll_interval = 300
 
-        [interactions]
+        [ambient]
         set = true
         part = false
 
@@ -1371,12 +1366,11 @@ mod tests {
         assert_eq!(guild.guild_id, 123);
         assert_eq!(guild.bot_name.as_deref(), Some("Server Bot"));
         assert_eq!(guild.locale.as_deref(), Some("fi-FI"));
-        assert_eq!(guild.ambient_channel_ids.as_ref().unwrap(), &vec![300]);
-        assert_eq!(config.feeds.len(), 1);
-        assert_eq!(config.feeds[0].feed_urls[0], "http://example.com/rss");
-        assert_eq!(config.poll_interval, Some(300));
-        assert!(config.interactions.set);
-        assert!(!config.interactions.part);
+        assert_eq!(config.ambient_channel_ids_for(123), Some(&[300][..]));
+        assert_eq!(config.feeds.feed_urls, ["http://example.com/rss"]);
+        assert_eq!(config.feeds.poll_interval_secs(), 300);
+        assert!(config.ambient.set);
+        assert!(!config.ambient.part);
         assert!(config.commands.events.enabled);
         assert!(config.commands.events.enable_edit);
         assert!(!config.commands.events.enable_propose);
@@ -1388,10 +1382,10 @@ mod tests {
         assert!(config.commands.locations.enable_propose);
         assert!(config.commands.locations.enable_fallback_mention);
 
-        assert!(!config.interactions_for(123).set);
+        assert!(!config.ambient_topics_for(123).set);
         assert!(!config.commands_for(123).events.enabled);
         assert!(!config.commands_for(123).locations.enabled);
-        assert!(config.interactions_for(999).set);
+        assert!(config.ambient_topics_for(999).set);
         assert!(config.commands_for(999).events.enabled);
         assert!(config.commands_for(999).locations.enabled);
 
@@ -1405,8 +1399,6 @@ mod tests {
             config.resource_limits.max_cache_memory_bytes,
             50 * 1024 * 1024
         );
-        assert_eq!(config.resource_limits.max_feed_items_per_sync, 1000);
-        assert_eq!(config.resource_limits.max_worker_concurrency, 4);
     }
 
     #[test]
@@ -1462,7 +1454,7 @@ mod tests {
             [[guilds]]
             guild_id = 2
 
-            [[feeds]]
+            [feeds]
             feed_urls = ["https://example.com/global"]
             "#,
         )
@@ -1550,19 +1542,16 @@ mod tests {
     fn global_feeds_may_block_feed_urls_too() {
         let config: Config = toml::from_str(
             r#"
-            [[feeds]]
+            [feeds]
             feed_urls = ["https://example.com/rss"]
-            blocked_feed_urls = ["https://example.com/bad.xml"]
-
-            [[feeds]]
-            blocked_feed_urls = ["ftp://example.com/bad.xml"]
+            blocked_feed_urls = ["https://example.com/bad.xml", "ftp://example.com/bad.xml"]
             "#,
         )
         .unwrap();
 
         assert_eq!(
-            config.feeds[0].blocked_feed_urls,
-            ["https://example.com/bad.xml"]
+            config.feeds.blocked_feed_urls,
+            ["https://example.com/bad.xml", "ftp://example.com/bad.xml"]
         );
         let errors = config.validate().unwrap_err();
         assert_eq!(
@@ -1604,17 +1593,17 @@ mod tests {
     fn global_feeds_may_block_domains_too() {
         let config: Config = toml::from_str(
             r#"
-            [[feeds]]
+            [feeds]
             feed_urls = ["https://example.com/rss"]
-            blocked_domains = ["kuvat.fi"]
-
-            [[feeds]]
-            blocked_domains = ["https://flickr.com"]
+            blocked_domains = ["kuvat.fi", "https://flickr.com"]
             "#,
         )
         .unwrap();
 
-        assert_eq!(config.feeds[0].blocked_domains, ["kuvat.fi"]);
+        assert_eq!(
+            config.feeds.blocked_domains,
+            ["kuvat.fi", "https://flickr.com"]
+        );
         let errors = config.validate().unwrap_err();
         assert_eq!(
             errors
@@ -1717,13 +1706,12 @@ mod tests {
         // Valid cron and timezone
         let config: Config = toml::from_str(
             r#"
-            feed_schedule = "0 8 * * *"
-            feed_timezone = "Europe/Helsinki"
+            [feeds]
+            schedule = "0 8 * * *"
+            timezone = "Europe/Helsinki"
 
             [[guilds]]
             guild_id = 1
-            feed_schedule = "@daily"
-            feed_timezone = "UTC"
 
             [[guilds.feeds]]
             channel_id = 10
@@ -1738,7 +1726,8 @@ mod tests {
         // Invalid cron
         let bad_cron: Config = toml::from_str(
             r#"
-            feed_schedule = "not a cron"
+            [feeds]
+            schedule = "not a cron"
 
             [[guilds]]
             guild_id = 1
@@ -1759,7 +1748,8 @@ mod tests {
         // Invalid timezone
         let bad_tz: Config = toml::from_str(
             r#"
-            feed_timezone = "Mars/Phobos"
+            [feeds]
+            timezone = "Mars/Phobos"
 
             [[guilds]]
             guild_id = 1
@@ -1782,13 +1772,12 @@ mod tests {
     fn feeds_schedule_and_timezone_resolution() {
         let config: Config = toml::from_str(
             r#"
-            feed_schedule = "0 8 * * *"
-            feed_timezone = "UTC"
+            [feeds]
+            schedule = "0 8 * * *"
+            timezone = "UTC"
 
             [[guilds]]
             guild_id = 1
-            feed_schedule = "0 9 * * *"
-            feed_timezone = "Europe/Berlin"
 
             [[guilds.feeds]]
             channel_id = 10
@@ -1822,12 +1811,9 @@ mod tests {
             chrono_tz::America::New_York
         );
 
-        // Channel 11: guild override
-        assert_eq!(config.feed_schedule_for_channel(1, 11), Some("0 9 * * *"));
-        assert_eq!(
-            config.feed_timezone_for_channel(1, 11),
-            chrono_tz::Europe::Berlin
-        );
+        // Channel 11: no override of its own
+        assert_eq!(config.feed_schedule_for_channel(1, 11), Some("0 8 * * *"));
+        assert_eq!(config.feed_timezone_for_channel(1, 11), chrono_tz::UTC);
 
         // Channel 12: explicit instant
         assert_eq!(config.feed_schedule_for_channel(1, 12), None);
@@ -1859,7 +1845,8 @@ mod tests {
     fn a_channel_takes_its_schedule_from_any_of_its_sections() {
         let config: Config = toml::from_str(
             r#"
-            feed_schedule = "0 8 * * *"
+            [feeds]
+            schedule = "0 8 * * *"
 
             [[guilds]]
             guild_id = 1
@@ -1908,22 +1895,252 @@ mod tests {
     }
 
     #[test]
-    fn an_instant_guild_overrides_a_global_schedule() {
+    fn an_instant_channel_overrides_a_global_schedule() {
         let config: Config = toml::from_str(
             r#"
-            feed_schedule = "0 8 * * *"
+            [feeds]
+            schedule = "0 8 * * *"
 
             [[guilds]]
             guild_id = 1
-            feed_schedule = "Instant"
 
             [[guilds.feeds]]
             channel_id = 10
             feed_urls = ["https://example.com/a"]
+            schedule = "Instant"
             "#,
         )
         .unwrap();
         assert!(config.validate().is_ok());
         assert_eq!(config.feed_schedule_for_channel(1, 10), None);
+    }
+
+    #[test]
+    fn global_feeds_carry_the_default_schedule_and_timezone() {
+        let config: Config = toml::from_str(
+            r#"
+            [feeds]
+            opml_urls = ["https://example.com/opml.xml"]
+            schedule = "0 9 * * *"
+            timezone = "UTC"
+
+            [[guilds]]
+            guild_id = 1
+
+            [[guilds.feeds]]
+            channel_id = 10
+            "#,
+        )
+        .unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.feed_schedule_for_channel(1, 10), Some("0 9 * * *"));
+        assert_eq!(config.feed_timezone_for_channel(1, 10), chrono_tz::UTC);
+    }
+
+    #[test]
+    fn global_feeds_are_one_table_not_a_list() {
+        let result = toml::from_str::<Config>(
+            r#"
+            [[feeds]]
+            feed_urls = ["https://example.com/rss"]
+            "#,
+        );
+        assert!(result.is_err(), "[[feeds]] should no longer parse");
+    }
+
+    #[test]
+    fn global_feeds_reject_unknown_keys() {
+        let error = toml::from_str::<Config>(
+            r#"
+            [feeds]
+            feed_urls = ["https://example.com/rss"]
+            feed_schedule = "0 9 * * *"
+            "#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("feed_schedule"), "{error}");
+    }
+
+    #[test]
+    fn ambient_settings_live_under_ambient() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = true
+            part = false
+            debug_logging = true
+
+            [ambient.training_data]
+            enabled = true
+            retention_days = 14
+
+            [[guilds]]
+            guild_id = 1
+
+            [guilds.ambient]
+            channel_ids = [10, 11]
+            part = true
+            debug_logging = false
+
+            [guilds.ambient.training_data]
+            enabled = false
+
+            [[guilds]]
+            guild_id = 2
+            ",
+        )
+        .unwrap();
+        assert!(config.validate().is_ok());
+
+        let one = config.ambient_topics_for(1);
+        assert!(one.set && one.part);
+        assert!(!config.ambient_debug_logging_for(1));
+        assert!(config.ambient_training_data_for(1).is_none());
+        assert_eq!(config.ambient_channel_ids_for(1), Some(&[10, 11][..]));
+
+        let two = config.ambient_topics_for(2);
+        assert!(two.set && !two.part);
+        assert!(config.ambient_debug_logging_for(2));
+        assert_eq!(
+            config.ambient_training_data_for(2).unwrap().retention_days,
+            14
+        );
+        assert_eq!(config.ambient_channel_ids_for(2), None);
+    }
+
+    #[test]
+    fn feeds_poll_interval_lives_under_feeds() {
+        let config: Config = toml::from_str("[feeds]\npoll_interval = 600").unwrap();
+        assert_eq!(config.feeds.poll_interval_secs(), 600);
+        assert_eq!(Config::default().feeds.poll_interval_secs(), 3600);
+
+        let too_fast: Config = toml::from_str("[feeds]\npoll_interval = 5").unwrap();
+        assert!(
+            too_fast
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("poll_interval"))
+        );
+    }
+
+    #[test]
+    fn resource_limits_size_the_response_cache() {
+        let defaults = Config::default().resource_limits;
+        assert_eq!(defaults.cache_ttl_secs, 600);
+        assert_eq!(defaults.max_cache_memory_bytes, 50 * 1024 * 1024);
+
+        let config: Config =
+            toml::from_str("[resource_limits]\ncache_ttl_secs = 60\nmax_cache_memory_bytes = 1024")
+                .unwrap();
+        assert_eq!(config.resource_limits.cache_ttl_secs, 60);
+        assert_eq!(config.resource_limits.max_cache_memory_bytes, 1024);
+    }
+
+    #[test]
+    fn unknown_and_retired_keys_are_rejected_everywhere() {
+        for snippet in [
+            "feed_schedule = \"0 9 * * *\"",
+            "feed_timezone = \"UTC\"",
+            "poll_interval = 600",
+            "cache_ttl_secs = 600",
+            "ambient_debug_logging = true",
+            "[interactions]\nset = true",
+            "[ambient_training_data]\nenabled = true",
+            "[ambient]\nchannel_ids = [1]",
+            "[ambient.training_data]\nallowed_guild_ids = [1]",
+            "[resource_limits]\nmax_worker_concurrency = 4",
+            "[resource_limits]\nmax_feed_items_per_sync = 1000",
+            "[commands.set]\nenabeld = true",
+            "[commands.build]\nenabled = true\nrender_widht = 10",
+            "[ldraw]\ndir = \"x\"",
+            "[parts_cache]\nttl = 1",
+            "[zulip]\nurl = \"https://z\"\nbot_email = \"a@b\"\nmoderation_stream = \"s\"\nstream = \"x\"",
+            "[pocketbase]\nurl = \"https://p\"\ncollection = \"e\"\nextra = 1",
+            "[[guilds]]\nguild_id = 1\nfeed_schedule = \"0 9 * * *\"",
+            "[[guilds]]\nguild_id = 1\nambient_channel_ids = [1]",
+            "[[guilds]]\nguild_id = 1\n[guilds.interactions]\nset = true",
+            "[[guilds]]\nguild_id = 1\n[guilds.commands.events]\nenable = true",
+            "[[guilds]]\nguild_id = 1\n[[guilds.feeds]]\nchannel_id = 1\nfeed_schedule = \"x\"",
+        ] {
+            assert!(
+                toml::from_str::<Config>(snippet).is_err(),
+                "should be rejected:\n{snippet}"
+            );
+        }
+    }
+
+    #[test]
+    fn training_data_can_be_captured_in_chosen_guilds_only() {
+        // What `allowed_guild_ids` used to do: no global section, and a
+        // section of their own for the guilds that capture.
+        let config: Config = toml::from_str(
+            r"
+            [[guilds]]
+            guild_id = 1
+
+            [guilds.ambient.training_data]
+            enabled = true
+
+            [[guilds]]
+            guild_id = 2
+            ",
+        )
+        .unwrap();
+        assert!(config.ambient_training_data_for(1).is_some());
+        assert!(config.ambient_training_data_for(2).is_none());
+        assert!(config.ambient_training_data_for(999).is_none());
+    }
+
+    #[test]
+    fn the_response_cache_cannot_be_sized_or_timed_to_nothing() {
+        let config: Config =
+            toml::from_str("[resource_limits]\ncache_ttl_secs = 0\nmax_cache_memory_bytes = 0")
+                .unwrap();
+        let errors = config.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e == "resource_limits cache_ttl_secs must be at least 1"),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e == "resource_limits max_cache_memory_bytes must be at least 1"),
+            "{errors:?}"
+        );
+    }
+
+    /// `config.toml.example` with its settings switched on: one level of `# `
+    /// taken off every line that is a table header or a key, leaving prose
+    /// and the doubly commented optional keys alone.
+    fn uncommented_example() -> String {
+        include_str!("../config.toml.example")
+            .lines()
+            .map(|line| {
+                let rest = line.strip_prefix("# ").unwrap_or(line);
+                let is_setting = rest.starts_with('[')
+                    || rest.split_once(" =").is_some_and(|(key, _)| {
+                        !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                    });
+                if line.starts_with("# ") && is_setting {
+                    rest
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_example_config_parses_and_validates() {
+        let example = uncommented_example();
+        let config: Config = toml::from_str(&example).unwrap_or_else(|e| panic!("{e}\n{example}"));
+        config.validate().unwrap();
+        assert!(config.zulip.is_some());
+        assert_eq!(config.guilds.len(), 2);
+        assert!(config.guilds[0].ambient.is_some());
     }
 }
