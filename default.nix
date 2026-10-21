@@ -18,6 +18,8 @@ rustPlatform.buildRustPackage {
       baseName == "migrations" ||
       baseName == "locales" ||
       baseName == ".sqlx" ||
+      # Read by a config test (`include_str!`).
+      baseName == "config.toml.example" ||
       lib.hasSuffix ".rs" baseName ||
       lib.hasSuffix ".sql" baseName ||
       lib.hasSuffix ".yml" baseName ||
