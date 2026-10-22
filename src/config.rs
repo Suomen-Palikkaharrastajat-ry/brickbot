@@ -439,6 +439,8 @@ impl FeedsConfig {
 }
 
 const DEFAULT_FEED_POLL_INTERVAL_SECS: u64 = 3600;
+/// The poll loop wakes once a minute, so a shorter interval acts as this one.
+const MIN_FEED_POLL_INTERVAL_SECS: u64 = 60;
 
 #[derive(Deserialize, Debug, Clone, Default)]
 #[serde(deny_unknown_fields)]
@@ -594,8 +596,10 @@ impl Config {
         self.validate_feeds(&mut errors);
 
         if let Some(interval) = self.feeds.poll_interval {
-            if interval < 10 {
-                errors.push("feeds poll_interval must be at least 10 seconds".to_string());
+            if interval < MIN_FEED_POLL_INTERVAL_SECS {
+                errors.push(format!(
+                    "feeds poll_interval must be at least {MIN_FEED_POLL_INTERVAL_SECS} seconds"
+                ));
             }
         }
 
@@ -2047,8 +2051,11 @@ mod tests {
         assert_eq!(config.feeds.poll_interval_secs(), 600);
         assert_eq!(Config::default().feeds.poll_interval_secs(), 3600);
 
-        for too_fast in ["[feeds]\npoll_interval = 5", "[feeds]\npoll_interval = 0"] {
-            let too_fast: Config = toml::from_str(too_fast).unwrap();
+        // The poll loop wakes once a minute, so less could never be honoured.
+        let at_the_limit: Config = toml::from_str("[feeds]\npoll_interval = 60").unwrap();
+        at_the_limit.validate().unwrap();
+        for too_fast in ["0", "5", "59"].map(|v| format!("[feeds]\npoll_interval = {v}")) {
+            let too_fast: Config = toml::from_str(&too_fast).unwrap();
             assert!(
                 too_fast
                     .validate()

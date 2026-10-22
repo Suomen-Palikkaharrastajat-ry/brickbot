@@ -33,7 +33,7 @@ pub fn parse_feed(body: &[u8]) -> Result<Feed> {
 
 /// Bypasses the response cache: a feed is only fetched once it is due, so a
 /// cached body would just delay new articles by up to `cache_ttl_secs`.
-pub async fn fetch_feed(client: &HttpClient, url: &str, limit: u64) -> Result<Feed> {
+pub async fn fetch_feed(client: &dyn HttpProvider, url: &str, limit: u64) -> Result<Feed> {
     let body = client.get_bounded_bytes(url, limit, true).await?;
     parse_feed(&body[..])
 }
@@ -136,7 +136,7 @@ pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
 pub async fn poll_once(
     db: &SqlitePool,
     feed_url: &str,
-    client: &HttpClient,
+    client: &dyn HttpProvider,
     limit: u64,
 ) -> anyhow::Result<Vec<FeedEntry>> {
     let feed = fetch_feed(client, feed_url, limit).await?;
@@ -320,6 +320,9 @@ const MAX_TITLE_CHARS: usize = 150;
 /// hold back what the same pass already found. `src/http.rs` has no timeout
 /// of its own.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often removing a sent digest from the queue is tried.
+const DEQUEUE_ATTEMPTS: u32 = 3;
+const DEQUEUE_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 fn message_len(s: &str) -> usize {
     s.encode_utf16().count()
@@ -808,6 +811,35 @@ pub fn collect_updates(
     }
 }
 
+/// The feed URLs an OPML list names. Fetched past the response cache like a
+/// feed: it is only fetched once it is due.
+async fn fetch_opml(client: &dyn HttpProvider, url: &str, limit: u64) -> Result<Vec<String>> {
+    let content = client.get_bounded_text(url, limit, true).await?;
+    let document = opml::OPML::from_str(&content)?;
+    let mut urls = Vec::new();
+    extract_opml_urls(&document.body.outlines, &mut urls);
+    Ok(urls)
+}
+
+/// Runs `attempt` up to `attempts` times, `delay` apart, until it succeeds;
+/// the last error when none does.
+async fn retry<T, E, F, Fut>(attempts: u32, delay: Duration, mut attempt: F) -> Result<T, E>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    let mut tries = 1;
+    loop {
+        match attempt().await {
+            Err(_) if tries < attempts => {
+                tries += 1;
+                sleep(delay).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 fn extract_opml_urls(outlines: &[opml::Outline], urls: &mut Vec<String>) {
     for outline in outlines {
         if let Some(xml_url) = &outline.xml_url {
@@ -826,17 +858,18 @@ fn is_due(
     last_polled_at.is_none_or(|last| (now - last).num_seconds() >= interval as i64)
 }
 
-async fn route_unseen_entries(
-    db: &SqlitePool,
+/// Splits a feed's unseen articles between the channels it is published to:
+/// the instant ones, which get them announced this pass, and the queue of the
+/// scheduled ones, which get them in their next digest. `YouTube` Shorts are
+/// never queued (and `collect_updates` leaves them out of instant batches).
+fn plan_routing(
     config: &Config,
     feed_targets: Option<&BTreeSet<PublishTarget>>,
     feed_url: &str,
     fresh: &[FeedEntry],
-    updates: &mut BTreeMap<PublishTarget, Vec<FeedEntry>>,
-) {
+) -> (BTreeSet<PublishTarget>, Vec<PendingAnnouncement>) {
     let mut instant_targets = BTreeSet::new();
     let mut scheduled = Vec::new();
-
     for &target in feed_targets.into_iter().flatten() {
         if config
             .feed_schedule_for_channel(target.guild_id, target.channel_id)
@@ -857,15 +890,36 @@ async fn route_unseen_entries(
             instant_targets.insert(target);
         }
     }
+    (instant_targets, scheduled)
+}
+
+/// Records what a poll of `feed_url` listed and routes its unseen articles:
+/// queued for scheduled channels, added to `updates` for instant ones.
+///
+/// Recording and queueing commit together, so a failure leaves the articles
+/// unseen for the next poll to find again instead of seen but never queued.
+/// `updates` is only touched once that has committed.
+async fn record_and_route(
+    db: &SqlitePool,
+    config: &Config,
+    feed_targets: Option<&BTreeSet<PublishTarget>>,
+    feed_url: &str,
+    run_id: i64,
+    entries: Vec<FeedEntry>,
+    updates: &mut BTreeMap<PublishTarget, Vec<FeedEntry>>,
+) -> Result<(), sqlx::Error> {
+    let mut tx = db.begin().await?;
+    let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    let unseen = crate::db::record_feed_sightings_in(&mut tx, feed_url, run_id, &ids).await?;
+    let fresh = unseen_entries(entries, &unseen);
+    let (instant_targets, scheduled) = plan_routing(config, feed_targets, feed_url, &fresh);
+    crate::db::queue_pending_announcements_in(&mut tx, &scheduled).await?;
+    tx.commit().await?;
 
     if !instant_targets.is_empty() {
-        collect_updates(updates, Some(&instant_targets), fresh);
+        collect_updates(updates, Some(&instant_targets), &fresh);
     }
-    if !scheduled.is_empty() {
-        if let Err(err) = crate::db::queue_pending_announcements(db, &scheduled).await {
-            tracing::error!("failed to queue pending announcements for {feed_url}: {err}");
-        }
-    }
+    Ok(())
 }
 
 async fn publish_instant_updates(
@@ -925,6 +979,19 @@ async fn publish_scheduled_announcements(
         if let Err(err) = crate::db::clear_pending_announcements(db, channel_id).await {
             tracing::error!("failed to clear pending announcements of channel {channel_id}: {err}");
         }
+    }
+
+    let scheduled: Vec<u64> = channels
+        .iter()
+        .filter(|&(&channel_id, &guild_id)| {
+            config
+                .feed_schedule_for_channel(guild_id, channel_id)
+                .is_some()
+        })
+        .map(|(&channel_id, _)| channel_id)
+        .collect();
+    if let Err(err) = crate::db::prune_channel_announcements(db, &scheduled).await {
+        tracing::error!("failed to prune digest times of unscheduled channels: {err}");
     }
 
     for (channel_id, guild_id) in channels {
@@ -1001,8 +1068,15 @@ async fn send_digest(
             return;
         }
         let ids: Vec<&str> = digest.item_ids.iter().map(String::as_str).collect();
-        if let Err(err) = crate::db::delete_pending_announcements(db, channel_id, &ids).await {
-            tracing::error!("failed to dequeue announced items of channel {channel_id}: {err}");
+        // Retried, as what stays queued is sent again in the next digest.
+        let dequeued = retry(DEQUEUE_ATTEMPTS, DEQUEUE_RETRY_DELAY, || {
+            crate::db::delete_pending_announcements(db, channel_id, &ids)
+        })
+        .await;
+        if let Err(err) = dequeued {
+            tracing::error!(
+                "failed to dequeue announced items of channel {channel_id}, they will be sent again: {err}"
+            );
         }
     }
 }
@@ -1028,24 +1102,15 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
             if opml_cache.contains_key(opml_url) && !is_due(last, pass_at, interval) {
                 continue;
             }
-            let fetched = timeout(
-                FETCH_TIMEOUT,
-                // Due already, like a feed, so not served from the cache.
-                client.get_bounded_text(opml_url, limit, true),
-            )
-            .await;
-            if let Ok(Ok(opml_content)) = fetched {
-                if let Ok(document) = opml::OPML::from_str(&opml_content) {
-                    let mut extracted = Vec::new();
-                    extract_opml_urls(&document.body.outlines, &mut extracted);
+            let fetched = timeout(FETCH_TIMEOUT, fetch_opml(&client, opml_url, limit))
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")));
+            match fetched {
+                Ok(extracted) => {
                     opml_cache.insert(opml_url.to_string(), extracted);
-
                     let _ = crate::db::mark_polled(&db, opml_url, pass_at).await;
-                } else {
-                    tracing::error!("failed to parse OPML from {}", opml_url);
                 }
-            } else {
-                tracing::error!("failed to fetch OPML from {}", opml_url);
+                Err(err) => tracing::error!("failed to fetch OPML from {}: {}", opml_url, err),
             }
         }
 
@@ -1070,23 +1135,18 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
             match polled {
                 // Sightings are only kept for feeds somebody publishes.
                 Ok(entries) if feed_targets.is_some() => {
-                    let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
-                    match crate::db::record_feed_sightings(&db, &feed_url, run_id, &ids).await {
-                        Ok(unseen) => {
-                            let fresh = unseen_entries(entries, &unseen);
-                            route_unseen_entries(
-                                &db,
-                                &config,
-                                feed_targets,
-                                &feed_url,
-                                &fresh,
-                                &mut updates,
-                            )
-                            .await;
-                        }
-                        Err(err) => {
-                            tracing::error!("failed to record sightings of {}: {}", feed_url, err);
-                        }
+                    let routed = record_and_route(
+                        &db,
+                        &config,
+                        feed_targets,
+                        &feed_url,
+                        run_id,
+                        entries,
+                        &mut updates,
+                    )
+                    .await;
+                    if let Err(err) = routed {
+                        tracing::error!("failed to record sightings of {}: {}", feed_url, err);
                     }
                 }
                 Ok(_) => {}
@@ -2660,12 +2720,8 @@ mod tests {
         assert_eq!(digest_action(None, None, now), DigestAction::Send);
     }
 
-    #[tokio::test]
-    async fn route_unseen_entries_partitions_instant_and_scheduled() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-
-        let config: Config = toml::from_str(
+    fn routing_config() -> Config {
+        toml::from_str(
             r#"
             [[guilds]]
             guild_id = 1
@@ -2678,62 +2734,181 @@ mod tests {
             schedule = "0 9 * * *"
             "#,
         )
-        .unwrap();
+        .unwrap()
+    }
 
-        let targets: BTreeSet<PublishTarget> = [
-            PublishTarget {
+    fn routing_targets() -> BTreeSet<PublishTarget> {
+        [10, 20]
+            .into_iter()
+            .map(|channel_id| PublishTarget {
                 guild_id: 1,
-                channel_id: 10,
-            },
-            PublishTarget {
-                guild_id: 1,
-                channel_id: 20,
-            },
-        ]
-        .into_iter()
-        .collect();
+                channel_id,
+            })
+            .collect()
+    }
 
+    #[test]
+    fn plan_routing_partitions_instant_and_scheduled() {
         let fresh = vec![
-            FeedEntry {
-                id: "https://example.com/item1".to_string(),
-                source_title: "News".to_string(),
-                title: "Item 1".to_string(),
-                description: String::new(),
-                published: None,
-            },
-            FeedEntry {
-                id: "https://www.youtube.com/shorts/abc".to_string(),
-                source_title: "News".to_string(),
-                title: "Short".to_string(),
-                description: String::new(),
-                published: None,
-            },
+            entry("https://example.com/item1", "https://example.com/item1"),
+            entry(
+                "https://www.youtube.com/shorts/abc",
+                "https://www.youtube.com/shorts/abc",
+            ),
         ];
+        let (instant, scheduled) = plan_routing(
+            &routing_config(),
+            Some(&routing_targets()),
+            "https://feed.example",
+            &fresh,
+        );
 
+        // Channel 10 is instant, channel 20 queues (Shorts left out).
+        assert_eq!(
+            instant.into_iter().collect::<Vec<_>>(),
+            vec![PublishTarget {
+                guild_id: 1,
+                channel_id: 10
+            }]
+        );
+        assert_eq!(scheduled.len(), 1);
+        assert_eq!(scheduled[0].channel_id, 20);
+        assert_eq!(scheduled[0].item_id, "https://example.com/item1");
+        assert_eq!(scheduled[0].feed_url, "https://feed.example");
+    }
+
+    #[tokio::test]
+    async fn record_and_route_announces_and_queues_unseen_entries() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let (config, targets) = (routing_config(), routing_targets());
+        let feed = "https://feed.example";
         let mut updates = BTreeMap::new();
-        route_unseen_entries(
+
+        // The first poll of a run is the silent baseline.
+        record_and_route(
             &pool,
             &config,
             Some(&targets),
-            "https://feed.example",
-            &fresh,
+            feed,
+            1,
+            vec![entry("old", "old")],
             &mut updates,
         )
-        .await;
+        .await
+        .unwrap();
+        assert!(updates.is_empty());
 
-        // Channel 10 is instant: received item1 (shorts excluded)
-        let ch10_target = PublishTarget {
+        let polled = vec![entry("old", "old"), entry("new", "new")];
+        record_and_route(
+            &pool,
+            &config,
+            Some(&targets),
+            feed,
+            1,
+            polled,
+            &mut updates,
+        )
+        .await
+        .unwrap();
+        let instant = PublishTarget {
             guild_id: 1,
             channel_id: 10,
         };
-        assert_eq!(updates[&ch10_target].len(), 1);
-        assert_eq!(updates[&ch10_target][0].id, "https://example.com/item1");
-
-        // Channel 20 is scheduled: queued in DB (shorts excluded)
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[&instant].len(), 1);
+        assert_eq!(updates[&instant][0].id, "new");
         let pending = crate::db::get_pending_announcements(&pool, 20)
             .await
             .unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].item_id, "https://example.com/item1");
+        assert_eq!(pending[0].item_id, "new");
+    }
+
+    #[tokio::test]
+    async fn a_failed_queue_leaves_the_articles_unseen() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let (config, targets) = (routing_config(), routing_targets());
+        let feed = "https://feed.example";
+        let mut updates = BTreeMap::new();
+        record_and_route(
+            &pool,
+            &config,
+            Some(&targets),
+            feed,
+            1,
+            vec![entry("old", "old")],
+            &mut updates,
+        )
+        .await
+        .unwrap();
+
+        // Queueing for the scheduled channel now fails.
+        sqlx::query("DROP TABLE feed_pending_announcements")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let polled = vec![entry("old", "old"), entry("new", "new")];
+        let result = record_and_route(
+            &pool,
+            &config,
+            Some(&targets),
+            feed,
+            1,
+            polled,
+            &mut updates,
+        )
+        .await;
+        assert!(result.is_err());
+        // Nothing is announced to the instant channel either: the whole
+        // poll rolled back, and the next one finds "new" unseen again.
+        assert!(updates.is_empty());
+        let unseen = crate::db::record_feed_sightings(&pool, feed, 1, &["old", "new"])
+            .await
+            .unwrap();
+        assert_eq!(unseen, vec!["new".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn feeds_and_opml_are_fetched_past_the_response_cache() {
+        let rss = r#"<?xml version="1.0"?><rss version="2.0"><channel><title>T</title><link>https://example.com</link><description>d</description></channel></rss>"#;
+        let opml = r#"<?xml version="1.0"?><opml version="2.0"><head/><body><outline text="a" xmlUrl="https://example.com/a.rss"/></body></opml>"#;
+        let mut http = crate::http::MockHttpProvider::new();
+        http.expect_get_bounded_bytes()
+            .withf(|_, _, skip_cache| *skip_cache)
+            .times(1)
+            .returning(move |_, _, _| Ok(bytes::Bytes::from(rss)));
+        http.expect_get_bounded_text()
+            .withf(|_, _, skip_cache| *skip_cache)
+            .times(1)
+            .returning(move |_, _, _| Ok(opml.to_string()));
+
+        assert!(
+            fetch_feed(&http, "https://example.com/feed", 1024)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            fetch_opml(&http, "https://example.com/feeds.opml", 1024)
+                .await
+                .unwrap(),
+            vec!["https://example.com/a.rss".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_gives_up_after_the_last_attempt() {
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let attempt = || async {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < 2 { Err(n) } else { Ok(n) }
+        };
+        assert_eq!(retry(3, Duration::ZERO, attempt).await, Ok(2));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        calls.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(retry(2, Duration::ZERO, attempt).await, Err(1));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }

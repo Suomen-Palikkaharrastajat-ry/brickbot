@@ -9,7 +9,7 @@ The bot supports background polling of RSS and ATOM feeds, as well as OPML subsc
 - **OPML 1.1/2.0**: Subscription lists parsed using the `opml` crate. The bot recursively extracts all `xmlUrl` attributes from the nested outline nodes to discover all subscribed feeds.
 
 ## Configuration
-Feeds are configured in the `config.toml` file under the `[feeds]` table. A key it does not know is rejected at startup and on reload, rather than ignored. Its `poll_interval` sets the seconds between polls (default 3600). Values below 10, including 0, are rejected; the poll loop wakes once a minute, so anything under 60 behaves as 60.
+Feeds are configured in the `config.toml` file under the `[feeds]` table. A key it does not know is rejected at startup and on reload, rather than ignored. Its `poll_interval` sets the seconds between polls (default 3600). It must be at least 60, because the poll loop wakes once a minute; anything smaller, including 0, is rejected at startup and on reload.
 
 ```toml
 [feeds]
@@ -92,8 +92,8 @@ schedule = "instant"
 
 - **Schedule.** A cron expression (`"0 9 * * *"` daily at 09:00, `"0 18 * * 1-5"` weekdays at 18:00, `@daily`), read in the channel's time zone, daylight saving included. The channel's own `schedule` wins over `[feeds] schedule`. An empty value, `"instant"` or `"none"` means instant announcements, so a channel can opt out of a schedule set above it. A channel named in several `[[guilds.feeds]]` sections may set `schedule` and `timezone` in any one of them, but sections that set different values for one channel are rejected at startup and on reload; so is an invalid cron expression.
 - **Time zone.** An IANA name (`"Europe/Helsinki"`, `"America/New_York"`, `"UTC"`), resolved the same way (the section's `timezone`, then `[feeds] timezone`), defaulting to `Europe/Helsinki`.
-- **Queue.** Articles a scheduled channel would have been sent are queued in `feed_pending_announcements` instead — after the same filtering (blocked domains and feeds, `YouTube` Shorts) — once per channel however many feeds bring them. The queue survives restarts and reloads.
-- **When it is sent.** The bot checks once a minute. The first time a channel is seen with a schedule, its last run is recorded as now (`feed_channel_announcements`), so its first digest comes at the next scheduled time. After that a digest is sent whenever a scheduled time has passed since the last run, so a time missed while the bot was down is caught up on start, once however many were missed. A run with an empty queue sends nothing.
+- **Queue.** Articles a scheduled channel would have been sent are queued in `feed_pending_announcements` instead — after the same filtering (blocked domains and feeds, `YouTube` Shorts) — once per channel however many feeds bring them. The queue survives restarts and reloads. Recording a poll's articles as seen and queuing them commit in one transaction (`rss::record_and_route`), so if either fails neither happens and the next poll finds the articles new again; instant channels are only given them once that has committed.
+- **When it is sent.** The bot checks once a minute. The first time a channel is seen with a schedule, its last run is recorded as now (`feed_channel_announcements`), so its first digest comes at the next scheduled time. After that a digest is sent whenever a scheduled time has passed since the last run, so a time missed while the bot was down is caught up on start, once however many were missed. A run with an empty queue sends nothing. A sent message's articles leave the queue; removing them is tried three times, and if it still fails they are sent again in the next digest rather than lost. A channel that stops having a schedule has its last run forgotten, so if it gets one again it starts afresh from the next scheduled time.
 - **Format.** One block per source, sources in the order their articles were queued, each source's articles newest first:
   ```markdown
   **Lego News**:

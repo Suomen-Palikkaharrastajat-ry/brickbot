@@ -192,7 +192,19 @@ pub async fn record_feed_sightings(
     item_ids: &[&str],
 ) -> Result<Vec<String>, sqlx::Error> {
     let mut tx = db.begin().await?;
+    let unseen = record_feed_sightings_in(&mut tx, feed_url, run_id, item_ids).await?;
+    tx.commit().await?;
+    Ok(unseen)
+}
 
+/// `record_feed_sightings` inside a transaction the caller commits, so that
+/// whatever it does with the unseen articles commits or rolls back with them.
+pub async fn record_feed_sightings_in(
+    tx: &mut sqlx::SqliteConnection,
+    feed_url: &str,
+    run_id: i64,
+    item_ids: &[&str],
+) -> Result<Vec<String>, sqlx::Error> {
     // Writes first, so the transaction takes the write lock up front. Reading
     // first and upgrading later can fail with SQLITE_BUSY straight away,
     // without the busy timeout applying.
@@ -259,7 +271,6 @@ pub async fn record_feed_sightings(
         unseen.clear();
     }
 
-    tx.commit().await?;
     Ok(unseen)
 }
 
@@ -284,6 +295,16 @@ pub async fn queue_pending_announcements(
         return Ok(());
     }
     let mut tx = db.begin().await?;
+    queue_pending_announcements_in(&mut tx, announcements).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// `queue_pending_announcements` inside a transaction the caller commits.
+pub async fn queue_pending_announcements_in(
+    tx: &mut sqlx::SqliteConnection,
+    announcements: &[PendingAnnouncement],
+) -> Result<(), sqlx::Error> {
     for a in announcements {
         let channel_id = a.channel_id as i64;
         let guild_id = a.guild_id as i64;
@@ -303,7 +324,6 @@ pub async fn queue_pending_announcements(
         .execute(&mut *tx)
         .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 
@@ -420,6 +440,31 @@ pub async fn mark_channel_announced(
     .execute(db)
     .await?;
     Ok(())
+}
+
+/// Forgets when channels other than `scheduled` last had a digest.
+///
+/// Returns how many it forgot. Only a scheduled channel reads the time, and
+/// one scheduled again later should start from a fresh baseline, not a stale
+/// time.
+pub async fn prune_channel_announcements(
+    db: &SqlitePool,
+    scheduled: &[u64],
+) -> Result<u64, sqlx::Error> {
+    let known: Vec<(i64,)> = sqlx::query_as("SELECT channel_id FROM feed_channel_announcements")
+        .fetch_all(db)
+        .await?;
+    let mut pruned = 0;
+    for (channel_id,) in known {
+        if !scheduled.contains(&(channel_id as u64)) {
+            pruned += sqlx::query("DELETE FROM feed_channel_announcements WHERE channel_id = ?")
+                .bind(channel_id)
+                .execute(db)
+                .await?
+                .rows_affected();
+        }
+    }
+    Ok(pruned)
 }
 
 #[cfg(test)]
@@ -804,6 +849,35 @@ mod tests {
                 .await
                 .unwrap(),
             Some(t2)
+        );
+    }
+
+    #[tokio::test]
+    async fn only_scheduled_channels_keep_their_last_announcement() {
+        let pool = setup_db().await;
+        let at = chrono::Utc::now();
+        for channel in [10, 20, 30] {
+            mark_channel_announced(&pool, channel, at).await.unwrap();
+        }
+
+        assert_eq!(prune_channel_announcements(&pool, &[20]).await.unwrap(), 2);
+        assert!(
+            get_channel_last_announced_at(&pool, 10)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            get_channel_last_announced_at(&pool, 20)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            get_channel_last_announced_at(&pool, 30)
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 }

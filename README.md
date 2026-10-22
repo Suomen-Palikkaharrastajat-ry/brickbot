@@ -80,8 +80,7 @@ url = "https://data.palikkaharrastajat.fi"
 collection = "events"
 
 [feeds]
-# Seconds between polls of each feed (optional, default 3600, at least 10;
-# polls run at most once a minute)
+# Seconds between polls of each feed (optional, default 3600, at least 60)
 poll_interval = 3600
 # List of Feed URLs
 feed_urls = [
