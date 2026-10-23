@@ -109,7 +109,7 @@ schedule = "instant"
 
 **Known limitations**
 - An article that reaches a channel through two different feeds in *different* passes is announced twice; duplicates are only merged within one pass (or, for a scheduled channel, within one digest).
-- An article is identified by its link (its GUID only when it has none), so a feed that rewrites its links re-announces them.
+- An article is identified by its link (its GUID only when it has none), so a feed that rewrites its links re-announces them. For an Atom entry that is its `alternate` link, then its first link, then its id: Blogger, for one, lists the post's comment feed first.
 - A message Discord rejects (missing permission, outage) is logged and not retried, and the rest of that pass's messages for the channel are dropped with it.
 - There is no cap on messages per pass: N sources with news mean up to 3N messages, paced by Discord's rate limit.
 - A link longer than 500 characters is left out; the article is named by its title alone.

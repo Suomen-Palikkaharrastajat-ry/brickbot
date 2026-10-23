@@ -104,9 +104,14 @@ pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
         Feed::Atom(feed) => {
             for entry in &feed.entries {
                 entries.push(FeedEntry {
+                    // The article is the `alternate` link (the default rel),
+                    // not whichever comes first: Blogger lists its comment
+                    // feeds first.
                     id: entry
                         .links
-                        .first()
+                        .iter()
+                        .find(|l| l.rel.eq_ignore_ascii_case("alternate"))
+                        .or_else(|| entry.links.first())
                         .map_or(entry.id.as_str(), |l| l.href.as_str())
                         .to_string(),
                     source_title: decode_entities(feed.title.as_str()),
@@ -1345,6 +1350,34 @@ mod tests {
             entries[1].published,
             chrono::DateTime::from_timestamp(1_071_340_202, 0)
         );
+    }
+
+    #[test]
+    fn an_atom_entry_is_identified_by_its_alternate_link() {
+        // Blogger lists the comment feeds, the API and `self` before the post.
+        let atom_data = r#"<?xml version="1.0" encoding="utf-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Blog</title><id>urn:feed</id><updated>2026-10-12T16:00:48Z</updated>
+          <entry>
+            <id>tag:blogger.com,1999:blog-1.post-2</id><updated>2026-10-12T16:00:48Z</updated>
+            <title>Post</title>
+            <link rel="replies" type="application/atom+xml" href="https://blog.example/feeds/2/comments/default"/>
+            <link rel="replies" type="text/html" href="https://blog.example/2026/10/post.html#comment-form"/>
+            <link rel="edit" type="application/atom+xml" href="https://www.blogger.com/feeds/1/posts/default/2"/>
+            <link rel="self" type="application/atom+xml" href="https://www.blogger.com/feeds/1/posts/default/2"/>
+            <link rel="alternate" type="text/html" href="https://blog.example/2026/10/post.html"/>
+          </entry>
+          <entry>
+            <id>urn:2</id><updated>2026-10-12T16:00:48Z</updated><title>Only related</title>
+            <link rel="related" href="https://elsewhere.example/a"/>
+          </entry>
+        </feed>"#;
+
+        let entries = feed_entries(&parse_feed(atom_data.as_bytes()).unwrap());
+
+        assert_eq!(entries[0].id, "https://blog.example/2026/10/post.html");
+        // Without an alternate link, any link still beats a non-URL id.
+        assert_eq!(entries[1].id, "https://elsewhere.example/a");
     }
 
     #[test]
