@@ -78,6 +78,10 @@ moderators = ["moderator@example.com"]
 [pocketbase]
 url = "https://data.palikkaharrastajat.fi"
 collection = "events"
+# Optional collection overrides:
+# locations_collection = "locations"
+# feeds_collection = "feeds"
+# feed_items_collection = "feed_items"
 
 [feeds]
 # Seconds between polls of each feed (optional, default 3600, at least 60)
@@ -255,7 +259,19 @@ Because the bot re-executes the path it was started with, a reload also picks up
 ### RSS, ATOM & OPML Polling
 The bot automatically fetches the defined `feed_urls` and `opml_urls` every `[feeds] poll_interval` seconds. Feeds are parsed to support both RSS and ATOM formats.
 
+When configured with `[pocketbase]`, `brickbot` also dynamically fetches active feeds from PocketBase's `feeds` collection (`enabled=true`), allowing community feed sources to be managed centrally without restarting the bot.
+
 A guild can have new articles posted to its channels with `[[guilds.feeds]]` sections. Each source is announced separately: up to three new articles of a source get one message each, more are listed in a single message for that source. Only articles that appear after the bot was last (re)started are announced. A channel can instead get them as a digest on a cron schedule (`schedule`/`timezone` under `[feeds]`, overridable per `[[guilds.feeds]]` section). See [`docs/news.md`](docs/news.md).
+
+### PocketBase Feed Syndication & Moderation Barrier
+When `[pocketbase]` is configured:
+- **Dynamic Feed Catalog**: The bot polls active feeds from the `feeds` collection (`api/collections/feeds/records?filter=(enabled=true)&perPage=500`), pulling source URLs, titles, exclude keywords, and exclude URL rules directly from the central database.
+- **Item Upserts**: Discovered feed entries are upserted into the `feed_items` collection (`guid`, `link`, `title`, `description`, `snippet`, `published_at`, `thumbnail`, `media_type`). Query filters safely URL-encode identifiers via `urlencoding::encode` to avoid delimiter collision.
+- **Moderation Barrier (`is_hidden`)**: If an item in PocketBase has `is_hidden = true` (flagged by moderators), `brickbot` suppresses announcement to Discord channels and excludes it from search lookups. The moderation status is preserved during subsequent feed polls.
+
+### LEGO Sets, Parts & Community Article Lookup
+- **`/set` Command & Ambient Assistant**: Look up LEGO sets by set number or name. In addition to set metadata and images from Brickset/Rebrickable, `/set` queries PocketBase's `feed_items` collection (`filter=(is_hidden=false)&perPage=100&expand=feed`) to display relevant community blog posts, reviews, and MOCs directly in Discord. If PocketBase is unavailable, it gracefully falls back to the local SQLite database.
+- **`/part` Command**: Look up individual parts, colors, and inventory counts via Rebrickable, cached locally in `data/cache.db`.
 
 ### Event Synchronization
 The bot continuously syncs events from PocketBase into Discord's native Scheduled Events system. 

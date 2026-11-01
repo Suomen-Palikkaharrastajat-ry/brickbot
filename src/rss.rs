@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::time::{Duration, sleep, timeout};
 
-use crate::config::Config;
+use crate::config::{Config, PocketBaseConfig};
 use crate::db::{PendingAnnouncement, insert_feed_item};
 
 #[derive(Debug)]
@@ -421,20 +421,54 @@ pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
     entries
 }
 
+async fn fetch_and_process_feed(
+    db: &SqlitePool,
+    feed_url: &str,
+    client: &dyn HttpProvider,
+    pb_cfg: Option<&PocketBaseConfig>,
+    remote_feed: Option<&crate::pocketbase::RemoteFeed>,
+    limit: u64,
+) -> anyhow::Result<(Vec<FeedEntry>, HashSet<String>)> {
+    let feed = fetch_feed(client, feed_url, limit).await?;
+    let entries = feed_entries(&feed);
+
+    let mut hidden_ids = HashSet::new();
+    if let (Some(pb), Some(rf)) = (pb_cfg, remote_feed) {
+        for e in &entries {
+            match crate::pocketbase::upsert_feed_item(client, pb, limit, &rf.id, e).await {
+                Ok(res) => {
+                    if res.is_hidden {
+                        hidden_ids.insert(e.id.clone());
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "PocketBase upsert_feed_item failed for {}: {err}; caching to SQLite",
+                        e.id
+                    );
+                    let _ = insert_feed_item(db, &e.id, &e.source_title, &e.title, &e.description)
+                        .await;
+                }
+            }
+        }
+    } else {
+        for e in &entries {
+            let _ = insert_feed_item(db, &e.id, &e.source_title, &e.title, &e.description).await;
+        }
+    }
+
+    Ok((entries, hidden_ids))
+}
+
 /// Fetches a feed, stores its articles and returns them.
+#[allow(dead_code)]
 pub async fn poll_once(
     db: &SqlitePool,
     feed_url: &str,
     client: &dyn HttpProvider,
     limit: u64,
 ) -> anyhow::Result<Vec<FeedEntry>> {
-    let feed = fetch_feed(client, feed_url, limit).await?;
-    let entries = feed_entries(&feed);
-
-    for e in &entries {
-        let _ = insert_feed_item(db, &e.id, &e.source_title, &e.title, &e.description).await;
-    }
-
+    let (entries, _) = fetch_and_process_feed(db, feed_url, client, None, None, limit).await?;
     Ok(entries)
 }
 
@@ -622,7 +656,8 @@ fn message_len(s: &str) -> usize {
 const MAX_LINK_CHARS: usize = 500;
 
 /// Text on one line, with every run of whitespace a single space.
-fn one_line(s: &str) -> String {
+#[must_use]
+pub fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -1193,6 +1228,7 @@ fn plan_routing(
 /// Recording and queueing commit together, so a failure leaves the articles
 /// unseen for the next poll to find again instead of seen but never queued.
 /// `updates` is only touched once that has committed.
+#[allow(clippy::too_many_arguments)]
 async fn record_and_route(
     db: &SqlitePool,
     config: &Config,
@@ -1200,13 +1236,18 @@ async fn record_and_route(
     feed_url: &str,
     run_id: i64,
     entries: Vec<FeedEntry>,
+    hidden_ids: &HashSet<String>,
     updates: &mut BTreeMap<PublishTarget, Vec<FeedEntry>>,
 ) -> Result<(), sqlx::Error> {
     let mut tx = db.begin().await?;
     let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
     let unseen = crate::db::record_feed_sightings_in(&mut tx, feed_url, run_id, &ids).await?;
     let fresh = unseen_entries(entries, &unseen);
-    let (instant_targets, scheduled) = plan_routing(config, feed_targets, feed_url, &fresh);
+    let visible_fresh: Vec<FeedEntry> = fresh
+        .into_iter()
+        .filter(|e| !hidden_ids.contains(&e.id))
+        .collect();
+    let (instant_targets, scheduled) = plan_routing(config, feed_targets, feed_url, &visible_fresh);
     crate::db::queue_pending_announcements_in(&mut tx, &scheduled).await?;
     tx.commit().await?;
 
@@ -1216,7 +1257,7 @@ async fn record_and_route(
                 config.feed_exclude_urls_for_channel(target.guild_id, target.channel_id);
             let exclude_keywords =
                 config.feed_exclude_keywords_for_channel(target.guild_id, target.channel_id);
-            let filtered: Vec<FeedEntry> = fresh
+            let filtered: Vec<FeedEntry> = visible_fresh
                 .iter()
                 .filter(|e| !is_article_excluded(e, &exclude_urls, &exclude_keywords))
                 .cloned()
@@ -1388,6 +1429,7 @@ async fn send_digest(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Config>) {
     let client = HttpClient::new();
     let mut opml_cache: OpmlCache = HashMap::new();
@@ -1403,6 +1445,19 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
         // thus fall due together again, which is what keeps a channel's
         // updates batched in one pass instead of drifting into separate ones.
         let pass_at = whole_seconds(chrono::Utc::now());
+
+        let remote_feeds: HashMap<String, crate::pocketbase::RemoteFeed> =
+            if let Some(pb_cfg) = &config.pocketbase {
+                match crate::pocketbase::fetch_active_feeds(&client, pb_cfg, limit).await {
+                    Ok(feeds) => feeds.into_iter().map(|f| (f.url.clone(), f)).collect(),
+                    Err(err) => {
+                        tracing::error!("failed to fetch active feeds from PocketBase: {err}");
+                        HashMap::new()
+                    }
+                }
+            } else {
+                HashMap::new()
+            };
 
         for opml_url in configured_opml_urls(&config) {
             let last = crate::db::get_last_polled_at(&db, opml_url).await;
@@ -1421,10 +1476,37 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
             }
         }
 
-        let targets = publish_targets(&config, &opml_cache);
+        let mut targets = publish_targets(&config, &opml_cache);
+        let blocked_everywhere = &config.feeds.blocked_domains;
+        let feeds_blocked_everywhere = &config.feeds.blocked_feed_urls;
+        for url in remote_feeds.keys() {
+            for guild in &config.guilds {
+                for section in &guild.feeds {
+                    if section.feed_urls.is_empty()
+                        && section.opml_urls.is_empty()
+                        && !domain_blocked(url, blocked_everywhere)
+                        && !domain_blocked(url, &section.blocked_domains)
+                        && !feed_blocked(url, feeds_blocked_everywhere)
+                        && !feed_blocked(url, &section.blocked_feed_urls)
+                    {
+                        targets
+                            .entry(url.clone())
+                            .or_default()
+                            .insert(PublishTarget {
+                                channel_id: section.channel_id,
+                                guild_id: guild.guild_id,
+                            });
+                    }
+                }
+            }
+        }
+
+        let mut all_feeds_to_poll = feeds_to_poll(&config, &opml_cache);
+        all_feeds_to_poll.extend(remote_feeds.keys().cloned());
+
         let mut updates: BTreeMap<PublishTarget, Vec<FeedEntry>> = BTreeMap::new();
 
-        for feed_url in feeds_to_poll(&config, &opml_cache) {
+        for feed_url in all_feeds_to_poll {
             let feed_targets = targets.get(&feed_url);
             // A published feed is polled once right after startup, whatever
             // its interval says: updates count from that baseline, so it must
@@ -1436,12 +1518,22 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
                 continue;
             }
 
-            let polled = timeout(FETCH_TIMEOUT, poll_once(&db, &feed_url, &client, limit))
-                .await
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")));
+            let polled = timeout(
+                FETCH_TIMEOUT,
+                fetch_and_process_feed(
+                    &db,
+                    &feed_url,
+                    &client,
+                    config.pocketbase.as_ref(),
+                    remote_feeds.get(&feed_url),
+                    limit,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")));
             match polled {
                 // Sightings are only kept for feeds somebody publishes.
-                Ok(entries) if feed_targets.is_some() => {
+                Ok((entries, hidden_ids)) if feed_targets.is_some() => {
                     let routed = record_and_route(
                         &db,
                         &config,
@@ -1449,6 +1541,7 @@ pub async fn global_poll_loop(http: Arc<Http>, db: SqlitePool, config: Arc<Confi
                         &feed_url,
                         run_id,
                         entries,
+                        &hidden_ids,
                         &mut updates,
                     )
                     .await;
@@ -3126,6 +3219,7 @@ mod tests {
         let mut updates = BTreeMap::new();
 
         // The first poll of a run is the silent baseline.
+        let empty_hidden = HashSet::new();
         record_and_route(
             &pool,
             &config,
@@ -3133,6 +3227,7 @@ mod tests {
             feed,
             1,
             vec![entry("old", "old")],
+            &empty_hidden,
             &mut updates,
         )
         .await
@@ -3147,6 +3242,7 @@ mod tests {
             feed,
             1,
             polled,
+            &empty_hidden,
             &mut updates,
         )
         .await
@@ -3172,6 +3268,7 @@ mod tests {
         let (config, targets) = (routing_config(), routing_targets());
         let feed = "https://feed.example";
         let mut updates = BTreeMap::new();
+        let empty_hidden = HashSet::new();
         record_and_route(
             &pool,
             &config,
@@ -3179,6 +3276,7 @@ mod tests {
             feed,
             1,
             vec![entry("old", "old")],
+            &empty_hidden,
             &mut updates,
         )
         .await
@@ -3197,6 +3295,7 @@ mod tests {
             feed,
             1,
             polled,
+            &empty_hidden,
             &mut updates,
         )
         .await;
@@ -3208,6 +3307,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unseen, vec!["new".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_rss_polling_hidden_items_not_announced() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let (config, targets) = (routing_config(), routing_targets());
+        let feed = "https://feed.example";
+        let mut updates = BTreeMap::new();
+
+        // Baseline poll
+        let empty_hidden = HashSet::new();
+        record_and_route(
+            &pool,
+            &config,
+            Some(&targets),
+            feed,
+            1,
+            vec![entry("old", "old")],
+            &empty_hidden,
+            &mut updates,
+        )
+        .await
+        .unwrap();
+
+        // Second poll with two new items: "visible" and "hidden"
+        let mut hidden_ids = HashSet::new();
+        hidden_ids.insert("hidden".to_string());
+        let polled = vec![
+            entry("old", "old"),
+            entry("visible", "visible"),
+            entry("hidden", "hidden"),
+        ];
+
+        record_and_route(
+            &pool,
+            &config,
+            Some(&targets),
+            feed,
+            1,
+            polled,
+            &hidden_ids,
+            &mut updates,
+        )
+        .await
+        .unwrap();
+
+        let instant = PublishTarget {
+            guild_id: 1,
+            channel_id: 10,
+        };
+        // Instant updates should only contain "visible"
+        assert_eq!(updates[&instant].len(), 1);
+        assert_eq!(updates[&instant][0].id, "visible");
+
+        // Scheduled announcements should only contain "visible"
+        let pending = crate::db::get_pending_announcements(&pool, 20)
+            .await
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].item_id, "visible");
+
+        // But feed_sightings must contain BOTH "visible" and "hidden"!
+        let row_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM feed_sightings WHERE item_id = 'hidden'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row_count.0, 1);
     }
 
     #[tokio::test]

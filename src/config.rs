@@ -489,6 +489,12 @@ pub struct PocketBaseConfig {
     /// Collection holding map locations. Defaults to `locations` when unset.
     #[serde(default)]
     pub locations_collection: Option<String>,
+    /// Collection holding syndicated feeds. Defaults to `feeds` when unset.
+    #[serde(default)]
+    pub feeds_collection: Option<String>,
+    /// Collection holding syndicated feed items. Defaults to `feed_items` when unset.
+    #[serde(default)]
+    pub feed_items_collection: Option<String>,
 }
 
 impl PocketBaseConfig {
@@ -499,9 +505,27 @@ impl PocketBaseConfig {
             .as_deref()
             .unwrap_or(DEFAULT_LOCATIONS_COLLECTION)
     }
+
+    /// Name of the collection holding syndicated feeds.
+    #[must_use]
+    pub fn feeds_collection(&self) -> &str {
+        self.feeds_collection
+            .as_deref()
+            .unwrap_or(DEFAULT_FEEDS_COLLECTION)
+    }
+
+    /// Name of the collection holding syndicated feed items.
+    #[must_use]
+    pub fn feed_items_collection(&self) -> &str {
+        self.feed_items_collection
+            .as_deref()
+            .unwrap_or(DEFAULT_FEED_ITEMS_COLLECTION)
+    }
 }
 
 const DEFAULT_LOCATIONS_COLLECTION: &str = "locations";
+const DEFAULT_FEEDS_COLLECTION: &str = "feeds";
+const DEFAULT_FEED_ITEMS_COLLECTION: &str = "feed_items";
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -580,6 +604,16 @@ impl Config {
                 .is_some_and(String::is_empty)
             {
                 errors.push("PocketBase locations_collection must not be empty".to_string());
+            }
+            if pb.feeds_collection.as_ref().is_some_and(String::is_empty) {
+                errors.push("PocketBase feeds_collection must not be empty".to_string());
+            }
+            if pb
+                .feed_items_collection
+                .as_ref()
+                .is_some_and(String::is_empty)
+            {
+                errors.push("PocketBase feed_items_collection must not be empty".to_string());
             }
         }
 
@@ -1439,10 +1473,12 @@ mod tests {
         assert!(config.commands_for(999).events.enabled);
         assert!(config.commands_for(999).locations.enabled);
 
-        // `locations_collection` is optional and falls back to the default name.
+        // `locations_collection`, `feeds_collection` and `feed_items_collection` are optional and fall back to default names.
         let pb = config.pocketbase.as_ref().unwrap();
         assert_eq!(pb.collection, "events");
         assert_eq!(pb.locations_collection(), "locations");
+        assert_eq!(pb.feeds_collection(), "feeds");
+        assert_eq!(pb.feed_items_collection(), "feed_items");
 
         assert_eq!(config.resource_limits.max_http_body_bytes, 10 * 1024 * 1024);
         assert_eq!(
@@ -1483,6 +1519,52 @@ mod tests {
             errors
                 .iter()
                 .any(|e| e.contains("locations_collection must not be empty"))
+        );
+    }
+
+    #[test]
+    fn test_feeds_collections_override() {
+        let toml_str = r#"
+        [pocketbase]
+        url = "https://pb.example.com"
+        collection = "events"
+        feeds_collection = "syndicated_feeds"
+        feed_items_collection = "syndicated_items"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.pocketbase.as_ref().unwrap().feeds_collection(),
+            "syndicated_feeds"
+        );
+        assert_eq!(
+            config.pocketbase.as_ref().unwrap().feed_items_collection(),
+            "syndicated_items"
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_empty_feeds_collections_are_invalid() {
+        let toml_str = r#"
+        [pocketbase]
+        url = "https://pb.example.com"
+        collection = "events"
+        feeds_collection = ""
+        feed_items_collection = ""
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let errors = config.validate().unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("feeds_collection must not be empty"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("feed_items_collection must not be empty"))
         );
     }
 

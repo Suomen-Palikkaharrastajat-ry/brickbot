@@ -56,6 +56,7 @@ futures-util = "0.3.30"
 async-trait = "0.1.77"
 chrono-tz = "0.10.4"
 croner = { version = "4", default-features = false, features = ["chrono"] }
+urlencoding = "2.1"
 
 [dev-dependencies]
 mockall = "0.15.0"

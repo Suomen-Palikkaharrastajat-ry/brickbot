@@ -62,10 +62,12 @@ fn global_rows(config: &Config) -> Vec<Row> {
         || "off".to_string(),
         |pb| {
             format!(
-                "on: {}, collections {} and {}",
+                "on: {}, collections {}, {}, {}, and {}",
                 without_credentials(&pb.url),
                 pb.collection,
-                pb.locations_collection()
+                pb.locations_collection(),
+                pb.feeds_collection(),
+                pb.feed_items_collection()
             )
         },
     );

@@ -32,6 +32,10 @@
 # collection = "events"
 # # Collection holding map locations (optional, defaults to "locations")
 # locations_collection = "locations"
+# # Collection holding syndicated feeds (optional, defaults to "feeds")
+# feeds_collection = "feeds"
+# # Collection holding syndicated feed items (optional, defaults to "feed_items")
+# feed_items_collection = "feed_items"
 
 # [feeds]
 # # Seconds between polls of each feed (at least 60).

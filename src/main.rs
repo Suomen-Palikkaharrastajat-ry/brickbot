@@ -473,13 +473,37 @@ impl EventHandler for Handler {
                                 .await
                                 {
                                     item_name = Some(set.name.clone());
-                                    if let Ok(articles) = crate::db::search_feed_items(
-                                        &self.pool, id, &set.name, &set.theme,
-                                    )
-                                    .await
-                                    {
-                                        article_count = articles.len();
-                                    }
+                                    let articles = if let Some(pb) = &self.config.pocketbase {
+                                        match crate::pocketbase::feeds::search_feed_items(
+                                            &http,
+                                            pb,
+                                            self.config.resource_limits.max_http_body_bytes,
+                                            id,
+                                            &set.name,
+                                            &set.theme,
+                                        )
+                                        .await
+                                        {
+                                            Ok(items) => items,
+                                            Err(err) => {
+                                                tracing::warn!(
+                                                    "PocketBase feed search failed, falling back to SQLite: {err}"
+                                                );
+                                                crate::db::search_feed_items(
+                                                    &self.pool, id, &set.name, &set.theme,
+                                                )
+                                                .await
+                                                .unwrap_or_default()
+                                            }
+                                        }
+                                    } else {
+                                        crate::db::search_feed_items(
+                                            &self.pool, id, &set.name, &set.theme,
+                                        )
+                                        .await
+                                        .unwrap_or_default()
+                                    };
+                                    article_count = articles.len();
                                 } else {
                                     if log_ambient {
                                         tracing::info!(

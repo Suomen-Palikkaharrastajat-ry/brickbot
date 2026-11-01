@@ -84,6 +84,7 @@ pub async fn build_set_response_data(
     crate::commands::set::set_interaction(
         app_ctx.http.as_ref(),
         &app_ctx.db,
+        app_ctx.config.pocketbase.as_ref(),
         query,
         locale,
         &default_services,
@@ -927,6 +928,7 @@ pub async fn handle_set_search_show(
         crate::commands::set::set_interaction(
             app_ctx.http.as_ref(),
             &app_ctx.db,
+            app_ctx.config.pocketbase.as_ref(),
             query,
             &locale,
             &default_services,

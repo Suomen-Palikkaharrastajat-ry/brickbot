@@ -60,6 +60,7 @@ flowchart TD
 - **RSS (`2.0`) & OPML (`1.1`)**: Feed parsing libraries.
 - **SQLx (`0.8`)**: Async SQLite database interaction using `runtime-tokio-rustls`.
 - **rust-i18n (`3`)**: Lightweight macro-based localization system for `en-US` and `fi-FI`.
+- **urlencoding (`2.1`)**: Robust percent-encoding for PocketBase API filter parameters.
 - **Nix & Devenv**: Declarative developer environment (`devenv.nix`) and static MUSL binary compilation.
 
 ---
@@ -138,6 +139,9 @@ brickbot/
 │   ├── i18n.rs              # Localization tests validating bundle parity and placeholders
 │   ├── reload.rs            # SIGHUP configuration reload and in-place re-exec
 │   ├── rss.rs               # RSS/Atom polling loops, scheduling, and digest batching
+│   ├── pocketbase.rs        # PocketBase CRUD operations (events, locations) and push_record_data
+│   ├── pocketbase/          # PocketBase syndication and catalog integration
+│   │   └── feeds.rs         # Remote feed fetching, upsert_feed_item with URL-encoded filter, moderation barrier
 │   ├── commands/            # Slash command modules (set.rs, part.rs, events.rs, locations.rs, build.rs)
 │   ├── workflows/           # Multi-step interactive wizards (events/, locations/, search.rs, ambient.rs)
 │   ├── parts_cache/         # Disposable parts database interface (warm.rs, db.rs)
@@ -158,6 +162,30 @@ brickbot/
    - Migrated using `migrations_cache/`.
    - Tiered expiry: part details never expire, searches expire in 30 days, empty results expire in 1 hour.
    - Separate connection pool and separate migrations to prevent schema cross-contamination.
+
+### PocketBase Feed Syndication & Moderation Architecture
+
+When configured with `[pocketbase]`, `brickbot` integrates directly with the association's central PocketBase backend (`src/pocketbase/`):
+
+1. **Feed Catalog Ingestion (`fetch_active_feeds`)**:
+   - Queries PocketBase's `feeds` collection: `/api/collections/feeds/records?filter=(enabled=true)&perPage=500`.
+   - Dynamically pulls active feed URLs, titles, exclude keywords, and exclude URL rules, augmenting local `config.toml` sources without requiring a bot restart.
+2. **Feed Item Upserting (`upsert_feed_item`)**:
+   - When new posts are fetched during feed polling, `upsert_feed_item` checks whether the post exists using the filter:
+     `(feed='<encoded_feed_id>'%26%26guid='<encoded_guid>')`
+   - Both `feed_id` and `item.id` (`guid`) are URL-encoded using `urlencoding::encode` to safely handle special characters (e.g. `'`, `&`, `?`, `#`) without breaking PocketBase filter syntax or query delimiters.
+   - If missing, creates a new record in `feed_items` with metadata (`feed`, `guid`, `link`, `title`, `description`, `snippet`, `published_at`, `thumbnail`, `media_type`, `is_hidden: false`).
+   - If present and visible, patches updated metadata (`title`, `description`, `thumbnail`).
+3. **`is_hidden` Moderation Barrier**:
+   - If an existing record in `feed_items` has `is_hidden = true` (flagged or suppressed by community moderators):
+     - `upsert_feed_item` immediately returns `is_hidden: true` and **refuses to overwrite** or unhide the item.
+     - The RSS polling loop in `src/rss.rs` detects `is_hidden` and suppresses posting the article to Discord channels.
+     - All public item queries explicitly filter with `filter=(is_hidden=false)`, guaranteeing suppressed posts never leak.
+4. **LEGO Set Community Lookup (`/set`)**:
+   - In `src/commands/set.rs`, looking up a set queries PocketBase via `search_feed_items`:
+     `/api/collections/feed_items/records?filter=(is_hidden=false)&perPage=100&expand=feed`
+   - Discovered articles are matched against the set number, name, and theme and displayed alongside official LEGO metadata.
+   - If PocketBase is unavailable or unconfigured, the bot automatically falls back to local SQLite article search (`db::search_feed_items`).
 
 ---
 

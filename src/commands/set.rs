@@ -13,6 +13,7 @@ pub enum SetInteractionResponse {
 pub async fn set_interaction(
     http: &dyn crate::http::HttpProvider,
     db: &SqlitePool,
+    pb_cfg: Option<&crate::config::PocketBaseConfig>,
     query: &str,
     locale: &str,
     services: &[String],
@@ -23,9 +24,8 @@ pub async fn set_interaction(
     let first_word = clean_query.split_whitespace().next().unwrap_or("");
     if first_word.chars().any(|c| c.is_ascii_digit()) {
         if let Ok(set) = fetch_set(http, first_word, limit).await {
-            let articles = crate::db::search_feed_items(db, &set.number, &set.name, &set.theme)
-                .await
-                .unwrap_or_default();
+            let articles =
+                search_articles(http, db, pb_cfg, &set.number, &set.name, &set.theme, limit).await;
             let (content, embed) = build_set_message(&set, locale, services, &articles);
             if let Some(e) = embed {
                 return Ok(SetInteractionResponse::DirectMatch(
@@ -44,10 +44,16 @@ pub async fn set_interaction(
             } else if results.len() == 1 {
                 let s_id = format!("{}-{}", results[0].number, results[0].numberVariant);
                 if let Ok(set) = fetch_set(http, &s_id, limit).await {
-                    let articles =
-                        crate::db::search_feed_items(db, &set.number, &set.name, &set.theme)
-                            .await
-                            .unwrap_or_default();
+                    let articles = search_articles(
+                        http,
+                        db,
+                        pb_cfg,
+                        &set.number,
+                        &set.name,
+                        &set.theme,
+                        limit,
+                    )
+                    .await;
                     let (content, embed) = build_set_message(&set, locale, services, &articles);
                     if let Some(e) = embed {
                         return Ok(SetInteractionResponse::DirectMatch(
@@ -79,6 +85,36 @@ pub async fn set_interaction(
             tracing::error!("Failed to fetch/search set {}: {}", clean_query, e);
             Err(anyhow::anyhow!("Failed to fetch set"))
         }
+    }
+}
+
+async fn search_articles(
+    http: &dyn crate::http::HttpProvider,
+    db: &SqlitePool,
+    pb_cfg: Option<&crate::config::PocketBaseConfig>,
+    number: &str,
+    name: &str,
+    theme: &str,
+    limit: u64,
+) -> Vec<crate::db::FeedItem> {
+    if let Some(pb) = pb_cfg {
+        match crate::pocketbase::feeds::search_feed_items(http, pb, limit, number, name, theme)
+            .await
+        {
+            Ok(results) => results,
+            Err(err) => {
+                tracing::warn!(
+                    "PocketBase feed_items search failed, falling back to SQLite: {err}"
+                );
+                crate::db::search_feed_items(db, number, name, theme)
+                    .await
+                    .unwrap_or_default()
+            }
+        }
+    } else {
+        crate::db::search_feed_items(db, number, name, theme)
+            .await
+            .unwrap_or_default()
     }
 }
 
@@ -307,7 +343,8 @@ mod tests {
             .await
             .unwrap();
 
-        let result = set_interaction(&mock_http, &pool, "42083", "en-US", &[], 1024 * 1024).await;
+        let result =
+            set_interaction(&mock_http, &pool, None, "42083", "en-US", &[], 1024 * 1024).await;
         assert!(result.is_ok());
         match result.unwrap() {
             SetInteractionResponse::DirectMatch(_, embed, _) => {
@@ -333,7 +370,16 @@ mod tests {
             .await
             .unwrap();
 
-        let result = set_interaction(&mock_http, &pool, "Bugatti", "en-US", &[], 1024 * 1024).await;
+        let result = set_interaction(
+            &mock_http,
+            &pool,
+            None,
+            "Bugatti",
+            "en-US",
+            &[],
+            1024 * 1024,
+        )
+        .await;
         assert!(result.is_ok());
         match result.unwrap() {
             SetInteractionResponse::SearchResults(options) => {
@@ -344,6 +390,75 @@ mod tests {
                 assert_eq!(json_1["value"], "42083-2");
             }
             SetInteractionResponse::DirectMatch(..) => panic!("Expected SearchResults"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_set_interaction_with_pocketbase_articles() {
+        let mut mock_http = crate::http::MockHttpProvider::new();
+        mock_http.expect_post_form()
+            .times(1)
+            .returning(|_, _, _| {
+                Ok(r#"{"status": "success", "sets": [{"number": "42083", "numberVariant": 1, "name": "Bugatti Chiron", "year": 2018, "theme": "Technic"}]}"#.to_string())
+            });
+
+        mock_http
+            .expect_get_json_with_auth()
+            .with(
+                mockall::predicate::eq(
+                    "https://pb.example.com/api/collections/feed_items/records?filter=(is_hidden=false)&perPage=100&expand=feed",
+                ),
+                mockall::predicate::always(),
+                mockall::predicate::eq(false),
+                mockall::predicate::always(),
+            )
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(r#"{
+                    "items": [
+                        {
+                            "id": "item1",
+                            "link": "https://example.com/article-42083",
+                            "title": "42083 Chiron In Depth",
+                            "description": "Technic set review",
+                            "expand": { "feed": { "title": "Technic Weekly" } }
+                        }
+                    ]
+                }"#.to_string())
+            });
+
+        let pb = crate::config::PocketBaseConfig {
+            url: "https://pb.example.com".to_string(),
+            collection: "events".to_string(),
+            locations_collection: None,
+            feeds_collection: None,
+            feed_items_collection: None,
+        };
+
+        std::env::set_var("BRICKSET_API_KEY", "test");
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let result = set_interaction(
+            &mock_http,
+            &pool,
+            Some(&pb),
+            "42083",
+            "en-US",
+            &["articles".to_string()],
+            1024 * 1024,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            SetInteractionResponse::DirectMatch(content, _, has_articles) => {
+                assert!(has_articles);
+                assert!(content.contains("https://example.com/article-42083"));
+            }
+            SetInteractionResponse::SearchResults(_) => panic!("Expected DirectMatch"),
         }
     }
 }

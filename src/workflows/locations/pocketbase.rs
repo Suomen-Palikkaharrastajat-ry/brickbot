@@ -57,6 +57,8 @@ mod tests {
             url: "https://pb.example.com".to_string(),
             collection: "events".to_string(),
             locations_collection: None,
+            feeds_collection: None,
+            feed_items_collection: None,
         }
     }
 
