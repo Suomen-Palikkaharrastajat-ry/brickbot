@@ -116,6 +116,30 @@ pub fn is_guild_allowed(config: &crate::config::Config, guild_id: u64) -> bool {
     config.guilds.iter().any(|g| g.guild_id == guild_id)
 }
 
+/// Computes the required Discord Gateway intents dynamically based on configuration.
+///
+/// Unprivileged intents (`GUILDS`, `DIRECT_MESSAGES`) are always included.
+/// `GUILD_MESSAGES` and privileged `MESSAGE_CONTENT` are only requested when
+/// ambient detection or collaborative `/build` is enabled.
+#[must_use]
+pub fn compute_gateway_intents(config: &crate::config::Config) -> GatewayIntents {
+    let mut intents = GatewayIntents::GUILDS | GatewayIntents::DIRECT_MESSAGES;
+    if config.requires_guild_messages_intent() {
+        intents |= GatewayIntents::GUILD_MESSAGES;
+    }
+    if config.requires_message_content_intent() {
+        tracing::info!(
+            "Enabling GatewayIntents::MESSAGE_CONTENT (ambient assistant or /build enabled)"
+        );
+        intents |= GatewayIntents::MESSAGE_CONTENT;
+    } else {
+        tracing::info!(
+            "GatewayIntents::MESSAGE_CONTENT not required; running in unprivileged intent mode"
+        );
+    }
+    intents
+}
+
 /// The slash commands enabled for `guild_id`, each built in that guild's locale.
 fn build_guild_commands(
     config: &crate::config::Config,
@@ -211,7 +235,7 @@ impl EventHandler for Handler {
         // throttle a builder to one response every two hours.
         if let Some(guild_id) = msg.guild_id {
             if is_guild_allowed(&self.config, guild_id.get())
-                && self.config.commands_for(guild_id.get()).build.enabled
+                && self.config.is_build_enabled_for(guild_id.get())
             {
                 match crate::build::session::handle_thread_message(
                     &ctx,
@@ -232,15 +256,7 @@ impl EventHandler for Handler {
             }
         }
 
-        if let Some(guild_id) = msg.guild_id {
-            let guild_id_u64 = guild_id.get();
-            // Align ambient assistant with the consent/noise design
-            if let Some(ambient_ids) = self.config.ambient_channel_ids_for(guild_id_u64) {
-                if !ambient_ids.contains(&msg.channel_id.get()) {
-                    return; // Ignore if not in explicit ambient channels
-                }
-            }
-        } else {
+        if msg.guild_id.is_none() {
             // It's a Direct Message
             let zulip_info = if let Some(ref_msg) = &msg.referenced_message {
                 crate::db::get_input_topic_by_discord_message_id(
@@ -306,6 +322,20 @@ impl EventHandler for Handler {
         // Ambient assistant
         // Direct messages returned above, so there is always a guild here.
         let guild_id_u64 = msg.guild_id.unwrap_or_default().get();
+        if !is_guild_allowed(&self.config, guild_id_u64) {
+            return;
+        }
+        if !self.config.is_ambient_enabled_for(guild_id_u64) {
+            return;
+        }
+
+        // Align ambient assistant with the consent/noise design
+        if let Some(ambient_ids) = self.config.ambient_channel_ids_for(guild_id_u64) {
+            if !ambient_ids.contains(&msg.channel_id.get()) {
+                return; // Ignore if not in explicit ambient channels
+            }
+        }
+
         let log_ambient = self.config.ambient_debug_logging_for(guild_id_u64);
         if let Some(detection) = crate::ambient::detect_topic(&msg.content, log_ambient) {
             let user_id = msg.author.id.get().to_string();
@@ -1070,10 +1100,7 @@ async fn main() -> anyhow::Result<()> {
 
     let build_debug_log = open_build_debug_log(cli.build_debug_log.as_deref()).await;
 
-    let intents = GatewayIntents::GUILDS
-        | GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT
-        | GatewayIntents::DIRECT_MESSAGES;
+    let intents = compute_gateway_intents(&config);
 
     spawn_maintenance_tasks(&pool, &config);
 
@@ -1362,5 +1389,79 @@ mod tests {
         assert!(is_guild_allowed(&config, 12345));
         assert!(is_guild_allowed(&config, 67890));
         assert!(!is_guild_allowed(&config, 11111));
+    }
+
+    #[test]
+    fn test_compute_gateway_intents() {
+        // 1. Both ambient and build disabled -> no MESSAGE_CONTENT, no GUILD_MESSAGES
+        let disabled_config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = false
+            part = false
+
+            [commands.build]
+            enabled = false
+            ",
+        )
+        .unwrap();
+
+        let intents = compute_gateway_intents(&disabled_config);
+        assert!(intents.contains(GatewayIntents::GUILDS));
+        assert!(intents.contains(GatewayIntents::DIRECT_MESSAGES));
+        assert!(!intents.contains(GatewayIntents::GUILD_MESSAGES));
+        assert!(!intents.contains(GatewayIntents::MESSAGE_CONTENT));
+
+        // 2. Ambient enabled -> both MESSAGE_CONTENT and GUILD_MESSAGES present
+        let ambient_config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = true
+            part = false
+
+            [commands.build]
+            enabled = false
+            ",
+        )
+        .unwrap();
+
+        let intents = compute_gateway_intents(&ambient_config);
+        assert!(intents.contains(GatewayIntents::GUILD_MESSAGES));
+        assert!(intents.contains(GatewayIntents::MESSAGE_CONTENT));
+
+        // 3. Build enabled -> both MESSAGE_CONTENT and GUILD_MESSAGES present
+        let build_config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = false
+            part = false
+
+            [commands.build]
+            enabled = true
+            ",
+        )
+        .unwrap();
+
+        let intents = compute_gateway_intents(&build_config);
+        assert!(intents.contains(GatewayIntents::GUILD_MESSAGES));
+        assert!(intents.contains(GatewayIntents::MESSAGE_CONTENT));
+
+        // 4. Overridden per-guild to disabled
+        let guild_disabled_config: Config = toml::from_str(
+            r"
+            [[guilds]]
+            guild_id = 100
+            [guilds.ambient]
+            set = false
+            part = false
+            [guilds.commands.build]
+            enabled = false
+            ",
+        )
+        .unwrap();
+
+        let intents = compute_gateway_intents(&guild_disabled_config);
+        assert!(!intents.contains(GatewayIntents::GUILD_MESSAGES));
+        assert!(!intents.contains(GatewayIntents::MESSAGE_CONTENT));
     }
 }

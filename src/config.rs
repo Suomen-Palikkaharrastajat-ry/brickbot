@@ -868,6 +868,69 @@ impl Config {
         }
     }
 
+    /// Whether any ambient topic is enabled for `guild_id`: its own
+    /// `[guilds.ambient]` keys if specified, else the global `[ambient]` ones.
+    #[must_use]
+    pub fn is_ambient_enabled_for(&self, guild_id: u64) -> bool {
+        let topics = self.ambient_topics_for(guild_id);
+        topics.set || topics.part
+    }
+
+    /// Whether ambient detection is enabled in any configured guild, falling
+    /// back to the global `[ambient]` defaults when no guilds are configured.
+    #[must_use]
+    pub fn is_ambient_enabled_anywhere(&self) -> bool {
+        if self.guilds.is_empty() {
+            self.ambient.set || self.ambient.part
+        } else {
+            self.guilds
+                .iter()
+                .any(|g| self.is_ambient_enabled_for(g.guild_id))
+        }
+    }
+
+    /// Whether collaborative `/build` is enabled for `guild_id`: its own
+    /// `[guilds.commands.build]` if specified, else the global `[commands.build]`.
+    #[must_use]
+    pub fn is_build_enabled_for(&self, guild_id: u64) -> bool {
+        self.commands_for(guild_id).build.enabled
+    }
+
+    /// Whether collaborative `/build` is enabled in any configured guild, falling
+    /// back to the global `[commands.build]` defaults when no guilds are configured.
+    #[must_use]
+    pub fn is_build_enabled_anywhere(&self) -> bool {
+        if self.guilds.is_empty() {
+            self.commands.build.enabled
+        } else {
+            self.guilds
+                .iter()
+                .any(|g| self.is_build_enabled_for(g.guild_id))
+        }
+    }
+
+    /// Whether the bot requires `GatewayIntents::MESSAGE_CONTENT`.
+    ///
+    /// Message content is only read for ambient assistant triggers and
+    /// collaborative `/build` thread commands. If neither feature is enabled
+    /// in any configured guild (or globally when no guilds are specified), this
+    /// privileged intent can be omitted.
+    #[must_use]
+    pub fn requires_message_content_intent(&self) -> bool {
+        self.is_ambient_enabled_anywhere() || self.is_build_enabled_anywhere()
+    }
+
+    /// Whether the bot requires `GatewayIntents::GUILD_MESSAGES`.
+    ///
+    /// Guild message events are only processed for ambient assistant triggers
+    /// and collaborative `/build` sessions. If neither feature is enabled in
+    /// any configured guild (or globally when no guilds are specified), this
+    /// intent can be omitted.
+    #[must_use]
+    pub fn requires_guild_messages_intent(&self) -> bool {
+        self.is_ambient_enabled_anywhere() || self.is_build_enabled_anywhere()
+    }
+
     /// The only channels of a guild the ambient assistant listens in, or
     /// `None` for all of them.
     #[must_use]
@@ -2316,5 +2379,157 @@ mod tests {
         assert_eq!(config.guilds[1].feeds.len(), 1);
         assert!(config.commands.build.enabled);
         assert!(config.ambient.training_data.is_some());
+    }
+
+    #[test]
+    fn test_intent_requirements_all_disabled() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = false
+            part = false
+
+            [commands.build]
+            enabled = false
+            ",
+        )
+        .unwrap();
+
+        assert!(!config.is_ambient_enabled_anywhere());
+        assert!(!config.is_build_enabled_anywhere());
+        assert!(!config.requires_message_content_intent());
+        assert!(!config.requires_guild_messages_intent());
+    }
+
+    #[test]
+    fn test_intent_requirements_ambient_only_enabled() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = true
+            part = false
+
+            [commands.build]
+            enabled = false
+            ",
+        )
+        .unwrap();
+
+        assert!(config.is_ambient_enabled_anywhere());
+        assert!(!config.is_build_enabled_anywhere());
+        assert!(config.requires_message_content_intent());
+        assert!(config.requires_guild_messages_intent());
+    }
+
+    #[test]
+    fn test_intent_requirements_build_only_enabled() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = false
+            part = false
+
+            [commands.build]
+            enabled = true
+            ",
+        )
+        .unwrap();
+
+        assert!(!config.is_ambient_enabled_anywhere());
+        assert!(config.is_build_enabled_anywhere());
+        assert!(config.requires_message_content_intent());
+        assert!(config.requires_guild_messages_intent());
+    }
+
+    #[test]
+    fn test_intent_requirements_both_enabled() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = true
+            part = true
+
+            [commands.build]
+            enabled = true
+            ",
+        )
+        .unwrap();
+
+        assert!(config.is_ambient_enabled_anywhere());
+        assert!(config.is_build_enabled_anywhere());
+        assert!(config.requires_message_content_intent());
+        assert!(config.requires_guild_messages_intent());
+    }
+
+    #[test]
+    fn test_intent_requirements_per_guild_overrides() {
+        let config: Config = toml::from_str(
+            r"
+            [ambient]
+            set = false
+            part = false
+
+            [commands.build]
+            enabled = false
+
+            [[guilds]]
+            guild_id = 100
+
+            [[guilds]]
+            guild_id = 200
+            [guilds.ambient]
+            set = true
+
+            [[guilds]]
+            guild_id = 300
+            [guilds.commands.build]
+            enabled = true
+            ",
+        )
+        .unwrap();
+
+        assert!(!config.is_ambient_enabled_for(100));
+        assert!(!config.is_build_enabled_for(100));
+
+        assert!(config.is_ambient_enabled_for(200));
+        assert!(!config.is_build_enabled_for(200));
+
+        assert!(!config.is_ambient_enabled_for(300));
+        assert!(config.is_build_enabled_for(300));
+
+        assert!(config.is_ambient_enabled_anywhere());
+        assert!(config.is_build_enabled_anywhere());
+        assert!(config.requires_message_content_intent());
+        assert!(config.requires_guild_messages_intent());
+
+        let disabled_guilds: Config = toml::from_str(
+            r"
+            [[guilds]]
+            guild_id = 1
+            [guilds.ambient]
+            set = false
+            part = false
+            [guilds.commands.build]
+            enabled = false
+
+            [[guilds]]
+            guild_id = 2
+            [guilds.ambient]
+            set = false
+            part = false
+            [guilds.commands.build]
+            enabled = false
+            ",
+        )
+        .unwrap();
+
+        assert!(!disabled_guilds.is_ambient_enabled_for(1));
+        assert!(!disabled_guilds.is_build_enabled_for(1));
+        assert!(!disabled_guilds.is_ambient_enabled_for(2));
+        assert!(!disabled_guilds.is_build_enabled_for(2));
+        assert!(!disabled_guilds.is_ambient_enabled_anywhere());
+        assert!(!disabled_guilds.is_build_enabled_anywhere());
+        assert!(!disabled_guilds.requires_message_content_intent());
+        assert!(!disabled_guilds.requires_guild_messages_intent());
     }
 }

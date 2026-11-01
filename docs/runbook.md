@@ -2,11 +2,18 @@
 
 ## Required Discord Intents & Permissions
 
-When inviting the bot or configuring the Discord Developer Portal, the following intents and scopes are strictly required:
+When inviting the bot or configuring the Discord Developer Portal, the intents and scopes depend on which features are enabled in `config.toml`:
 
-### Intents (Privileged)
-- **Message Content Intent**: Required to process commands and read chat for the ambient assistant.
-- **Guilds / Guild Messages**: Required for basic bot operation and reading channel events.
+### Gateway Intents
+- **Standard Unprivileged Intents (Always Requested)**:
+  - `GatewayIntents::GUILDS`: Required for basic bot operation, slash command registration, and guild metadata caching.
+  - `GatewayIntents::DIRECT_MESSAGES`: Required for handling Zulip moderation event replies via direct messages.
+- **Conditional / Privileged Intents**:
+  - `GatewayIntents::MESSAGE_CONTENT` (Privileged): Required **only** when the ambient assistant (`[ambient]` / `[guilds.ambient]`) or collaborative `/build` (`[commands.build]` / `[guilds.commands.build]`) is enabled in at least one configured server.
+  - `GatewayIntents::GUILD_MESSAGES`: Required **only** when ambient assistant or collaborative `/build` is enabled, allowing the bot to receive message events in guild channels and build threads.
+
+> [!NOTE]
+> If neither ambient assistance nor collaborative `/build` is enabled for any configured guild (or globally when no guilds are specified), `brickbot` automatically omits both `GatewayIntents::MESSAGE_CONTENT` and `GatewayIntents::GUILD_MESSAGES` at connection time and runs in unprivileged intent mode. In this mode, operators do not need to enable the privileged Message Content intent in the Discord Developer Portal.
 
 ### Scopes & Bot Permissions
 - `bot`

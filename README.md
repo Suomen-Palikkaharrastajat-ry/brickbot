@@ -11,7 +11,7 @@ A statically linked Rust-based Discord bot that polls RSS/ATOM feeds, OPML files
 2. Click **New Application** and give your bot a name.
 3. Navigate to the **Bot** tab on the left sidebar.
 4. Click **Reset Token** to generate a new bot token. **Copy this token**, as you will need it later.
-5. Under **Privileged Gateway Intents**, enable **Message Content Intent** (and Server Members Intent if you plan to expand the bot's features).
+5. Under **Privileged Gateway Intents**, enable **Message Content Intent** if the ambient assistant or collaborative `/build` is enabled (see [`docs/runbook.md`](docs/runbook.md) for detailed intent requirements). If running solely for RSS/Atom feeds or event sync with those features disabled, the bot automatically runs in unprivileged mode without requiring this intent.
 6. Save Changes.
 
 ### 2. Invite the Bot to Your Server
