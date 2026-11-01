@@ -384,6 +384,14 @@ pub struct GuildFeedConfig {
     /// `blocked_feed_urls`, which always apply.
     #[serde(default)]
     pub blocked_feed_urls: Vec<String>,
+    /// Specific article URLs excluded from announcement. Added to global
+    /// `[feeds]` `exclude_urls`.
+    #[serde(default)]
+    pub exclude_urls: Vec<String>,
+    /// Substring keywords excluded from article title or description. Added to
+    /// global `[feeds]` `exclude_keywords`.
+    #[serde(default)]
+    pub exclude_keywords: Vec<String>,
 }
 
 /// Whether a `blocked_domains` entry is a plain host name such as
@@ -417,6 +425,12 @@ pub struct FeedsConfig {
     /// section's own `blocked_feed_urls` add to these.
     #[serde(default)]
     pub blocked_feed_urls: Vec<String>,
+    /// Specific article URLs excluded from announcement by default.
+    #[serde(default)]
+    pub exclude_urls: Vec<String>,
+    /// Substring keywords excluded from article title or description by default.
+    #[serde(default)]
+    pub exclude_keywords: Vec<String>,
     /// When feed announcements are sent, as a cron expression read in
     /// `timezone`; every channel's default. Unset, empty, `"instant"` or
     /// `"none"` announces articles as soon as they are found.
@@ -949,6 +963,32 @@ impl Config {
         )
         .and_then(|tz| tz.trim().parse().ok())
         .unwrap_or(DEFAULT_FEED_TIMEZONE)
+    }
+
+    /// Returns the combined article exclusion URLs for a channel: the channel's
+    /// own `exclude_urls` plus the global `[feeds]` `exclude_urls`.
+    #[must_use]
+    pub fn feed_exclude_urls_for_channel(&self, guild_id: u64, channel_id: u64) -> Vec<String> {
+        let mut urls = self.feeds.exclude_urls.clone();
+        if let Some(guild) = self.get_guild_config(guild_id) {
+            for section in guild.feeds.iter().filter(|f| f.channel_id == channel_id) {
+                urls.extend(section.exclude_urls.iter().cloned());
+            }
+        }
+        urls
+    }
+
+    /// Returns the combined article exclusion keywords for a channel: the channel's
+    /// own `exclude_keywords` plus the global `[feeds]` `exclude_keywords`.
+    #[must_use]
+    pub fn feed_exclude_keywords_for_channel(&self, guild_id: u64, channel_id: u64) -> Vec<String> {
+        let mut keywords = self.feeds.exclude_keywords.clone();
+        if let Some(guild) = self.get_guild_config(guild_id) {
+            for section in guild.feeds.iter().filter(|f| f.channel_id == channel_id) {
+                keywords.extend(section.exclude_keywords.iter().cloned());
+            }
+        }
+        keywords
     }
 }
 

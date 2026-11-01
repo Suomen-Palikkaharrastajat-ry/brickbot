@@ -47,6 +47,11 @@
 # # blocked_domains = ["flickr.com"]
 # # Complete feed URLs that are never published to any channel.
 # # blocked_feed_urls = ["https://example.com/unwanted.rss"]
+# # Specific article URLs that are never published to any channel.
+# # exclude_urls = ["https://example.com/unwanted-article.html"]
+# # Words or phrases; articles with these in their title or description
+# # are never published to any channel (case-insensitive substring match).
+# # exclude_keywords = ["merchandise", "haul"]
 # # Send feed articles as a digest at these times instead of as soon as they
 # # are found (cron, read in timezone). Overridable per guild feed channel
 # # with schedule/timezone, where "instant" turns it back off.
@@ -195,6 +200,10 @@
 # # global [feeds] defaults.
 # # blocked_domains = ["kuvat.fi"]
 # # blocked_feed_urls = ["https://example.com/unwanted.rss"]
+# # Specific article URLs or title/description keywords to exclude for this
+# # channel only, added to the global [feeds] defaults.
+# # exclude_urls = ["https://example.com/channel-specific-skip.html"]
+# # exclude_keywords = ["offtopic"]
 # # Digest schedule for this channel only (see [feeds] schedule above).
 # # schedule = "0 18 * * 1-5"
 # # timezone = "UTC"

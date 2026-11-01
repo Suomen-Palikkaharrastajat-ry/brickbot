@@ -1,122 +1,248 @@
-# Brickbot Development Guide
+# AGENTS.md — Brickbot (Suomen Palikkaharrastajat Discord Bot)
 
-This document contains detailed information intended for coding agents, LLMs, and developers working on the `brickbot` (Brickbot) codebase. For installation and usage instructions, refer to `README.md`.
+This document contains detailed information intended for coding agents, LLMs, and developers working on the `brickbot` codebase. For human-facing installation and deployment instructions, refer to [`README.md`](README.md).
 
-## Overview
+---
 
-`brickbot` is a statically linked Rust-based Discord bot. It connects to Discord using Serenity, polls RSS and OPML feeds, parses iCalendar (`.ics`) events, fetches LEGO set/part data, stores state in an SQLite database, and posts updates to Discord channels across multiple guilds.
+## 1. Project Overview & Ecosystem Role
 
-## Technology Stack
+`brickbot` is a statically-linked Rust-based Discord bot powering the official community server of **Suomen Palikkaharrastajat ry** (the Finnish LEGO® Enthusiasts Association).
+
+It operates alongside its sister project [`planet`](../planet):
+- While `planet` aggregates community blogs, Flickr photostreams, and news into a public static web portal at [palikkaharrastajat.fi](https://palikkaharrastajat.fi),
+- `brickbot` runs 24/7 on the association's Discord server to provide real-time feed syndication, calendar event synchronization, Rebrickable part/set lookups, and collaborative building sessions in Discord threads via the **BrickTalk** domain-specific language.
+
+```mermaid
+flowchart TD
+    subgraph DiscordSurfaces ["Discord User Interface"]
+        Chat["Text Channels (Feeds, Ambient)"]
+        Thread["Build Threads (/build, /rakenna)"]
+        SlashCmd["Slash Commands (/set, /part, /events, /locations)"]
+    end
+
+    subgraph BotCore ["brickbot Application Shell (src/)"]
+        Main["main.rs & EventHandler"]
+        Config["Multi-guild Config (config.toml)"]
+        Http["HttpClient & Moka Cache (src/http.rs)"]
+        SqliteBot["bot.db (sqlx migrations/)"]
+        SqliteCache["cache.db (src/parts_cache/ migrations_cache/)"]
+    end
+
+    subgraph PureWorkspaceCrates ["Decoupled Pure Crates (crates/)"]
+        BrickModel["crates/brick-model (Geometry, Operations, Studio .io Export)"]
+        BrickRender["crates/brick-render (LDraw Math & Software Rasterizer)"]
+        BrickTalk["crates/bricktalk (BrickTalk CNL Lexer, Parser, Dispatcher)"]
+    end
+
+    Chat --> Main
+    Thread --> Main
+    SlashCmd --> Main
+    Main --> Config
+    Main --> Http
+    Main --> SqliteBot
+    Main --> SqliteCache
+    Main --> BrickTalk
+    BrickTalk --> BrickModel
+    BrickTalk --> BrickRender
+    BrickRender --> Main
+    BrickModel --> Main
+```
+
+---
+
+## 2. Technology Stack
 
 - **Rust**: Core programming language (Edition 2021).
 - **Serenity (`0.12`)**: Discord API wrapper (using `rustls_backend`).
-- **Tokio (`1`)**: Asynchronous runtime for concurrent tasks and polling loops.
-- **Reqwest (`0.12`)**: HTTP client for fetching RSS feeds, iCal data, and LEGO APIs.
+- **Tokio (`1`)**: Asynchronous runtime for concurrent background tasks and polling loops.
+- **Reqwest (`0.12`)**: HTTP client for fetching RSS/Atom feeds, iCal data, and LEGO APIs.
 - **Moka (`0.12`)**: Fast, concurrent in-memory caching.
 - **RSS (`2.0`) & OPML (`1.1`)**: Feed parsing libraries.
-- **SQLx (`0.8`)**: Async SQLite database interaction, using `runtime-tokio-rustls`.
-- **rust-i18n (`3`)**: Lightweight macro-based localization system for `en-US` and `fi-FI` support.
-- **Nix**: Used for deterministic environments (`devenv`), dependency management, and generating statically-linked MUSL binaries.
+- **SQLx (`0.8`)**: Async SQLite database interaction using `runtime-tokio-rustls`.
+- **rust-i18n (`3`)**: Lightweight macro-based localization system for `en-US` and `fi-FI`.
+- **Nix & Devenv**: Declarative developer environment (`devenv.nix`) and static MUSL binary compilation.
 
-## Development Methodology
+---
 
-- **Agent Maintainability & Testability**: To keep this project highly maintainable by AI coding agents, the core business logic (formatting, algorithms, decision making) **MUST** be strictly decoupled from external API surfaces (like `serenity` Discord integrations or `reqwest`).
-  - Extract message building and complex logic into pure, highly unit-testable functions (e.g., `build_set_message`).
-  - Target 100% test coverage by extensively covering these pure functions.
-  - Utilize Traits or Dependency Injection to mock database interfaces and HTTP clients when testing the outer orchestrating layers.
-- **Red / Green TDD Requirement**: All new feature development or bug fixes must follow the Test-Driven Development (TDD) cycle. First, write a failing test (Red), implement the minimum code required to make it pass (Green), and finally refactor while keeping the tests passing.
-- **Test Coverage**: Run `make coverage` to generate HTML test coverage reports using `cargo-llvm-cov` or `cargo-tarpaulin`. Check `lcov.info` or HTML output.
-- **Formatting & Checks**: Run `make format check` before committing.
-- **Localization (i18n)**: All new user-facing strings must be localized using the `rust_i18n::t!` macro. Ensure strings are added to both `locales/en-US.yml` and `locales/fi-FI.yml` to keep them up to date. This includes Discord modal titles, input labels and validation errors — the tests in `src/i18n.rs` fail on any key, placeholder or blank-value drift between the two bundles. Modal titles and input labels are capped at 45 characters by Discord, so keep translations short.
+## 3. Development Methodology & Workflows
 
-## Architecture & Project Structure
+### 1. Pure Decoupling for Testability
+To keep this project maintainable by AI coding agents, core business logic (formatting, algorithms, decision making) **MUST** be strictly decoupled from external API surfaces (like `serenity` Discord integrations, SQLx, or `reqwest`):
+- Extract message building, geometry calculations, and parsing into pure, unit-tested functions.
+- Target comprehensive test coverage over these pure components.
+- Utilize traits or dependency injection to mock database interfaces and HTTP clients when testing outer orchestrating layers.
 
-The project has been structured to handle multiple asynchronous background tasks while providing interactive commands, supporting multi-guild configurations.
+### 2. Red / Green TDD Cycle
+All new feature development or bug fixes must follow the Test-Driven Development (TDD) cycle:
+1. Write a failing unit or integration test (Red).
+2. Implement the minimum code required to make it pass (Green).
+3. Refactor while keeping all tests passing.
 
-- `src/main.rs`: Application entry point. Handles setup of dependencies, DB pools, custom event/message handler routing, and spawning polling loops.
-- `src/config.rs`: Multi-guild TOML configuration structures mapping `config.toml`. Every struct is `#[serde(deny_unknown_fields)]`: TOML files a key under the last table header above it, so without that a misplaced key is silently dropped — keep it on any new config struct. Each feature's settings live in one table (`[feeds]`, `[ambient]`, `[resource_limits]`, `[commands.*]`) with a guild-level counterpart where it can be overridden (`[[guilds.feeds]]`, `guilds.ambient`, `guilds.commands.*`); the `*_for` methods do the resolution. Docs and examples write each guild as one self-contained `[[guilds]]` block — overrides as dotted keys (`ambient.set`, `commands.events.enabled`), `[[guilds.feeds]]` sections last — and the global commands as one `[commands]` table with dotted keys; `the_example_config_parses_and_validates` uncomments `config.toml.example` and checks it still parses.
-- `src/config_report.rs`: `--explain-config`. `explain` is pure and unit-tested: the global settings, then one table per guild of its effective settings, each marked `guild` or `global`. Add a row when adding a per-guild setting.
-- `src/http.rs`: Centralized `HttpClient` wrapper. Consolidates outgoing `reqwest` calls, implements structured `tracing` logging, and provides a global `moka` in-memory cache for API responses.
-- `src/commands/`: "One command per module" directory containing `set.rs`, `part.rs`, `events.rs`, `locations.rs`, and `build.rs`. **Agents MUST keep the corresponding documentation files in `docs/interactions/*.md` and `docs/commands/*.md` up-to-date when altering command logic or adding new commands.**
-- `src/workflows/`: Multi-step wizard logic backing the interactive commands (`events/`, `locations/`, `search.rs`, `ambient.rs`). `WizardInteraction` in `src/workflows/mod.rs` is shared by every wizard.
-- `src/zulip/moderation.rs`: `ModerationKind` resolves everything that differs between the events and locations moderation flows (target collection, localization keys, public URL) from the Zulip topic prefix, keeping `process_zulip_message` single-pathed.
-- `crates/brick-render/`: Workspace library crate with the pure geometry and rendering code (`math`, `ldraw`, `render`) — no Discord, database or config. The binary re-exports it (`pub use brick_render::{ldraw, math, render}` in `main.rs`), so `crate::ldraw` etc. still resolve. The `--fetch-ldraw` download (`sync`) stays in `src/ldraw_sync.rs` because it needs the bot's config and HTTP client. `cargo test`/`clippy` cover every crate via `default-members`.
-- `crates/brick-model/`: Workspace library crate with the model domain (`units`, `model`, `ops`, `export`) — no Discord, database, rendering or parsing. `src/build/mod.rs` re-exports it, so `crate::build::{model,ops,units,export}` still resolve.
-- `crates/bricktalk/`: Workspace library crate with the BrickTalk language and its interpreter (`dsl`, `lower`, `expand`, `dispatch`, `grid`, `textview`, `draft`, `queries`, `propose`, `report`, `legal`, `parts`, `discord_limits`). It calls `rust_i18n::i18n!("../../locales", …)` on the **shared root `locales/`**, so there is still one set of locale files and the drift tests in `src/i18n.rs` cover them. `src/build/` keeps only the Discord shell (`session/`), `scene.rs` and `debug_log.rs`, and re-exports the crate's modules.
-- `src/rss.rs`: Polling logic and parsing for feeds, and publishing new articles to the channels a guild names in `[[guilds.feeds]]`. What a feed has already shown lives in `feed_sightings`, not in memory; `feed_polls.baseline_run` stamps the bot run whose first poll was the silent baseline (`db::record_feed_sightings`). `publish_targets` and `build_updates_messages` are pure and unit-tested; a polling pass announces each source separately — up to three of its new articles one message each, more than that as one message listing them — each article followed by its publication date as a Discord timestamp when the feed gives one. `blocked_domains` (`domain_blocked`, matched on the feed URL's host and its subdomains) and `blocked_feed_urls` (`feed_blocked`, matched on feed URL) keep feeds from being announced without stopping them being polled: the global `[feeds]` table's lists are every channel's defaults, and a `[[guilds.feeds]]` section appends its own. A channel with a cron `schedule` (`Config::feed_schedule_for_channel`/`feed_timezone_for_channel`: section, then `[feeds] schedule`) gets its articles queued in `feed_pending_announcements` and sent as a digest instead; `build_digest_messages`, `digest_action` and `plan_routing` are pure and unit-tested; `record_and_route` records a poll's sightings and queues its digest articles in one transaction, so keep any new per-poll write inside it. See `docs/news.md`.
-- `src/reload.rs`: Config reload on `SIGHUP` (`systemctl reload brickbot`). `wait_for_valid_reload` and `exec_targets` take their inputs as parameters and are unit-tested; `restart_in_place` in `main.rs` does the shutdown and re-exec. The listener must stay the first thing `main` installs: until it is, a `SIGHUP` kills the process.
-- `flake.nix` & `devenv.nix`: Nix environment files configuring the `devShell`.
-- `default.nix`: Nix build configuration decoupled from `flake.nix` to prevent "dirty tree" rebuilds.
-- `data/bot.db`: SQLite database file. Ensure the `data` directory exists locally to avoid "database file could not be opened" startup errors.
+### 3. Makefile Commands & Targets
 
-**Architectural Documentation:**
-Agents and developers should consult the following living documents when modifying core systems:
-- **Database**: [`docs/architecture/database.md`](docs/architecture/database.md)
-- **Network & Caching**: [`docs/architecture/network_and_caching.md`](docs/architecture/network_and_caching.md)
-- **Events Sync & Workflow**: [`docs/events.md`](docs/events.md)
-- **Ambient Assistant**: [`docs/interactions/README.md`](docs/interactions/README.md)
-- **LDraw Rendering & Studio Export**: [`docs/ADR-003-LDraw-Rendering-And-Studio-Export.md`](docs/ADR-003-LDraw-Rendering-And-Studio-Export.md)
+> [!WARNING]
+> **Makefile Targets Trap for Agents**:
+> - `make test` has **NO recipe** in `brickbot/Makefile` and exits immediately with success without running tests! Always use **`make test-fast`** or **`cargo test`**.
+> - `make coverage` has **NO recipe** in `brickbot/Makefile`! Always use **`make coverage-lcov`** or **`make coverage-html`**.
+> - `trainer-review` and `trainer-export` are legacy targets referencing an obsolete binary that no longer exists in `Cargo.toml`.
 
+| Command | Action | Notes |
+| :--- | :--- | :--- |
+| `make test-fast` | Runs all Rust workspace tests (`cargo test`) | Fast test execution across all workspace crates. |
+| `make check` | Runs non-mutating checks: formatting check, Clippy with `-D warnings`, and `test-fast` | Used as the Git pre-commit hook in `devenv`. |
+| `make format` | Mutating code formatter (`cargo clippy --fix` + `treefmt`) | Runs before committing code changes. |
+| `make format-check` | Non-mutating formatting check (`treefmt --fail-on-change`) | Verifies formatting. |
+| `make lint` | Runs Clippy with warnings denied (`cargo clippy -- -D warnings`) | Lints whole workspace. |
+| `make coverage-html` | Generates HTML coverage reports | Uses `cargo-llvm-cov --all-features --workspace --html`. |
+| `make coverage-lcov` | Generates `lcov.info` file | Uses `cargo-llvm-cov`. |
+| `make run` | Runs `brickbot` locally | Automatically ensures `mkdir -p data`. |
+| `make watch` | Watches for changes and runs bot locally | Passes `--build-debug-log data/build-debug.log`. |
+| `make fetch-ldraw` | Downloads LDraw part library into configured data directory | Necessary for full 3D parts rendering. |
+| `make build` | Builds static MUSL binary with Nix | `nix build` producing `result/bin/brickbot`. |
 
-## Build and Environment (Nix)
+Run commands within `devenv`:
+```bash
+cd /workspace/brick-planet/brickbot
+devenv shell -- make test-fast
+devenv shell -- make check
+```
 
-The project relies strictly on **Nix** for a reproducible environment.
+---
 
-- **Development Shell**: `devenv shell` drops you into a shell with `rustc`, `cargo`, and `sqlite` configured correctly for MUSL targets.
-- **Production Build**: `nix build` creates a statically linked MUSL binary located at `result/bin/brickbot`.
+## 4. Architecture & Repository Structure
 
-## Key Patterns & Workflows
+### Cargo Workspace Layout
 
-1.  **Configuration**: Driven by `config.toml`, supporting multiple prefixes, command aliases, and multiple server/guild setups. `--check-config` validates it; `--explain-config` also prints what it enables per guild.
-2.  **Database Access**: Uses `sqlx::SqlitePool`. Data tracking ensures items (RSS entries, event advertisements) are not double-posted. The SQLite database strictly requires the `data/` directory to exist.
-3.  **Polling Loops**: Background `tokio` tasks poll external resources (`RSS`/`OPML`) at intervals defined in `config.toml`.
-4.  **Network & Caching**: All outbound HTTP traffic should route through `HttpClient` (`src/http.rs`) to leverage the centralized `moka` cache, preventing redundant network requests.
-5.  **Message Handling**: The bot bypasses standard framework macros in favor of a raw `EventHandler` in `main.rs` to allow dynamic prefix and alias matching defined in the configuration.
-6.  **Config Reload**: `Config` is immutable for the life of a process. `SIGHUP` re-validates `config.toml`; an invalid file is logged and ignored, a valid one makes the bot close the gateway and databases and re-exec itself (same PID). New config consumers therefore need no reload hooks — but keep startup idempotent, and keep the operator docs in `README.md` ("Reloading Configuration") in sync.
+```text
+brickbot/
+├── Cargo.toml               # Workspace manifest (members: ["crates/*"], default-members: [".", "crates/*"])
+├── build.rs                 # Build script for git metadata
+├── config.toml              # Active bot configuration
+├── config.toml.example      # Documented example configuration
+├── default.nix              # Decoupled Nix build expression (avoids dirty-tree rebuilds)
+├── devenv.nix               # Declarative development environment (Rust MUSL toolchain, treefmt, git-hooks)
+├── flake.nix                # Flake entry point
+├── locales/                 # Shared localization bundles
+│   ├── en-US.yml            # English translations
+│   └── fi-FI.yml            # Finnish translations
+├── migrations/              # SQLite migrations for bot.db (bot state, feeds, events, build sessions)
+├── migrations_cache/        # SQLite migrations for cache.db (disposable Rebrickable parts cache)
+├── data/                    # Local SQLite databases and LDraw library (gitignored)
+│   ├── bot.db               # Primary persistent database
+│   └── cache.db             # Disposable parts cache database
+├── src/                     # Main brickbot executable crate
+│   ├── main.rs              # Application entry point, Discord event loop, Autocomplete handler
+│   ├── config.rs            # Multi-guild TOML configuration structures (#[serde(deny_unknown_fields)])
+│   ├── config_report.rs     # CLI --explain-config implementation
+│   ├── http.rs              # Centralized HttpClient wrapper with Moka caching & structured tracing
+│   ├── i18n.rs              # Localization tests validating bundle parity and placeholders
+│   ├── reload.rs            # SIGHUP configuration reload and in-place re-exec
+│   ├── rss.rs               # RSS/Atom polling loops, scheduling, and digest batching
+│   ├── commands/            # Slash command modules (set.rs, part.rs, events.rs, locations.rs, build.rs)
+│   ├── workflows/           # Multi-step interactive wizards (events/, locations/, search.rs, ambient.rs)
+│   ├── parts_cache/         # Disposable parts database interface (warm.rs, db.rs)
+│   └── build/               # Discord interactive shell for /build (session/, scene.rs, debug_log.rs)
+├── crates/
+│   ├── brick-model/         # Pure LEGO model domain (units, model, ops append log, Studio .io export)
+│   ├── brick-render/        # Pure software 3D rasterizer & LDraw parser (math, ldraw, render)
+│   └── bricktalk/           # BrickTalk controlled natural language interpreter (dsl, lower, expand, dispatch)
+└── docs/                    # Architectural documents, ADRs, command and interaction guides
+```
 
-## The `/build` Command (BrickTalk)
+### Two Distinct SQLite Databases
+1. **`data/bot.db`**:
+   - Manages persistent bot state: feed sightings, digest queues, calendar events, Zulip moderation mappings, and collaborative build session revision histories (`build_sessions`, `build_revisions`).
+   - Migrated using `migrations/`.
+2. **`data/cache.db`**:
+   - Manages derived, disposable Rebrickable part/color lookups (`src/parts_cache/`).
+   - Migrated using `migrations_cache/`.
+   - Tiered expiry: part details never expire, searches expire in 30 days, empty results expire in 1 hour.
+   - Separate connection pool and separate migrations to prevent schema cross-contamination.
 
-Collaborative LEGO building in a Discord thread, driven by a hand-written recursive-descent parser for a controlled natural language — no LLM involved, so interpretation is reproducible. Off by default (`build.*` in `config.toml`'s `[commands]`, per-guild override supported). Localized as `/build` (en-US) or `/rakenna` (fi-FI); the BrickTalk language itself is **not** translated — verbs, colours and units stay English in every locale.
+---
 
-**Pipeline** (pure/unit-tested except the Discord shell at the end):
-`crates/bricktalk/src/dsl/block.rs` (lifts fenced drawings out verbatim *before* anything else reads the message) → `crates/bricktalk/src/dsl/{lexer,parser/,ast}.rs` (tokenize + grammar, including the silence policy) → `crates/bricktalk/src/lower.rs` (resolves references/locations against the model, emits `Op`s, triggers part lookups) → `crates/bricktalk/src/expand.rs` (walls/towers/rows/floors/boxes/stairs → individual placements) and `crates/bricktalk/src/grid.rs` (a drawing's cells → individual placements) → `crates/brick-model/src/ops.rs` (`History`/`Op` append-only log, `apply`) → `crates/bricktalk/src/dispatch.rs::process_message` (the single pure entry point; returns an `Outcome` of ops, replies, reactions, render/export/finish flags) → `src/build/session/` (the only part that touches Discord: thread creation, persistence, the debounced render loop, buttons and the part-picker dropdown).
+## 5. The `/build` Command & BrickTalk CNL
 
-**Silence policy** (the most important behavior): a message is parsed as a command only if its first word is a known verb or a question word; everything else — ordinary chat — is ignored with no reply, reaction or render, so a build thread stays usable for talking. A known-verb sentence that fails to parse *is* reported (the builder clearly meant something); a question-word sentence that can't be answered stays silent, because question forms are shaped identically to idle chat ("where is everyone?" vs. "where is tower?"). Discord block-quote lines (`> …`, `>>> …` to end of message) are stripped in `strip_discord_noise` before parsing, so quoting the bot's own instructions back at it — e.g. "did this work?" — never re-runs them.
+The `/build` (or `/rakenna` in Finnish) command enables collaborative LEGO building inside a Discord thread. It is driven by a hand-crafted recursive-descent parser for a **controlled natural language (CNL)** — deliberately eliminating external LLMs for zero latency, 100% reproducibility, and privacy.
 
-**Collaborative state**: sessions are keyed by thread channel id, not by owner, in `build_sessions`/`build_revisions` (`src/db/build.rs`) — every guild member edits the same model. Each accepted command becomes a revision in the append-only log; the read-interpret-write cycle is guarded by a per-session lock and committed in one transaction. `Undo alice's last edit.` resolves chat names to Discord user ids via `dispatch::Builders` (exact name → user id → unambiguous prefix).
+### The Pure Pipeline
+```
+Discord Message
+      │
+      ▼
+crates/bricktalk/src/dsl/block.rs (Lifts fenced ASCII drawings before parsing)
+      │
+      ▼
+crates/bricktalk/src/dsl/{lexer,parser,ast}.rs (Tokenize + parse grammar + silence policy)
+      │
+      ▼
+crates/bricktalk/src/lower.rs (Resolves references/landmarks against model state, emits Ops)
+      │
+      ▼
+crates/bricktalk/src/expand.rs & grid.rs (Expands structures/drawings into individual placements)
+      │
+      ▼
+crates/bricktalk/src/legal.rs (Legal geometry correction: whole studs, whole plates, collisions)
+      │
+      ▼
+crates/brick-model/src/ops.rs (Append-only History/Op log, apply)
+      │
+      ▼
+crates/bricktalk/src/dispatch.rs::process_message (Single pure entry point returning Outcome)
+      │
+      ▼
+src/build/session/ (Discord shell: thread creation, debounced renders, modals, buttons)
+```
 
-**Rendering**: bursts of commands debounce into one render (`render_debounce_ms`, leading+trailing edge) via `crates/brick-render/src/ldraw/` (part geometry) and `crates/brick-render/src/render/` (software rasterizer) to PNG. Falls back to plain boxes, with a one-time notice, if the LDraw part library isn't installed (`make fetch-ldraw`; see [ADR-003](docs/ADR-003-LDraw-Rendering-And-Studio-Export.md)).
+### Key Architectural Constraints
+1. **Silence Policy**:
+   - A message in a build thread is treated as a command only if its first word is a known verb or question word.
+   - Ordinary member chat is silently ignored with no reply, reaction, or render.
+   - A known-verb sentence that fails to parse emits a helpful localized diagnostic.
+   - Blockquote lines (`> ...`, `>>> ...`) are stripped before parsing to prevent quoting bot messages from re-triggering commands.
+2. **Legal Geometry Guarantee**:
+   - Operations are corrected before dispatch (`crates/bricktalk/src/legal.rs`).
+   - Placements snap to whole studs horizontally (20 LDU) and whole plates vertically (8 LDU).
+   - The corrected operation is what enters the revision log; replaying history is legal by construction.
+3. **Software Rendering & Studio Export**:
+   - Bursts of commands debounce into a single render (`render_debounce_ms`) via `crates/brick-render`.
+   - Renders 3D isometric PNGs using software rasterization.
+   - Falls back to bounding boxes if the LDraw library is missing (`make fetch-ldraw`).
+   - `[Export .io]` or `Export.` produces a BrickLink Studio `.io` file (Zip archive containing part references and thumbnail) via `crates/brick-model/src/export/`.
 
-**Export**: the `[Export .io]` button or `Export.` sentence produces a BrickLink Studio `.io` file via `crates/brick-model/src/export/`, containing part references only, never geometry.
+---
 
-**BrickTalk language**: verbs — `add`/`put`/`place`, `move`/`shift`, `raise`/`lower`, `rotate`/`turn`, `remove`/`delete`, `replace`/`swap`, `paint`/`colour`, `build`/`make`, `duplicate`/`mirror`, `select`, `group`/`call`/`name`, `undo`/`redo`/`revert`, `count`/`find`/`show`, `export`/`render`/`help`/`finish`. Parts: `[count] [colour] [size] [kind]` in any order, or a bare 4-digit part number. Units: 1 stud = 20 LDU, 1 plate = 8, 1 brick = 24; a bare count is studs horizontally but bricks vertically. Locations: `at origin`, `at x y z`, `at <landmark>`, `on`/`on top of`, `under`, `<direction> of` — with none given, a part stacks on whatever was last touched. Full grammar and examples: `docs/commands/build.md`.
+## 6. Localization (i18n) & Multi-Guild Configuration
 
-**Placement proposals**: naming a part with no verb (`2x2 brick`, `2 2x2 bricks stacked`) is a question, not a command — `crates/bricktalk/src/propose.rs` ranks up to four legal positions and `session::offer_proposals` shows them as one tiled picture with a numbered button each. The gate is `Sentence::looks_like_command` plus `Statement::Propose`: a size or kind must be present and the whole sentence consumed, or it stays chat. Nothing is applied until a number is pressed, and a proposal is refused if anyone built in between. A location-less drawing and the drafting loop's `[Place…]` go through the same engine, a drawn block being just a bigger batch. Public rather than ephemeral, because a chat message carries no interaction token.
+### Localization Parity
+- User-facing text must use `rust_i18n::t!`.
+- Both `locales/en-US.yml` and `locales/fi-FI.yml` must be updated together.
+- `src/i18n.rs` contains unit tests that parse both YAML bundles and fail if:
+  - Any translation key exists in one locale but not the other.
+  - Any placeholder (`%{name}`) differs between the translations.
+  - Any translation value is blank.
+- Modal titles and text input labels are capped at 45 characters by Discord API constraints.
+- Note on `src/i18n.rs`: The test resolves bundle paths via `env!("CARGO_MANIFEST_DIR")`. If the repository directory changes, re-running `cargo test` recompiles the binary with the updated manifest directory.
 
-**Legal geometry**: `crates/bricktalk/src/legal.rs` corrects every operation before `dispatch` applies it, so bricks can only be laid where they would really connect — edges on whole studs, bases on whole plates, nothing interpenetrating, nothing floating or underground. The *corrected* operation is what gets recorded, which is what makes the revision log legal by construction; replay is deliberately never validated, so pre-existing sessions materialize unchanged. A structure settles as one rigid body and may overhang; `raise`/`lower` keep the height they were given. Parts of unknown size fall back to a one-stud footprint rather than dropping out of collision detection.
+### Configuration (`config.toml`)
+- Every configuration struct uses `#[serde(deny_unknown_fields)]` to prevent silently ignoring misplaced TOML keys.
+- Feature settings live in root tables (`[feeds]`, `[ambient]`, `[resource_limits]`, `[commands.*]`) and can be overridden per guild in `[[guilds]]` blocks (e.g. `guilds.commands.events.enabled`).
+- CLI flags:
+  - `--check-config`: Validates syntax and configuration constraints.
+  - `--explain-config`: Dumps effective resolved configuration tables for each guild.
 
-**Part and colour picking**: `src/parts_cache/` is a **second SQLite database** (`data/cache.db`, own pool, own `migrations_cache/` — pointing it at `./migrations` would build the whole bot schema in it) holding every part lookup the bot has made. Deliberately separate from `bot.db`: all of it is derived and disposable. Two lookup paths — exact query replay, and prefix/substring over `part_details.name`, which answers queries nobody has typed before. Tiered expiry: details never, searches 30 days, empty results 1 hour. `parts_cache::warm::{search,detail}` are read-through wrappers that **all** part lookups go through (`/part`, the `/build` picker, ambient), so ordinary use warms the index. `Interaction::Autocomplete` (`main.rs`) answers `/part`'s argument from the compiled-in catalogue plus the cache and **never awaits the network**, spawning a guarded background warm instead (de-dup, min 3 chars, timeout, semaphore — `src/http.rs` has no timeout of its own). Colour suggestions (`colors::suggest`, Levenshtein over the 74-entry palette) are always local. `REBRICKABLE_API_KEY` is env-only; without it lookups fail and autocomplete degrades to the catalogue.
+---
 
-**Editing a legend**: a modal holds only text inputs, so `/build-legend` (autocompleted part and colour) and the `[Insert…]` picker edit the draft from outside the form and re-post the preview. `[Insert…]` is one flow in **two steps** — colour then part — because a colour alone is not a legend line; the colour rides between steps as its LDraw code in the custom id, so nothing is stored. It is **the only paginated list in the bot** (everywhere else truncates at 25), over the 74 colours and the 38 catalogue parts; `page_count`/`page_bounds` are unit-tested. Drafts are found with `db::find_latest_workflow_session` (owner-scoped) and closed with `consume_workflow_session` on apply or discard — without which `[Draw…]` would open a second one each press.
+## 7. Crucial Gotchas & Change Rules for Agents
 
-**Private drafts**: `[Draw…]` on a render opens a four-field modal (view/legend/grid/location) whose submission previews **ephemerally** and writes nothing — `crates/bricktalk/src/draft.rs` assembles the fields into ordinary BrickTalk and runs `process_message` against a clone of the history with `persist` skipped, so preview and apply cannot diverge. The form opens prefilled from `textview` (editing what exists is the easiest part-picker). `[Apply]` refuses if the session's revision moved since the preview. Discord constraints that shape it: a modal holds only text inputs (no pickers inside), a modal cannot open from a modal submit (hence the `[Edit]` button bounce), and the 3s ACK means text first then the PNG edited in, guarded by `preview_seq`. Drafts live in owner-scoped `workflow_sessions`; no schema change.
-
-**Drawings**: a header sentence plus a fenced block of legend and grid — `Build from top at origin:` then ```` ``` ````, `b = blue 1x1 brick`, a blank line, `..bb..`. One cell = one stud; a symbol repeated over a rectangle matching its footprint is **one** part (greedy from the top left, footprint tried as drawn then turned a quarter, so legend spelling decides the tiling). Six views (`top`/`bottom`/`north`/`south`/`east`/`west`); blank lines separate layers. `Show top view.` (`crates/bricktalk/src/textview.rs`) draws the model back **in the same syntax**, so the reply can be pasted in to rebuild it — the round trip is the feature's main correctness property. Capture has to precede `strip_discord_noise` and `split_sentences`, both of which would destroy a grid (`.` ends a sentence, and the URL pass rejoins lines on single spaces). A parked sentence carries its fence via `Sentence::replay_text`, which caps a drawing at one unknown legend part.
-
-**Per-command help**: `Help.` shows the general overview; `Help <topic>.` (e.g. `Help select.`, `Help drawings.`) shows that topic's own syntax and examples — `HelpTopic::help_key` (`crates/bricktalk/src/dsl/lexer.rs`) maps the documented verbs *and* four named topics (`drawings`, `locations`, `parts`, `buttons`) to `command.build.help_topic.*` locale keys. Named topics resolve **before** verbs, so `Help draw.` reaches drawings rather than `render`, which it is a lexer synonym of; the topic is therefore read from the sentence as typed (`parser::help_topic`) rather than from the token stream. Synonyms resolve to their canonical verb, and an unrecognised or alias-only topic (`Attach`/`Fill`/`Repeat`) falls back to the general text rather than erroring. The advertised topic list lives once in `command.build.help_topics`, which the general help interpolates and a test round-trips through `HelpTopic::parse`.
-
-**Known bug** (documented by an `#[ignore]`d regression test in `crates/bricktalk/src/dispatch.rs`): within a *single* multi-sentence message, `Outcome::ops` is append-only, so an undo sandwiched between two commands (e.g. `Add red. Add blue. Undo. Add yellow.`) persists a log the interpreter never actually held — the superseded operation survives in what gets written. Sending the same steps as separate messages is unaffected and correct.
-
-**Grammar iteration**: `--build-debug-log <path>` (CLI flag, off by default) appends a JSONL line — timestamp, session, author, locale, raw message, `classification` (`ignored`/`silent`/`ok`/`problem`), reactions, replies, ops applied — for every message any build thread receives, via `src/build/debug_log.rs`. `problem` lines are known-verb sentences that failed to parse; `ignored` lines are what the silence policy swallowed as chat. Both are the ones worth reading when deciding what to extend in `crates/bricktalk/src/dsl/`. Details: [`docs/commands/build.md`](docs/commands/build.md#debugging--grammar-iteration).
-
-- **Docs**: [`docs/interactions/build.md`](docs/interactions/build.md) (trigger, silence policy, internals) and [`docs/commands/build.md`](docs/commands/build.md) (full BrickTalk grammar, config, example session) are the source of truth — keep them in sync with `src/build/*` changes.
-
-## No-LLM Stance (ADR-001 and BrickTalk)
-
-Nothing in this codebase calls an external LLM. [ADR-001](docs/ADR-001-Ambient-Conversational-Discord-Assistant.md)'s ambient assistant (`src/ambient.rs`) is `AhoCorasick` keyword matching plus a regex for set numbers, scored into Low/Medium/High confidence — explicitly chosen for speed and privacy over a model. BrickTalk (`/build`) is a hand-written recursive-descent parser for the same reason: deterministic, reproducible interpretation. Any future NLP work for `/build` should stay in that spirit — richer grammar/synonyms/fuzzy matching rather than an LLM in the interpretation loop — unless the user decides otherwise.
-
-## Recent Context & Known Gotchas
-
-- **Nix Build Fixes**: The project recently separated `default.nix` and `flake.nix` to fix a `src = ./.;` issue that caused rebuilding on any unrelated file changes.
-- **Missing Module Errors in Nix**: When adding new source files, they **must** be tracked by `git` (e.g., `git add src/new_file.rs`), otherwise the Nix build process will fail with `file not found for module` errors.
-- **Database Initialization**: If encountering `database file could not be opened`, ensure `mkdir -p data` has been executed. SQLx can create the `.db` file, but not the parent directory.
+1. **Makefile Target Names**:
+   - Never run `make test`. Run `make test-fast` or `cargo test`.
+   - Never run `make coverage`. Run `make coverage-lcov` or `make coverage-html`.
+2. **Nix File Tracking**:
+   - Any new `.rs` file added to `src/` or `crates/` **must be tracked in Git** (`git add <file>`). Otherwise, the Nix builder ignores it and compilation fails with `file not found for module`.
+3. **SQLite Directory Initialization**:
+   - SQLite cannot create parent directories. Ensure `mkdir -p data` has run before starting the bot or executing test runners requiring local databases.
+4. **No External LLM Calls**:
+   - Retain the strict No-LLM stance in `brickbot`. Do not introduce runtime network calls to external AI models for conversational parsing or ambient detection.
+5. **Always Verify with Checks**:
+   - Before completing work, run `devenv shell -- make check`.

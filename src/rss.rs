@@ -1,6 +1,7 @@
 #![allow(clippy::or_fun_call, unused_imports, clippy::cast_possible_wrap)]
 use crate::http::{HttpClient, HttpProvider};
 use anyhow::Result;
+use regex::Regex;
 use rss::Channel;
 use rust_i18n::t;
 use serenity::all::{ChannelId, CreateAllowedMentions, CreateMessage, Framework, FutureExt, Http};
@@ -48,6 +49,8 @@ pub struct FeedEntry {
     pub description: String,
     /// When the feed says the article was published, if it says so legibly.
     pub published: Option<chrono::DateTime<chrono::Utc>>,
+    /// An extracted thumbnail or image URL for this article, if found.
+    pub thumbnail: Option<String>,
 }
 
 /// Dates outside this range are placeholders for "unknown" — the Unix epoch,
@@ -78,61 +81,342 @@ pub fn parse_feed_date(text: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         .and_then(|at| plausible_date(&at))
 }
 
-/// The articles of a parsed feed, skipping any that cannot be identified.
+/// Collapses multiple slashes in URL schemes (`https://///` -> `https://`).
 #[must_use]
-pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
-    let mut entries = Vec::new();
-    match feed {
-        Feed::Rss(channel) => {
-            for item in channel.items() {
-                entries.push(FeedEntry {
-                    id: item
-                        .link()
-                        .or_else(|| item.guid().map(rss::Guid::value))
-                        .unwrap_or_default()
-                        .to_string(),
-                    source_title: decode_entities(channel.title()),
-                    title: decode_entities(item.title().unwrap_or_default()),
-                    description: item.description().unwrap_or_default().to_string(),
-                    published: item.pub_date().and_then(parse_feed_date).or_else(|| {
-                        item.dublin_core_ext()
-                            .and_then(|dc| dc.dates().iter().find_map(|d| parse_feed_date(d)))
-                    }),
-                });
-            }
+pub fn normalize_url(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("https:") {
+        if rest.starts_with('/') {
+            let after_slashes = rest.trim_start_matches('/');
+            return format!("https://{after_slashes}");
         }
-        Feed::Atom(feed) => {
-            for entry in &feed.entries {
-                entries.push(FeedEntry {
-                    // The article is the `alternate` link (the default rel),
-                    // not whichever comes first: Blogger lists its comment
-                    // feeds first.
-                    id: entry
-                        .links
-                        .iter()
-                        .find(|l| l.rel.eq_ignore_ascii_case("alternate"))
-                        .or_else(|| entry.links.first())
-                        .map_or(entry.id.as_str(), |l| l.href.as_str())
-                        .to_string(),
-                    source_title: decode_entities(feed.title.as_str()),
-                    title: decode_entities(entry.title.as_str()),
-                    description: entry
-                        .summary
-                        .as_ref()
-                        .map(atom_syndication::Text::as_str)
-                        .or_else(|| entry.content.as_ref().and_then(|c| c.value.as_deref()))
-                        .unwrap_or_default()
-                        .to_string(),
-                    // A missing `updated` is parsed as the Unix epoch.
-                    published: entry
-                        .published
-                        .as_ref()
-                        .and_then(plausible_date)
-                        .or_else(|| plausible_date(&entry.updated)),
-                });
+    } else if let Some(rest) = url.strip_prefix("http:") {
+        if rest.starts_with('/') {
+            let after_slashes = rest.trim_start_matches('/');
+            return format!("http://{after_slashes}");
+        }
+    }
+    url.to_string()
+}
+
+/// Whether a URL is a follow.it tracking redirect link.
+#[must_use]
+pub fn is_follow_it_tracking_link(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("//api.follow.it/") || lower.contains("//follow.it/")
+}
+
+/// Resolves a follow.it tracking link by scanning the article description HTML
+/// for destination anchor links (preferring "continue reading" or "read more"),
+/// stripping fragments, and normalizing the URL.
+#[must_use]
+pub fn resolve_follow_it_link(original_link: &str, description: &str) -> String {
+    let normalized = normalize_url(original_link);
+    if !is_follow_it_tracking_link(&normalized) {
+        return normalized;
+    }
+
+    let Ok(re) = Regex::new(
+        r#"(?is)<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>(.*?)</a>"#,
+    ) else {
+        return normalized;
+    };
+
+    let mut continue_reading_link = None;
+    let mut fallback_link = None;
+
+    for cap in re.captures_iter(description) {
+        let href = cap
+            .get(1)
+            .or_else(|| cap.get(2))
+            .or_else(|| cap.get(3))
+            .map(|m| m.as_str());
+        let anchor_text = cap.get(4).map_or("", |m| m.as_str());
+        if let Some(href) = href {
+            let href = href.trim();
+            if (href.starts_with("http://") || href.starts_with("https://"))
+                && !is_follow_it_tracking_link(href)
+            {
+                let text_lower = anchor_text.to_ascii_lowercase();
+                if text_lower.contains("continue reading") || text_lower.contains("read more") {
+                    continue_reading_link = Some(href.to_string());
+                    break;
+                }
+                fallback_link = Some(href.to_string());
             }
         }
     }
+
+    if let Some(target) = continue_reading_link.or(fallback_link) {
+        let without_fragment = target.split('#').next().unwrap_or(&target);
+        return normalize_url(without_fragment);
+    }
+
+    normalized
+}
+
+/// Extracts the first valid image URL from HTML content, ignoring 1x1 tracking pixels.
+#[must_use]
+pub fn extract_first_image(html: &str) -> Option<String> {
+    let tag_re = Regex::new(r"(?is)<img\b([^>]*)>").ok()?;
+    let attr_re =
+        Regex::new(r#"(?is)\b([a-zA-Z0-9_\-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).ok()?;
+
+    for tag_cap in tag_re.captures_iter(html) {
+        let tag_attrs = tag_cap.get(1).map_or("", |m| m.as_str());
+        let mut src = None;
+        let mut width = None;
+        let mut height = None;
+
+        for attr_cap in attr_re.captures_iter(tag_attrs) {
+            let name = &attr_cap[1];
+            let val = attr_cap
+                .get(2)
+                .or_else(|| attr_cap.get(3))
+                .or_else(|| attr_cap.get(4))
+                .map(|m| m.as_str());
+            if name.eq_ignore_ascii_case("src") {
+                src = val;
+            } else if name.eq_ignore_ascii_case("width") {
+                width = val;
+            } else if name.eq_ignore_ascii_case("height") {
+                height = val;
+            }
+        }
+
+        let is_tracking_pixel =
+            width.is_some_and(|w| w.trim() == "1") && height.is_some_and(|h| h.trim() == "1");
+        if is_tracking_pixel {
+            continue;
+        }
+
+        if let Some(src) = src {
+            let trimmed = src.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Skips the initial `<p>...Author posted a photo:...</p>` paragraph tag in Flickr descriptions,
+/// tolerating HTML entities.
+#[must_use]
+pub fn strip_first_p_tag(html: &str) -> String {
+    let decoded = decode_entities(html);
+    let lower = decoded.to_ascii_lowercase();
+    if let Some(p_start) = lower.find("<p") {
+        let after_p = &decoded[p_start + 2..];
+        if after_p.starts_with('>') || after_p.starts_with(|c: char| c.is_ascii_whitespace()) {
+            if let Some(close_p) = lower[p_start..].find("</p>") {
+                let after_close = p_start + close_p + 4;
+                return decoded[after_close..].to_string();
+            }
+        }
+    }
+    decoded
+}
+
+/// Whether an article should be excluded from announcements based on URL or title/description keywords.
+#[must_use]
+pub fn is_article_excluded(
+    entry: &FeedEntry,
+    exclude_urls: &[String],
+    exclude_keywords: &[String],
+) -> bool {
+    let entry_id = entry.id.trim_end_matches('/');
+    if exclude_urls
+        .iter()
+        .any(|u| u == &entry.id || u.trim_end_matches('/') == entry_id)
+    {
+        return true;
+    }
+    if !exclude_keywords.is_empty() {
+        let title_lower = entry.title.to_ascii_lowercase();
+        let desc_lower = entry.description.to_ascii_lowercase();
+        for kw in exclude_keywords {
+            let kw_lower = kw.to_ascii_lowercase();
+            if title_lower.contains(&kw_lower) || desc_lower.contains(&kw_lower) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn extract_media_thumbnail_rss(
+    extensions: &BTreeMap<String, BTreeMap<String, Vec<rss::extension::Extension>>>,
+) -> Option<String> {
+    for (ns, elements) in extensions {
+        if ns == "media" || ns == "http://search.yahoo.com/mrss/" {
+            if let Some(thumbs) = elements.get("thumbnail") {
+                for thumb in thumbs {
+                    if let Some(url) = thumb.attrs.get("url") {
+                        if !url.trim().is_empty() {
+                            return Some(url.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(groups) = elements.get("group") {
+                for group in groups {
+                    if let Some(thumbs) = group.children.get("thumbnail") {
+                        for thumb in thumbs {
+                            if let Some(url) = thumb.attrs.get("url") {
+                                if !url.trim().is_empty() {
+                                    return Some(url.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_media_thumbnail_atom(
+    extensions: &atom_syndication::extension::ExtensionMap,
+) -> Option<String> {
+    for (ns, elements) in extensions {
+        if ns == "media" || ns == "http://search.yahoo.com/mrss/" {
+            if let Some(thumbs) = elements.get("thumbnail") {
+                for thumb in thumbs {
+                    if let Some(url) = thumb.attrs.get("url") {
+                        if !url.trim().is_empty() {
+                            return Some(url.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(groups) = elements.get("group") {
+                for group in groups {
+                    if let Some(thumbs) = group.children.get("thumbnail") {
+                        for thumb in thumbs {
+                            if let Some(url) = thumb.attrs.get("url") {
+                                if !url.trim().is_empty() {
+                                    return Some(url.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn rss_entries(channel: &rss::Channel) -> Vec<FeedEntry> {
+    let mut entries = Vec::new();
+    for item in channel.items() {
+        let raw_link = item
+            .link()
+            .or_else(|| item.guid().map(rss::Guid::value))
+            .unwrap_or_default();
+        let raw_desc = item.description().unwrap_or_default();
+        let desc = if host_of(raw_link).is_some_and(|h| host_is_or_under(&h, "flickr.com")) {
+            strip_first_p_tag(raw_desc)
+        } else {
+            raw_desc.to_string()
+        };
+        let id = resolve_follow_it_link(raw_link, &desc);
+        let thumbnail = extract_media_thumbnail_rss(item.extensions())
+            .or_else(|| {
+                item.enclosure().and_then(|enc| {
+                    if enc.mime_type().starts_with("image/") && !enc.url().trim().is_empty() {
+                        Some(enc.url().to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .or_else(|| item.content().and_then(extract_first_image))
+            .or_else(|| extract_first_image(&desc));
+        entries.push(FeedEntry {
+            id,
+            source_title: decode_entities(channel.title()),
+            title: decode_entities(item.title().unwrap_or_default()),
+            description: desc,
+            published: item.pub_date().and_then(parse_feed_date).or_else(|| {
+                item.dublin_core_ext()
+                    .and_then(|dc| dc.dates().iter().find_map(|d| parse_feed_date(d)))
+            }),
+            thumbnail,
+        });
+    }
+    entries
+}
+
+fn atom_entries(feed: &atom_syndication::Feed) -> Vec<FeedEntry> {
+    let mut entries = Vec::new();
+    for entry in &feed.entries {
+        let raw_link = entry
+            .links
+            .iter()
+            .find(|l| l.rel.eq_ignore_ascii_case("alternate"))
+            .or_else(|| entry.links.first())
+            .map_or(entry.id.as_str(), |l| l.href.as_str());
+        let raw_desc = entry
+            .summary
+            .as_ref()
+            .map(atom_syndication::Text::as_str)
+            .or_else(|| entry.content.as_ref().and_then(|c| c.value.as_deref()))
+            .unwrap_or_default();
+        let desc = if host_of(raw_link).is_some_and(|h| host_is_or_under(&h, "flickr.com")) {
+            strip_first_p_tag(raw_desc)
+        } else {
+            raw_desc.to_string()
+        };
+        let id = resolve_follow_it_link(raw_link, &desc);
+        let thumbnail = extract_media_thumbnail_atom(&entry.extensions)
+            .or_else(|| {
+                entry.links.iter().find_map(|l| {
+                    if l.rel.eq_ignore_ascii_case("enclosure")
+                        && l.mime_type
+                            .as_deref()
+                            .is_some_and(|m| m.starts_with("image/"))
+                        && !l.href.trim().is_empty()
+                    {
+                        Some(l.href.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .or_else(|| {
+                entry
+                    .content
+                    .as_ref()
+                    .and_then(|c| c.value.as_deref())
+                    .and_then(extract_first_image)
+            })
+            .or_else(|| extract_first_image(&desc));
+        entries.push(FeedEntry {
+            id,
+            source_title: decode_entities(feed.title.as_str()),
+            title: decode_entities(entry.title.as_str()),
+            description: desc,
+            published: entry
+                .published
+                .as_ref()
+                .and_then(plausible_date)
+                .or_else(|| plausible_date(&entry.updated)),
+            thumbnail,
+        });
+    }
+    entries
+}
+
+/// The articles of a parsed feed, skipping any that cannot be identified.
+#[must_use]
+pub fn feed_entries(feed: &Feed) -> Vec<FeedEntry> {
+    let mut entries = match feed {
+        Feed::Rss(channel) => rss_entries(channel),
+        Feed::Atom(feed) => atom_entries(feed),
+    };
     entries.retain(|e| !e.id.trim().is_empty());
     entries
 }
@@ -876,11 +1160,16 @@ fn plan_routing(
     let mut instant_targets = BTreeSet::new();
     let mut scheduled = Vec::new();
     for &target in feed_targets.into_iter().flatten() {
+        let exclude_urls = config.feed_exclude_urls_for_channel(target.guild_id, target.channel_id);
+        let exclude_keywords =
+            config.feed_exclude_keywords_for_channel(target.guild_id, target.channel_id);
         if config
             .feed_schedule_for_channel(target.guild_id, target.channel_id)
             .is_some()
         {
-            for e in fresh.iter().filter(|e| !is_short(&e.id)) {
+            for e in fresh.iter().filter(|e| {
+                !is_short(&e.id) && !is_article_excluded(e, &exclude_urls, &exclude_keywords)
+            }) {
                 scheduled.push(PendingAnnouncement {
                     channel_id: target.channel_id,
                     guild_id: target.guild_id,
@@ -922,7 +1211,19 @@ async fn record_and_route(
     tx.commit().await?;
 
     if !instant_targets.is_empty() {
-        collect_updates(updates, Some(&instant_targets), &fresh);
+        for target in &instant_targets {
+            let exclude_urls =
+                config.feed_exclude_urls_for_channel(target.guild_id, target.channel_id);
+            let exclude_keywords =
+                config.feed_exclude_keywords_for_channel(target.guild_id, target.channel_id);
+            let filtered: Vec<FeedEntry> = fresh
+                .iter()
+                .filter(|e| !is_article_excluded(e, &exclude_urls, &exclude_keywords))
+                .cloned()
+                .collect();
+            let single_target = BTreeSet::from([*target]);
+            collect_updates(updates, Some(&single_target), &filtered);
+        }
     }
     Ok(())
 }
@@ -1059,6 +1360,7 @@ async fn send_digest(
             title: a.item_title,
             description: String::new(),
             published: a.published_at,
+            thumbnail: None,
         })
         .collect();
     let locale = config.locale_or_default(guild_id);
@@ -1283,6 +1585,7 @@ mod tests {
             title: title.to_string(),
             description: String::new(),
             published: None,
+            thumbnail: None,
         }
     }
 
@@ -2669,6 +2972,7 @@ mod tests {
                 title: "Post 1".to_string(),
                 description: String::new(),
                 published: Some(date),
+                thumbnail: None,
             },
             FeedEntry {
                 id: "https://www.youtube.com/watch?v=123".to_string(),
@@ -2676,6 +2980,7 @@ mod tests {
                 title: "Video 1".to_string(),
                 description: String::new(),
                 published: None,
+                thumbnail: None,
             },
             FeedEntry {
                 id: "https://other.example/2".to_string(),
@@ -2683,6 +2988,7 @@ mod tests {
                 title: "Post 2".to_string(),
                 description: String::new(),
                 published: None,
+                thumbnail: None,
             },
         ];
         let messages = build_digest_messages("en-US", &entries);
@@ -2704,6 +3010,7 @@ mod tests {
                 title: format!("Long article title number {i} with some descriptive text"),
                 description: String::new(),
                 published: None,
+                thumbnail: None,
             })
             .collect();
         let messages = build_digest_messages("en-US", &entries);
@@ -2943,5 +3250,172 @@ mod tests {
         calls.store(0, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(retry(2, Duration::ZERO, attempt).await, Err(1));
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_normalize_url() {
+        assert_eq!(
+            normalize_url("https://///example.com/page"),
+            "https://example.com/page"
+        );
+        assert_eq!(
+            normalize_url("http://///example.com/page"),
+            "http://example.com/page"
+        );
+        assert_eq!(
+            normalize_url("https://example.com/page"),
+            "https://example.com/page"
+        );
+        assert_eq!(normalize_url("https://///"), "https://");
+        assert_eq!(normalize_url("not a url"), "not a url");
+    }
+
+    #[test]
+    fn test_resolve_follow_it_link() {
+        let follow_it_url = "https://api.follow.it/track-rss-story-click/v1/abc";
+        let desc = r#"<p>Some text</p><p><a href="https://///example.com/2026/my-build#more">Continue reading</a></p>"#;
+        assert_eq!(
+            resolve_follow_it_link(follow_it_url, desc),
+            "https://example.com/2026/my-build"
+        );
+
+        let desc_read_more =
+            r#"<p>Intro</p><a href="https://example.com/post#fragment">Read more...</a>"#;
+        assert_eq!(
+            resolve_follow_it_link(follow_it_url, desc_read_more),
+            "https://example.com/post"
+        );
+
+        // Fallback to non-follow link when continue reading is absent
+        let desc_fallback = r#"<p>Intro</p><a href="https://api.follow.it/bad">Track</a> <a href="https://example.com/target">My Post</a>"#;
+        assert_eq!(
+            resolve_follow_it_link(follow_it_url, desc_fallback),
+            "https://example.com/target"
+        );
+
+        // Regular link stays unchanged
+        let normal_url = "https://example.com/article";
+        assert_eq!(
+            resolve_follow_it_link(normal_url, desc),
+            "https://example.com/article"
+        );
+    }
+
+    #[test]
+    fn test_extract_first_image() {
+        let html_pixel_first = r#"<p><img src="https://example.com/pixel.gif" width="1" height="1"/><img src="https://example.com/hero.jpg" alt="hero"/></p>"#;
+        assert_eq!(
+            extract_first_image(html_pixel_first),
+            Some("https://example.com/hero.jpg".to_string())
+        );
+
+        let html_only_pixel = r#"<img src="https://example.com/pixel.gif" width="1" height="1">"#;
+        assert_eq!(extract_first_image(html_only_pixel), None);
+
+        let html_no_images = "<p>Just text</p>";
+        assert_eq!(extract_first_image(html_no_images), None);
+
+        let html_single = r#"<img src="https://example.com/pic.png">"#;
+        assert_eq!(
+            extract_first_image(html_single),
+            Some("https://example.com/pic.png".to_string())
+        );
+    }
+
+    #[test]
+    fn test_strip_first_p_tag() {
+        let html = "<p><a href=\"https://flickr.com\">Author</a> posted a photo:</p><p>Description of MOC</p>";
+        assert_eq!(strip_first_p_tag(html), "<p>Description of MOC</p>");
+
+        let encoded = "&lt;p&gt;&lt;a href=&quot;https://flickr.com&quot;&gt;Author&lt;/a&gt; posted a photo:&lt;/p&gt;\n<p>Real photo text</p>";
+        assert_eq!(strip_first_p_tag(encoded), "\n<p>Real photo text</p>");
+
+        let plain = "No paragraph wrapper here";
+        assert_eq!(strip_first_p_tag(plain), "No paragraph wrapper here");
+    }
+
+    #[test]
+    fn test_is_article_excluded() {
+        let entry = FeedEntry {
+            id: "https://example.com/posts/bad-post/".to_string(),
+            source_title: "LEGO Blog".to_string(),
+            title: "Minecraft Creepers invading Billund".to_string(),
+            description: "A post about Minecraft bionicle sets".to_string(),
+            published: None,
+            thumbnail: None,
+        };
+
+        let exclude_urls = vec!["https://example.com/posts/bad-post".to_string()];
+        assert!(is_article_excluded(&entry, &exclude_urls, &[]));
+
+        let exclude_keywords_title = vec!["minecraft".to_string()];
+        assert!(is_article_excluded(&entry, &[], &exclude_keywords_title));
+
+        let exclude_keywords_desc = vec!["bionicle".to_string()];
+        assert!(is_article_excluded(&entry, &[], &exclude_keywords_desc));
+
+        let non_matching_urls = vec!["https://example.com/posts/good-post".to_string()];
+        let non_matching_keywords = vec!["technic".to_string(), "castles".to_string()];
+        assert!(!is_article_excluded(
+            &entry,
+            &non_matching_urls,
+            &non_matching_keywords
+        ));
+    }
+
+    #[test]
+    fn test_feed_entries_extracts_thumbnails() {
+        let rss_media = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+          <channel>
+            <title>Media Feed</title>
+            <link>https://example.com</link>
+            <description>desc</description>
+            <item>
+              <title>Item 1</title>
+              <link>https://example.com/item1</link>
+              <media:thumbnail url="https://example.com/media_thumb.jpg"/>
+            </item>
+            <item>
+              <title>Item 2</title>
+              <link>https://example.com/item2</link>
+              <media:group>
+                <media:thumbnail url="https://example.com/group_thumb.jpg"/>
+              </media:group>
+            </item>
+          </channel>
+        </rss>"#;
+        let feed = parse_feed(rss_media.as_bytes()).unwrap();
+        let entries = feed_entries(&feed);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].thumbnail.as_deref(),
+            Some("https://example.com/media_thumb.jpg")
+        );
+        assert_eq!(
+            entries[1].thumbnail.as_deref(),
+            Some("https://example.com/group_thumb.jpg")
+        );
+
+        let atom_enclosure = r#"<?xml version="1.0" encoding="utf-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Atom Feed</title>
+          <id>urn:test</id>
+          <updated>2026-01-01T00:00:00Z</updated>
+          <entry>
+            <title>Atom Entry</title>
+            <id>urn:entry1</id>
+            <updated>2026-01-01T00:00:00Z</updated>
+            <link rel="alternate" href="https://example.com/entry1"/>
+            <link rel="enclosure" type="image/png" href="https://example.com/enclosure.png"/>
+          </entry>
+        </feed>"#;
+        let feed = parse_feed(atom_enclosure.as_bytes()).unwrap();
+        let entries = feed_entries(&feed);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].thumbnail.as_deref(),
+            Some("https://example.com/enclosure.png")
+        );
     }
 }
