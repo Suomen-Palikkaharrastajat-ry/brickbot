@@ -300,6 +300,15 @@ pub async fn handle_component_interaction(
             )
             .await
         }
+        "wizard_location_state_select_change" => {
+            locations::handle_wizard_location_state_select_change(
+                ctx,
+                &app_ctx,
+                interaction,
+                arg.unwrap_or_default(),
+            )
+            .await
+        }
         "wizard_location_tag_select_change" => {
             locations::handle_wizard_location_tag_select_change(
                 ctx,

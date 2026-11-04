@@ -25,7 +25,9 @@ It mirrors the [events command](events.md) and shares its Zulip moderation flow;
    - The proposal is posted to the Zulip moderation stream under a `📍` topic.
 
 2. **Propose changes to an existing location**:
-   - A select menu lists up to 25 published locations as `Title | Address`.
+   - A select menu lists up to 25 published or closed locations as `Title | Address` (closed
+     locations are marked as `Title (Closed) | Address` / `Title (Suljettu) | Address`).
+   - A state select menu lets the submitter choose the location's state (`published` / `closed`).
    - "Propose Changes" opens the same modal, prefilled from the live record.
    - The proposal is posted under a `📌` topic and includes a unified diff against the current
      record.
@@ -38,11 +40,12 @@ It mirrors the [events command](events.md) and shares its Zulip moderation flow;
      stays pending. Edits are unaffected — they keep the record's existing coordinates.
 
 4. **Moderation commands** (in the Zulip topic, moderators only):
-   - `approve` / `hyväksy` — publish as a draft.
+   - `approve` / `hyväksy` — publish as a draft (or apply the `state` set in the YAML block).
    - `approve published` / `hyväksy julkaistuna` — publish immediately.
+   - `approve closed` / `hyväksy suljettuna` — publish or update as closed.
    - `reject` / `hylkää` — discard.
    - A ```` ```yaml ```` block containing only the fields to change — updates the stored payload
-     and rewrites the topic message. This is how `point`, `start_date`, `end_date` and
+     and rewrites the topic message. This is how `point`, `state`, `start_date`, `end_date` and
      `image_description` get filled in.
    - Any other reply is forwarded to the submitter as a Discord DM.
 

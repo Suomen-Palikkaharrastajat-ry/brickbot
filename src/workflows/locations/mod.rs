@@ -30,6 +30,32 @@ pub fn tag_label_key(tag: &str) -> &'static str {
     }
 }
 
+/// Localization key for a location state's human-readable label.
+#[must_use]
+pub fn state_label_key(state: &str) -> &'static str {
+    match state {
+        "closed" => "command.locations.states.closed",
+        "draft" => "command.locations.states.draft",
+        _ => "command.locations.states.published",
+    }
+}
+
+/// Formats the select-menu label for an existing location.
+///
+/// Closed locations include their localized state in parentheses (e.g.
+/// `"Title (Closed) | Address"` or `"Otsikko (Suljettu) | Osoite"`).
+#[must_use]
+pub fn format_location_select_label(loc: &models::Location, locale: &str) -> String {
+    let addr = loc.location.as_deref().unwrap_or("—");
+    let raw = if loc.state.as_deref() == Some("closed") {
+        let closed = rust_i18n::t!("command.locations.states.closed", locale = locale);
+        format!("{} ({closed}) | {addr}", loc.title)
+    } else {
+        format!("{} | {addr}", loc.title)
+    };
+    crate::discord_limits::truncate(&raw, crate::discord_limits::MAX_SELECT_OPTION_LABEL)
+}
+
 /// Renders the `/paikat` (`/locations`) wizard.
 ///
 /// Mirrors the events wizard: an optional cover image is stashed as a draft, published
@@ -101,11 +127,7 @@ pub async fn handle_locations_wizard_command(
             cached_locations.clone_from(&locations);
 
             for loc in locations {
-                let addr = loc.location.unwrap_or_else(|| "—".to_string());
-                let label = crate::discord_limits::truncate(
-                    &format!("{} | {}", loc.title, addr),
-                    crate::discord_limits::MAX_SELECT_OPTION_LABEL,
-                );
+                let label = format_location_select_label(&loc, locale.as_str());
                 edit_options.push(serenity::builder::CreateSelectMenuOption::new(
                     label, loc.uid,
                 ));
@@ -127,6 +149,7 @@ pub async fn handle_locations_wizard_command(
             serde_json::json!({
                 "draft_id": draft_id,
                 "selected_location_uid": first_uid,
+                "selected_state": serde_json::Value::Null,
                 "selected_tags": ["other"],
                 "locations_cache": cached_locations
             }),
@@ -147,6 +170,25 @@ pub async fn handle_locations_wizard_command(
             locale = locale.as_str()
         ));
         components.push(CreateActionRow::SelectMenu(edit_select));
+
+        let state_options: Vec<_> = models::EDITABLE_LOCATION_STATES
+            .iter()
+            .map(|state| {
+                let label = rust_i18n::t!(state_label_key(state), locale = locale.as_str());
+                serenity::builder::CreateSelectMenuOption::new(label, (*state).to_string())
+            })
+            .collect();
+        let state_select = serenity::builder::CreateSelectMenu::new(
+            format!("wizard_location_state_select_change:{session_id}"),
+            serenity::builder::CreateSelectMenuKind::String {
+                options: state_options,
+            },
+        )
+        .placeholder(rust_i18n::t!(
+            "command.locations.state_prompt",
+            locale = locale.as_str()
+        ));
+        components.push(CreateActionRow::SelectMenu(state_select));
 
         components.push(CreateActionRow::Buttons(vec![
             CreateButton::new(format!("wizard_locations_edit:{session_id}"))
@@ -217,4 +259,58 @@ pub async fn handle_locations_wizard_command(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_state_label_key() {
+        assert_eq!(
+            state_label_key("published"),
+            "command.locations.states.published"
+        );
+        assert_eq!(state_label_key("closed"), "command.locations.states.closed");
+        assert_eq!(state_label_key("draft"), "command.locations.states.draft");
+        assert_eq!(
+            rust_i18n::t!(state_label_key("closed"), locale = "fi-FI"),
+            "Suljettu"
+        );
+        assert_eq!(
+            rust_i18n::t!(state_label_key("closed"), locale = "en-US"),
+            "Closed"
+        );
+    }
+
+    #[test]
+    fn test_format_location_select_label_marks_closed_locations() {
+        let published = models::Location {
+            uid: "loc1".to_string(),
+            title: "Legokauppa".to_string(),
+            location: Some("Mannerheimintie 1".to_string()),
+            state: Some("published".to_string()),
+            ..models::Location::default()
+        };
+        assert_eq!(
+            format_location_select_label(&published, "fi-FI"),
+            "Legokauppa | Mannerheimintie 1"
+        );
+
+        let closed = models::Location {
+            uid: "loc2".to_string(),
+            title: "Vanha kauppa".to_string(),
+            location: Some("Hämeenkatu 2".to_string()),
+            state: Some("closed".to_string()),
+            ..models::Location::default()
+        };
+        assert_eq!(
+            format_location_select_label(&closed, "fi-FI"),
+            "Vanha kauppa (Suljettu) | Hämeenkatu 2"
+        );
+        assert_eq!(
+            format_location_select_label(&closed, "en-US"),
+            "Vanha kauppa (Closed) | Hämeenkatu 2"
+        );
+    }
 }

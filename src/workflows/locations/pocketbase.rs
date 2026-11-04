@@ -1,7 +1,7 @@
 use crate::config::PocketBaseConfig;
 use crate::workflows::locations::models::{Location, PbLocationResponse};
 
-/// Fetches every published record from the `PocketBase` `locations` collection.
+/// Fetches every published or closed record from the `PocketBase` `locations` collection.
 ///
 /// Mirrors `events_sync::fetch_pocketbase_events`: hand-encoded filter, `perPage=100`
 /// pagination, and cache-bypassing reads so moderators always see current data.
@@ -14,8 +14,8 @@ pub async fn fetch_pocketbase_locations(
     let auth = token.as_ref().map(|t| format!("Bearer {t}"));
 
     let collection = pb_cfg.locations_collection();
-    // Pre-encoded `(state='published')`.
-    let filter = "(state=%27published%27)";
+    // Pre-encoded `(state='published'||state='closed')`.
+    let filter = "(state=%27published%27%7C%7Cstate=%27closed%27)";
 
     let mut current_page = 1;
     let mut all_locations = Vec::new();
@@ -71,11 +71,12 @@ mod tests {
             .returning(|url, _, skip_cache, _| {
                 assert!(url.contains("/api/collections/locations/records"));
                 assert!(url.contains("perPage=100"));
+                assert!(url.contains("filter=(state=%27published%27%7C%7Cstate=%27closed%27)"));
                 assert!(skip_cache, "PocketBase reads must bypass the cache");
                 if url.contains("page=1") {
-                    Ok(r#"{"items":[{"id":"aaaaaaaaaaaaaaa","title":"Kauppa","point":{"lat":60.1,"lon":24.9},"updated":"2026-07-01 10:00:00.000Z"}],"page":1,"totalPages":2}"#.to_string())
+                    Ok(r#"{"items":[{"id":"aaaaaaaaaaaaaaa","title":"Kauppa","state":"published","point":{"lat":60.1,"lon":24.9},"updated":"2026-07-01 10:00:00.000Z"}],"page":1,"totalPages":2}"#.to_string())
                 } else {
-                    Ok(r#"{"items":[{"id":"bbbbbbbbbbbbbbb","title":"Museo","updated":"2026-07-02 10:00:00.000Z"}],"page":2,"totalPages":2}"#.to_string())
+                    Ok(r#"{"items":[{"id":"bbbbbbbbbbbbbbb","title":"Museo","state":"closed","updated":"2026-07-02 10:00:00.000Z"}],"page":2,"totalPages":2}"#.to_string())
                 }
             });
 
@@ -85,8 +86,10 @@ mod tests {
 
         assert_eq!(locations.len(), 2);
         assert_eq!(locations[0].title, "Kauppa");
+        assert_eq!(locations[0].state.as_deref(), Some("published"));
         assert!(locations[0].point.is_some());
         assert_eq!(locations[1].title, "Museo");
+        assert_eq!(locations[1].state.as_deref(), Some("closed"));
         assert!(locations[1].point.is_none());
     }
 

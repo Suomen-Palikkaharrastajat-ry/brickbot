@@ -1,4 +1,6 @@
-use crate::workflows::locations::models::{GeoPoint, LOCATION_TAGS, MAX_LOCATION_TAGS};
+use crate::workflows::locations::models::{
+    GeoPoint, LOCATION_STATES, LOCATION_TAGS, MAX_LOCATION_TAGS,
+};
 
 /// Maximum length of a Zulip topic we are willing to generate.
 const MAX_TOPIC_LEN: usize = 60;
@@ -62,6 +64,14 @@ pub fn sanitize_tags(tags: &[String]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Returns the canonical `locations.state` value (`draft`, `published`, or `closed`) when
+/// `state` is a known state.
+#[must_use]
+pub fn sanitize_state(state: &str) -> Option<&'static str> {
+    let s = state.trim();
+    LOCATION_STATES.iter().copied().find(|&known| known == s)
 }
 
 #[cfg(test)]
@@ -148,5 +158,15 @@ mod tests {
             .len(),
             MAX_LOCATION_TAGS as usize
         );
+    }
+
+    #[test]
+    fn test_sanitize_state() {
+        assert_eq!(sanitize_state("draft"), Some("draft"));
+        assert_eq!(sanitize_state("published"), Some("published"));
+        assert_eq!(sanitize_state("closed"), Some("closed"));
+        assert_eq!(sanitize_state("  closed  "), Some("closed"));
+        assert_eq!(sanitize_state("archived"), None);
+        assert_eq!(sanitize_state(""), None);
     }
 }

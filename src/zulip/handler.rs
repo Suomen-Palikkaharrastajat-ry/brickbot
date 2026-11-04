@@ -8,6 +8,36 @@ pub fn is_authorized_moderator(config: &crate::config::ZulipConfig, email: &str)
     config.moderators.is_empty() || config.moderators.contains(&email.to_string())
 }
 
+/// Resolves the `state` field to write to `PocketBase` when a proposal is approved.
+#[must_use]
+pub fn resolve_approved_state(
+    kind: ModerationKind,
+    is_edit: bool,
+    is_approve_published: bool,
+    is_approve_closed: bool,
+    current_state: Option<&str>,
+) -> Option<&'static str> {
+    if is_approve_closed {
+        Some("closed")
+    } else if is_approve_published {
+        Some("published")
+    } else if !is_edit {
+        if kind == ModerationKind::Location {
+            Some(
+                current_state
+                    .and_then(crate::workflows::locations::sanitize_state)
+                    .unwrap_or("draft"),
+            )
+        } else {
+            Some("draft")
+        }
+    } else if kind == ModerationKind::Location {
+        current_state.and_then(crate::workflows::locations::sanitize_state)
+    } else {
+        None
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
     let content = msg.content.trim();
@@ -74,6 +104,9 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                 locale = locale.as_str()
             )
             .to_lowercase();
+            let cmd_approve_closed =
+                rust_i18n::t!("command.zulip.cmd_approve_closed", locale = locale.as_str())
+                    .to_lowercase();
             let cmd_reject =
                 rust_i18n::t!("command.zulip.cmd_reject", locale = locale.as_str()).to_lowercase();
 
@@ -83,6 +116,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
             let clean_rest = rest_lower.trim_matches(trim_chars);
             let clean_cmd_approve = cmd_approve.trim_matches(trim_chars);
             let clean_cmd_approve_published = cmd_approve_published.trim_matches(trim_chars);
+            let clean_cmd_approve_closed = cmd_approve_closed.trim_matches(trim_chars);
             let clean_cmd_reject = cmd_reject.trim_matches(trim_chars);
 
             info!(
@@ -91,7 +125,10 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
             );
 
             let is_approve_published = clean_rest == clean_cmd_approve_published;
-            let is_approve = is_approve_published || clean_rest == clean_cmd_approve;
+            let is_approve_closed =
+                kind == ModerationKind::Location && clean_rest == clean_cmd_approve_closed;
+            let is_approve =
+                is_approve_published || is_approve_closed || clean_rest == clean_cmd_approve;
             let is_reject = clean_rest == clean_cmd_reject;
             let is_yaml_update = content.contains("```yaml") || content.contains("```json");
 
@@ -148,13 +185,19 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                     }
                 }
 
-                if !is_edit {
-                    if is_approve_published {
-                        if let Some(obj) = pb_payload.as_object_mut() {
-                            obj.insert("state".to_string(), serde_json::json!("published"));
-                        }
-                    } else if let Some(obj) = pb_payload.as_object_mut() {
-                        obj.insert("state".to_string(), serde_json::json!("draft"));
+                let current_state = pb_payload
+                    .get("state")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
+                if let Some(resolved_state) = resolve_approved_state(
+                    kind,
+                    is_edit,
+                    is_approve_published,
+                    is_approve_closed,
+                    current_state.as_deref(),
+                ) {
+                    if let Some(obj) = pb_payload.as_object_mut() {
+                        obj.insert("state".to_string(), serde_json::json!(resolved_state));
                     }
                 }
 
@@ -517,6 +560,10 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                         "command.zulip.cmd_approve_published",
                                                         locale = locale.as_str()
                                                     );
+                                                    let cmd_approve_closed = rust_i18n::t!(
+                                                        "command.zulip.cmd_approve_closed",
+                                                        locale = locale.as_str()
+                                                    );
                                                     let cmd_reject = rust_i18n::t!(
                                                         "command.zulip.cmd_reject",
                                                         locale = locale.as_str()
@@ -539,6 +586,7 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                             payload_str = diff_payload,
                                                             yaml_str = display_payload,
                                                             cmd_approve = cmd_approve,
+                                                            cmd_approve_closed = cmd_approve_closed,
                                                             cmd_reject = cmd_reject
                                                         )
                                                         .to_string()
@@ -558,6 +606,8 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                                     cmd_approve = cmd_approve,
                                                                     cmd_approve_published =
                                                                         cmd_approve_published,
+                                                                    cmd_approve_closed =
+                                                                        cmd_approve_closed,
                                                                     cmd_reject = cmd_reject
                                                                 )
                                                                 .to_string()
@@ -577,6 +627,8 @@ pub async fn process_zulip_message(state: &AppState, msg: &ZulipMessage) {
                                                                     cmd_approve = cmd_approve,
                                                                     cmd_approve_published =
                                                                         cmd_approve_published,
+                                                                    cmd_approve_closed =
+                                                                        cmd_approve_closed,
                                                                     cmd_reject = cmd_reject
                                                                 )
                                                                 .to_string()
@@ -875,5 +927,53 @@ mod tests {
             &config_empty_mods,
             "anyone@example.com"
         ));
+    }
+
+    #[test]
+    fn test_resolve_approved_state() {
+        assert_eq!(
+            resolve_approved_state(ModerationKind::Location, false, false, false, Some("draft")),
+            Some("draft")
+        );
+        assert_eq!(
+            resolve_approved_state(ModerationKind::Location, false, true, false, Some("draft")),
+            Some("published")
+        );
+        assert_eq!(
+            resolve_approved_state(ModerationKind::Location, false, false, true, Some("draft")),
+            Some("closed")
+        );
+        // Moderator set state: closed in YAML on a new location and replied `approve`
+        assert_eq!(
+            resolve_approved_state(
+                ModerationKind::Location,
+                false,
+                false,
+                false,
+                Some("closed")
+            ),
+            Some("closed")
+        );
+        // Edit proposal carrying closed state
+        assert_eq!(
+            resolve_approved_state(ModerationKind::Location, true, false, false, Some("closed")),
+            Some("closed")
+        );
+        // Edit proposal approved with `approve closed`
+        assert_eq!(
+            resolve_approved_state(
+                ModerationKind::Location,
+                true,
+                false,
+                true,
+                Some("published")
+            ),
+            Some("closed")
+        );
+        // Events remain unaffected
+        assert_eq!(
+            resolve_approved_state(ModerationKind::Event, true, false, false, None),
+            None
+        );
     }
 }

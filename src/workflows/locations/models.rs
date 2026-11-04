@@ -6,6 +6,12 @@ pub const LOCATION_TAGS: [&str; 5] = ["exhibition", "store", "fleamarket", "muse
 /// `locations.tags` is a `maxSelect: 2` field.
 pub const MAX_LOCATION_TAGS: u8 = 2;
 
+/// State values accepted by the `PocketBase` `locations.state` select field.
+pub const LOCATION_STATES: [&str; 3] = ["draft", "published", "closed"];
+
+/// State values selectable when proposing changes to an existing location in Discord.
+pub const EDITABLE_LOCATION_STATES: [&str; 2] = ["published", "closed"];
+
 /// `PocketBase` `geoPoint` value. An unset point comes back as `{"lon": 0, "lat": 0}`.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct GeoPoint {

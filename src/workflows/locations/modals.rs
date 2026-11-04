@@ -1,6 +1,8 @@
 use crate::workflows::locations::models::{GeoPoint, Location, LocationModerationPayload};
 use crate::workflows::locations::pocketbase::fetch_pocketbase_locations;
-use crate::workflows::locations::validation::{format_location_zulip_topic, sanitize_tags};
+use crate::workflows::locations::validation::{
+    format_location_zulip_topic, sanitize_state, sanitize_tags,
+};
 use crate::workflows::validation::{validate_text_field, validate_url};
 use crate::workflows::{AppContext, extract_locale_and_bot_name};
 use serde::Serialize;
@@ -30,13 +32,15 @@ struct LocationDisplayPayload<'a> {
     description: String,
     url: &'a str,
     tags: Vec<String>,
+    state: &'a str,
     point: DisplayPoint,
 }
 
 /// Renders the YAML block moderators edit in Zulip.
 ///
-/// Unlike the events variant this keeps `tags` as a real YAML list (the collection allows two)
-/// and always emits a `point` block so a missing geoPoint is visible and fillable.
+/// Unlike the events variant this keeps `tags` as a real YAML list (the collection allows two),
+/// includes `state` (`draft`, `published`, or `closed`), and always emits a `point` block so a
+/// missing geoPoint is visible and fillable.
 #[must_use]
 pub fn generate_location_display_yaml(payload: &serde_json::Value) -> String {
     let get_str = |key: &str| payload.get(key).and_then(|v| v.as_str()).unwrap_or("");
@@ -56,6 +60,7 @@ pub fn generate_location_display_yaml(payload: &serde_json::Value) -> String {
         })
         .unwrap_or_default();
 
+    let state = sanitize_state(get_str("state")).unwrap_or("draft");
     let point = crate::workflows::locations::validation::extract_point(payload);
 
     let display_obj = LocationDisplayPayload {
@@ -65,6 +70,7 @@ pub fn generate_location_display_yaml(payload: &serde_json::Value) -> String {
         description,
         url: get_str("url"),
         tags,
+        state,
         point: DisplayPoint {
             lat: point.map(|p| p.lat),
             lon: point.map(|p| p.lon),
@@ -124,6 +130,7 @@ pub fn location_to_payload(loc: &Location) -> serde_json::Value {
         "description": loc.description.clone().unwrap_or_default(),
         "url": loc.url.clone().unwrap_or_default(),
         "tags": loc.tags.clone().unwrap_or_default(),
+        "state": loc.state.as_deref().and_then(sanitize_state).unwrap_or("published"),
         "point": loc.point,
     })
 }
@@ -401,6 +408,39 @@ pub async fn handle_wizard_edit_location_select_change(
     Ok(())
 }
 
+/// Stores the state (`published` or `closed`) selected for an existing location edit.
+pub async fn handle_wizard_location_state_select_change(
+    ctx: &Context,
+    app_ctx: &AppContext,
+    interaction: &ComponentInteraction,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    if let ComponentInteractionDataKind::StringSelect { values } = &interaction.data.kind {
+        if let Some(raw_state) = values.first() {
+            if let Some(state) = sanitize_state(raw_state) {
+                let user_id = interaction.user.id.get().to_string();
+                if let Some(mut payload) =
+                    crate::db::get_workflow_session_payload(&app_ctx.db, session_id, &user_id)
+                        .await?
+                {
+                    payload["selected_state"] = serde_json::Value::String(state.to_string());
+                    crate::db::update_workflow_session_payload(
+                        &app_ctx.db,
+                        session_id,
+                        &user_id,
+                        payload,
+                    )
+                    .await?;
+                }
+            }
+        }
+    }
+    interaction
+        .create_response(&ctx.http, CreateInteractionResponse::Acknowledge)
+        .await?;
+    Ok(())
+}
+
 /// Consumes the wizard session and opens the empty submission modal.
 pub async fn handle_wizard_location_submit_continue(
     ctx: &Context,
@@ -617,6 +657,8 @@ pub async fn handle_modal_submit_location(
         "command.zulip.cmd_approve_published",
         locale = locale.as_str()
     );
+    let cmd_approve_closed =
+        rust_i18n::t!("command.zulip.cmd_approve_closed", locale = locale.as_str());
     let cmd_reject = rust_i18n::t!("command.zulip.cmd_reject", locale = locale.as_str());
 
     let content = image_url.map_or_else(
@@ -631,6 +673,7 @@ pub async fn handle_modal_submit_location(
                 payload_str = display_payload,
                 cmd_approve = cmd_approve,
                 cmd_approve_published = cmd_approve_published,
+                cmd_approve_closed = cmd_approve_closed,
                 cmd_reject = cmd_reject
             )
             .to_string()
@@ -647,6 +690,7 @@ pub async fn handle_modal_submit_location(
                 payload_str = display_payload,
                 cmd_approve = cmd_approve,
                 cmd_approve_published = cmd_approve_published,
+                cmd_approve_closed = cmd_approve_closed,
                 cmd_reject = cmd_reject
             )
             .to_string()
@@ -696,6 +740,7 @@ pub async fn handle_wizard_locations_edit(
     let (locale, _) = extract_locale_and_bot_name(app_ctx, interaction.guild_id).await;
 
     let mut selected_uid = String::new();
+    let mut selected_state: Option<String> = None;
     let mut locations_cache: Vec<Location> = Vec::new();
 
     if let Some(sid) = session_id_arg {
@@ -708,6 +753,13 @@ pub async fn handle_wizard_locations_edit(
                 .and_then(|v| v.as_str())
             {
                 selected_uid = uid.to_string();
+            }
+            if let Some(st) = payload
+                .get("selected_state")
+                .and_then(|v| v.as_str())
+                .and_then(sanitize_state)
+            {
+                selected_state = Some(st.to_string());
             }
             if let Some(cache) = payload.get("locations_cache") {
                 if let Ok(parsed) = serde_json::from_value(cache.clone()) {
@@ -738,6 +790,12 @@ pub async fn handle_wizard_locations_edit(
         return Ok(());
     };
 
+    let state = selected_state
+        .as_deref()
+        .or(loc.state.as_deref())
+        .and_then(sanitize_state)
+        .unwrap_or("published");
+
     let session_id = crate::db::create_workflow_session(
         &app_ctx.db,
         "edit_location",
@@ -750,6 +808,7 @@ pub async fn handle_wizard_locations_edit(
         serde_json::json!({
             "uid": selected_uid,
             "tags": loc.tags.clone().unwrap_or_default(),
+            "state": state,
             "point": loc.point,
         }),
         15,
@@ -849,6 +908,11 @@ pub async fn handle_modal_edit_location(
                 .collect()
         })
         .unwrap_or_default();
+    let state = session_payload
+        .get("state")
+        .and_then(|v| v.as_str())
+        .and_then(sanitize_state)
+        .unwrap_or("published");
 
     let raw = read_location_modal(interaction);
     let values = match validate_location_form(&raw, locale.as_str()) {
@@ -865,6 +929,7 @@ pub async fn handle_modal_edit_location(
                 "url": raw.url,
                 "description": raw.description,
                 "tags": tags,
+                "state": state,
                 "is_edit": true,
                 "uid": uid,
                 "point": point_val,
@@ -881,8 +946,6 @@ pub async fn handle_modal_edit_location(
         }
     };
 
-    // `state` is intentionally absent: PocketBase PATCHes partially, so the
-    // existing publication state survives an edit.
     let point_val = session_payload
         .get("point")
         .cloned()
@@ -895,6 +958,7 @@ pub async fn handle_modal_edit_location(
         "opening_hours": values.opening_hours,
         "url": values.url,
         "tags": sanitize_tags(&tags),
+        "state": state,
         "description": values.description,
         "point": point_val,
     });
@@ -933,6 +997,8 @@ pub async fn handle_modal_edit_location(
     {
         Ok(()) => {
             let cmd_approve = rust_i18n::t!("command.zulip.cmd_approve", locale = locale.as_str());
+            let cmd_approve_closed =
+                rust_i18n::t!("command.zulip.cmd_approve_closed", locale = locale.as_str());
             let cmd_reject = rust_i18n::t!("command.zulip.cmd_reject", locale = locale.as_str());
 
             let content = rust_i18n::t!(
@@ -946,6 +1012,7 @@ pub async fn handle_modal_edit_location(
                 payload_str = diff_str,
                 yaml_str = yaml_str,
                 cmd_approve = cmd_approve,
+                cmd_approve_closed = cmd_approve_closed,
                 cmd_reject = cmd_reject
             )
             .to_string();
@@ -1073,6 +1140,11 @@ pub async fn handle_wizard_retry_location_submit(
         .get("image_draft_id")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let state = payload
+        .get("state")
+        .and_then(|v| v.as_str())
+        .and_then(sanitize_state)
+        .unwrap_or("published");
     let point_val = payload
         .get("point")
         .cloned()
@@ -1092,6 +1164,7 @@ pub async fn handle_wizard_retry_location_submit(
             "draft_id": if is_edit { None } else { image_draft_id },
             "uid": if is_edit { Some(uid) } else { None },
             "tags": tags,
+            "state": if is_edit { Some(state) } else { None },
             "point": point_val,
         }),
         15,
@@ -1168,17 +1241,19 @@ mod tests {
         let desc_at = yaml.find("description:").unwrap();
         let url_at = yaml.find("url:").unwrap();
         let tags_at = yaml.find("tags:").unwrap();
+        let state_at = yaml.find("state:").unwrap();
         let point_at = yaml.find("point:").unwrap();
         assert!(title_at < location_at);
         assert!(location_at < hours_at);
         assert!(hours_at < desc_at);
         assert!(desc_at < url_at);
         assert!(url_at < tags_at);
-        assert!(tags_at < point_at);
+        assert!(tags_at < state_at);
+        assert!(state_at < point_at);
 
-        // Internal ids and state stay out of the moderator-facing block.
+        // Internal ids stay out of the moderator-facing block, while state is exposed.
         assert!(!yaml.contains("abcdefghij12345"));
-        assert!(!yaml.contains("state:"));
+        assert!(yaml.contains("state: draft"));
 
         // Carriage returns are stripped so the YAML block renders cleanly.
         assert!(!yaml.contains('\r'));
@@ -1366,6 +1441,20 @@ mod tests {
         let yaml = generate_location_display_yaml(&location_to_payload(&loc));
         assert!(yaml.contains("title: Museo"));
         assert!(yaml.contains("- museum"));
+        assert!(yaml.contains("state: published"));
         assert!(yaml.contains("lat: 60.1699"));
+    }
+
+    #[test]
+    fn test_location_to_payload_preserves_closed_state() {
+        let loc = Location {
+            uid: "abcdefghij12345".to_string(),
+            title: "Vanha kauppa".to_string(),
+            state: Some("closed".to_string()),
+            ..Location::default()
+        };
+
+        let yaml = generate_location_display_yaml(&location_to_payload(&loc));
+        assert!(yaml.contains("state: closed"));
     }
 }
