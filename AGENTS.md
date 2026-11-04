@@ -165,7 +165,7 @@ brickbot/
 
 ### PocketBase Feed Syndication & Moderation Architecture
 
-When configured with `[pocketbase]`, `brickbot` integrates directly with the association's central PocketBase backend (`src/pocketbase/`):
+When configured with `[pocketbase]`, `brickbot` integrates directly with the association's central PocketBase backend (`src/pocketbase/`). The `events` and `locations` collections it uses (`src/pocketbase.rs`) are external to the `pocketbase/` workspace: they live on the production instance at `https://data.palikkaharrastajat.fi` and are not defined in `pocketbase/pb_schema.json` or `pocketbase/pb_migrations/`. The feed collections below are the ones defined in this workspace:
 
 1. **Feed Catalog Ingestion (`fetch_active_feeds`)**:
    - Queries PocketBase's `feeds` collection: `/api/collections/feeds/records?filter=(enabled=true)&perPage=500`.
