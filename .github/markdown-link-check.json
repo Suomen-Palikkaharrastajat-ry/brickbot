@@ -1,0 +1,20 @@
+{
+  "ignorePatterns": [
+    { "pattern": "^\\.\\./planet" },
+    { "pattern": "^https?://(www\\.)?example\\.(com|org)" },
+    { "pattern": "^https?://[^/]*\\.example" },
+    { "pattern": "^https?://other\\.example" },
+    { "pattern": "^https?:/+example\\.com" },
+    { "pattern": "[{}<>]" },
+    { "pattern": "\\.\\.\\.$" },
+    { "pattern": "^https://discord\\.com/" },
+    { "pattern": "^https://api\\.bricklink\\.com/" },
+    { "pattern": "^https://brickset\\.com/api/" },
+    { "pattern": "^https://rebrickable\\.com/api/" }
+  ],
+  "timeout": "20s",
+  "retryOn429": true,
+  "retryCount": 3,
+  "fallbackRetryDelay": "30s",
+  "aliveStatusCodes": [200, 206, 301, 302, 403]
+}
