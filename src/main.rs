@@ -16,6 +16,7 @@ mod ldraw_sync;
 mod links;
 mod notifications;
 pub mod parts_cache;
+pub mod pending_announcements_cli;
 mod pocketbase;
 pub mod reload;
 mod rss;
@@ -37,34 +38,118 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::env;
 use std::str::FromStr;
 
-#[derive(Parser)]
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Cli {
+pub(crate) struct Cli {
     #[arg(short, long, default_value = "config.toml")]
-    config: String,
+    pub config: String,
 
     #[arg(long, help = "Validate configuration and exit")]
-    check_config: bool,
+    pub check_config: bool,
 
     #[arg(
         long,
         help = "Validate configuration, print what it enables in each guild, and exit",
         conflicts_with = "check_config"
     )]
-    explain_config: bool,
+    pub explain_config: bool,
 
     #[arg(
         long,
         help = "Download the LDraw part library into the configured data directory and exit"
     )]
-    fetch_ldraw: bool,
+    pub fetch_ldraw: bool,
 
     #[arg(
         long,
         help = "Append a JSONL trace of every /build thread message and how BrickTalk resolved \
                 it, for offline grammar tuning. Off by default."
     )]
-    build_debug_log: Option<String>,
+    pub build_debug_log: Option<String>,
+
+    #[arg(
+        long = "list-pending-announcements",
+        visible_alias = "list-pending",
+        help = "List all feed items waiting to be announced across every channel",
+        conflicts_with = "remove_pending_announcement"
+    )]
+    pub list_pending_announcements: bool,
+
+    #[arg(
+        long = "remove-pending-announcement",
+        visible_alias = "remove-pending",
+        value_name = "ITEM",
+        help = "Remove a single feed item from the announcement list by index or item ID",
+        conflicts_with = "list_pending_announcements"
+    )]
+    pub remove_pending_announcement: Option<String>,
+
+    #[arg(
+        short = 'y',
+        long = "yes",
+        help = "Do not prompt for confirmation when removing a pending announcement"
+    )]
+    pub yes: bool,
+
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
+
+#[derive(clap::Subcommand, Debug, PartialEq, Eq)]
+pub(crate) enum Commands {
+    #[command(
+        name = "list-pending-announcements",
+        visible_alias = "list-pending",
+        about = "List all feed items waiting to be announced across every channel"
+    )]
+    ListPendingAnnouncements,
+
+    #[command(
+        name = "remove-pending-announcement",
+        visible_alias = "remove-pending",
+        about = "Remove a single feed item from the announcement list by index or item ID"
+    )]
+    RemovePendingAnnouncement {
+        /// 1-based index from list or exact item ID
+        item: String,
+
+        #[arg(short = 'y', long = "yes", help = "Do not prompt for confirmation")]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PendingAction {
+    List,
+    Remove { item: String, yes: bool },
+}
+
+impl Cli {
+    #[must_use]
+    pub fn pending_action(&self) -> Option<PendingAction> {
+        match &self.command {
+            Some(Commands::ListPendingAnnouncements) => Some(PendingAction::List),
+            Some(Commands::RemovePendingAnnouncement { item, yes }) => {
+                Some(PendingAction::Remove {
+                    item: item.clone(),
+                    yes: *yes || self.yes,
+                })
+            }
+            None => {
+                if self.list_pending_announcements {
+                    Some(PendingAction::List)
+                } else {
+                    self.remove_pending_announcement
+                        .as_ref()
+                        .map(|item| PendingAction::Remove {
+                            item: item.clone(),
+                            yes: self.yes,
+                        })
+                }
+            }
+        }
+    }
 }
 
 struct Handler {
@@ -934,6 +1019,15 @@ fn spawn_part_cache_sweep(cache: Option<std::sync::Arc<crate::parts_cache::PartC
 }
 
 async fn setup_database(database_url: &str) -> anyhow::Result<SqlitePool> {
+    if let Some(path_str) = database_url.strip_prefix("sqlite:") {
+        let path = std::path::Path::new(path_str.split('?').next().unwrap_or(path_str));
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+    }
+
     let connect_options = SqliteConnectOptions::from_str(database_url)?.create_if_missing(true);
 
     let pool = SqlitePoolOptions::new()
@@ -1046,6 +1140,36 @@ fn spawn_maintenance_tasks(pool: &SqlitePool, config: &Config) {
     }
 }
 
+async fn handle_pending_action(action: PendingAction) -> anyhow::Result<()> {
+    let database_url =
+        env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:data/bot.db".to_string());
+    let pool = setup_database(&database_url).await?;
+
+    match action {
+        PendingAction::List => {
+            let mut stdout = std::io::stdout();
+            crate::pending_announcements_cli::run_list_pending(&pool, &mut stdout).await?;
+        }
+        PendingAction::Remove { item, yes } => {
+            let mut stdin = std::io::stdin().lock();
+            let mut stdout = std::io::stdout();
+            if let Err(e) = crate::pending_announcements_cli::run_remove_pending(
+                &pool,
+                &item,
+                yes,
+                &mut stdin,
+                &mut stdout,
+            )
+            .await
+            {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -1059,6 +1183,10 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let cli = Cli::parse();
+
+    if let Some(action) = cli.pending_action() {
+        return handle_pending_action(action).await;
+    }
 
     let config = match Config::load(&cli.config) {
         Ok(c) => c,
@@ -1092,7 +1220,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let database_url =
-        env::var("DATABASE_URL").expect("Expected a database url in the environment");
+        env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:data/bot.db".to_string());
 
     let pool = setup_database(&database_url).await?;
 
@@ -1463,5 +1591,95 @@ mod tests {
         let intents = compute_gateway_intents(&guild_disabled_config);
         assert!(!intents.contains(GatewayIntents::GUILD_MESSAGES));
         assert!(!intents.contains(GatewayIntents::MESSAGE_CONTENT));
+    }
+
+    #[test]
+    fn test_cli_pending_announcements_parsing() {
+        // Normal startup has no pending action
+        let normal = Cli::try_parse_from(["brickbot"]).unwrap();
+        assert_eq!(normal.pending_action(), None);
+
+        // Subcommands for listing
+        let list_sub1 = Cli::try_parse_from(["brickbot", "list-pending"]).unwrap();
+        assert_eq!(list_sub1.pending_action(), Some(PendingAction::List));
+
+        let list_sub2 = Cli::try_parse_from(["brickbot", "list-pending-announcements"]).unwrap();
+        assert_eq!(list_sub2.pending_action(), Some(PendingAction::List));
+
+        // Flags for listing
+        let list_flag1 = Cli::try_parse_from(["brickbot", "--list-pending"]).unwrap();
+        assert_eq!(list_flag1.pending_action(), Some(PendingAction::List));
+
+        let list_flag2 = Cli::try_parse_from(["brickbot", "--list-pending-announcements"]).unwrap();
+        assert_eq!(list_flag2.pending_action(), Some(PendingAction::List));
+
+        // Subcommands for removing
+        let remove_sub1 = Cli::try_parse_from(["brickbot", "remove-pending", "1"]).unwrap();
+        assert_eq!(
+            remove_sub1.pending_action(),
+            Some(PendingAction::Remove {
+                item: "1".to_string(),
+                yes: false,
+            })
+        );
+
+        let remove_sub2 = Cli::try_parse_from(["brickbot", "remove-pending", "1", "-y"]).unwrap();
+        assert_eq!(
+            remove_sub2.pending_action(),
+            Some(PendingAction::Remove {
+                item: "1".to_string(),
+                yes: true,
+            })
+        );
+
+        let remove_sub3 = Cli::try_parse_from([
+            "brickbot",
+            "remove-pending-announcement",
+            "https://example.com/post",
+            "--yes",
+        ])
+        .unwrap();
+        assert_eq!(
+            remove_sub3.pending_action(),
+            Some(PendingAction::Remove {
+                item: "https://example.com/post".to_string(),
+                yes: true,
+            })
+        );
+
+        // Flags for removing
+        let remove_flag1 = Cli::try_parse_from(["brickbot", "--remove-pending", "1"]).unwrap();
+        assert_eq!(
+            remove_flag1.pending_action(),
+            Some(PendingAction::Remove {
+                item: "1".to_string(),
+                yes: false,
+            })
+        );
+
+        let remove_flag2 =
+            Cli::try_parse_from(["brickbot", "--remove-pending", "1", "-y"]).unwrap();
+        assert_eq!(
+            remove_flag2.pending_action(),
+            Some(PendingAction::Remove {
+                item: "1".to_string(),
+                yes: true,
+            })
+        );
+
+        let remove_flag3 = Cli::try_parse_from([
+            "brickbot",
+            "--remove-pending-announcement",
+            "item_123",
+            "--yes",
+        ])
+        .unwrap();
+        assert_eq!(
+            remove_flag3.pending_action(),
+            Some(PendingAction::Remove {
+                item: "item_123".to_string(),
+                yes: true,
+            })
+        );
     }
 }

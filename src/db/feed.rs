@@ -410,6 +410,80 @@ pub async fn clear_pending_announcements(
     )
 }
 
+/// A distinct pending announcement queued across one or more channels, in arrival order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistinctPendingAnnouncement {
+    pub item_id: String,
+    pub feed_url: String,
+    pub source_title: String,
+    pub item_title: String,
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub channel_ids: Vec<u64>,
+}
+
+/// Fetches all distinct pending announcements across all channels in arrival order (`MIN(rowid)`).
+pub async fn get_distinct_pending_announcements(
+    db: &SqlitePool,
+) -> Result<Vec<DistinctPendingAnnouncement>, sqlx::Error> {
+    type Row = (
+        i64,
+        String,
+        String,
+        String,
+        String,
+        Option<chrono::DateTime<chrono::Utc>>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT channel_id, item_id, feed_url, source_title, item_title, published_at
+         FROM feed_pending_announcements
+         ORDER BY rowid ASC",
+    )
+    .fetch_all(db)
+    .await?;
+
+    let mut distinct: Vec<DistinctPendingAnnouncement> = Vec::new();
+    let mut index_by_item: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for (cid, item_id, feed_url, source_title, item_title, published_at) in rows {
+        let channel_id = cid as u64;
+        if let Some(&idx) = index_by_item.get(&item_id) {
+            distinct[idx].channel_ids.push(channel_id);
+        } else {
+            index_by_item.insert(item_id.clone(), distinct.len());
+            distinct.push(DistinctPendingAnnouncement {
+                item_id,
+                feed_url,
+                source_title,
+                item_title,
+                published_at,
+                channel_ids: vec![channel_id],
+            });
+        }
+    }
+
+    for item in &mut distinct {
+        item.channel_ids.sort_unstable();
+    }
+
+    Ok(distinct)
+}
+
+/// Deletes all pending announcements for `item_id` across all channels.
+/// Returns the number of channel queues from which the item was removed.
+pub async fn delete_pending_announcement_by_item_id(
+    db: &SqlitePool,
+    item_id: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM feed_pending_announcements WHERE item_id = ?")
+        .bind(item_id)
+        .execute(db)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+pub use delete_pending_announcement_by_item_id as delete_pending_announcements_by_item_id;
+
 /// When a channel last completed a scheduled announcement run.
 pub async fn get_channel_last_announced_at(
     db: &SqlitePool,
@@ -879,5 +953,123 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn distinct_pending_announcements_deduplicates_and_preserves_arrival_order() {
+        let pool = setup_db().await;
+        let published1 = chrono::DateTime::parse_from_rfc3339("2026-10-17T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        let published2 = chrono::DateTime::parse_from_rfc3339("2026-10-17T13:00:00Z")
+            .unwrap()
+            .to_utc();
+
+        // 1. Initial state: empty
+        let initial = get_distinct_pending_announcements(&pool).await.unwrap();
+        assert!(initial.is_empty());
+
+        let item1_ch1 = PendingAnnouncement {
+            channel_id: 100,
+            guild_id: 1,
+            item_id: "item1".to_string(),
+            feed_url: "https://example.com/feed".to_string(),
+            source_title: "Source 1".to_string(),
+            item_title: "Item 1".to_string(),
+            published_at: Some(published1),
+        };
+        let item2_ch2 = PendingAnnouncement {
+            channel_id: 200,
+            guild_id: 2,
+            item_id: "item2".to_string(),
+            feed_url: "https://example.com/feed".to_string(),
+            source_title: "Source 2".to_string(),
+            item_title: "Item 2".to_string(),
+            published_at: Some(published2),
+        };
+        let item1_ch2 = PendingAnnouncement {
+            channel_id: 200,
+            guild_id: 2,
+            item_id: "item1".to_string(),
+            feed_url: "https://example.com/feed".to_string(),
+            source_title: "Source 1".to_string(),
+            item_title: "Item 1".to_string(),
+            published_at: Some(published1),
+        };
+        let item3_ch3 = PendingAnnouncement {
+            channel_id: 300,
+            guild_id: 3,
+            item_id: "item3".to_string(),
+            feed_url: "https://example.com/feed".to_string(),
+            source_title: "Source 3".to_string(),
+            item_title: "Item 3".to_string(),
+            published_at: None,
+        };
+
+        // Queue items in arrival order:
+        // rowid 1: item1 (channel 100)
+        // rowid 2: item2 (channel 200)
+        // rowid 3: item1 (channel 200) -- item1 seen again in channel 200
+        // rowid 4: item3 (channel 300)
+        queue_pending_announcements(&pool, &[item1_ch1])
+            .await
+            .unwrap();
+        queue_pending_announcements(&pool, &[item2_ch2])
+            .await
+            .unwrap();
+        queue_pending_announcements(&pool, &[item1_ch2])
+            .await
+            .unwrap();
+        queue_pending_announcements(&pool, &[item3_ch3])
+            .await
+            .unwrap();
+
+        let distinct = get_distinct_pending_announcements(&pool).await.unwrap();
+        assert_eq!(distinct.len(), 3);
+
+        // Arrival order: item1 (MIN rowid 1), item2 (MIN rowid 2), item3 (MIN rowid 4)
+        assert_eq!(distinct[0].item_id, "item1");
+        assert_eq!(distinct[0].channel_ids, vec![100, 200]);
+        assert_eq!(distinct[0].source_title, "Source 1");
+        assert_eq!(distinct[0].item_title, "Item 1");
+        assert_eq!(distinct[0].published_at, Some(published1));
+
+        assert_eq!(distinct[1].item_id, "item2");
+        assert_eq!(distinct[1].channel_ids, vec![200]);
+        assert_eq!(distinct[1].source_title, "Source 2");
+        assert_eq!(distinct[1].item_title, "Item 2");
+        assert_eq!(distinct[1].published_at, Some(published2));
+
+        assert_eq!(distinct[2].item_id, "item3");
+        assert_eq!(distinct[2].channel_ids, vec![300]);
+        assert_eq!(distinct[2].source_title, "Source 3");
+        assert_eq!(distinct[2].item_title, "Item 3");
+        assert_eq!(distinct[2].published_at, None);
+
+        // Delete item1 across all channels
+        let deleted = delete_pending_announcement_by_item_id(&pool, "item1")
+            .await
+            .unwrap();
+        assert_eq!(deleted, 2);
+
+        let remaining = get_distinct_pending_announcements(&pool).await.unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[0].item_id, "item2");
+        assert_eq!(remaining[1].item_id, "item3");
+
+        // Deleting non-existent item returns 0
+        let non_existent = delete_pending_announcement_by_item_id(&pool, "nonexistent")
+            .await
+            .unwrap();
+        assert_eq!(non_existent, 0);
+
+        // Delete item3
+        let deleted3 = delete_pending_announcement_by_item_id(&pool, "item3")
+            .await
+            .unwrap();
+        assert_eq!(deleted3, 1);
+        let remaining_after = get_distinct_pending_announcements(&pool).await.unwrap();
+        assert_eq!(remaining_after.len(), 1);
+        assert_eq!(remaining_after[0].item_id, "item2");
     }
 }
